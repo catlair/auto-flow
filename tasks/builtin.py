@@ -122,6 +122,50 @@ class RecordReplayTask(BaseTask):
 
 
 @register
+class ImageClickTask(BaseTask):
+    type = "image_click"
+    name = "图像匹配点击"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.params = [
+            ParamDef("image_path", "模板图片", "file", "", tooltip="要找的小图（可点面板上的「截取模板」框选）"),
+            ParamDef("confidence", "置信度", "float", 0.8, min_value=0.1),
+            ParamDef("action", "动作", "select", "click", ["click", "double_click", "move"]),
+            ParamDef("timeout_s", "查找超时(秒)", "float", 3.0, min_value=0.0),
+            ParamDef("interval_ms", "重试间隔(ms)", "int", 400, min_value=50),
+            ParamDef("not_found", "找不到时", "select", "跳过", ["跳过", "停止工作流"]),
+            ParamDef("offset_x", "偏移X", "int", 0),
+            ParamDef("offset_y", "偏移Y", "int", 0),
+        ]
+
+    def run(self, ctx) -> None:
+        import time as _time
+        from core import vision
+        p = ctx.params
+        timeout = float(p.get("timeout_s", 3.0))
+        deadline = _time.monotonic() + timeout
+        while True:
+            if ctx.player.stopping:
+                return
+            m = vision.find_template(float(p.get("confidence", 0.8)),
+                                     template_path=str(p.get("image_path", "")))
+            if m.found:
+                x, y = m.x + int(p.get("offset_x", 0)), m.y + int(p.get("offset_y", 0))
+                ctx.player.glide_now((x, y))
+                action = p.get("action", "click")
+                if action == "move":
+                    return
+                btn = Button.left
+                ctx.player.mouse.click(btn, 2 if action == "double_click" else 1)
+                return
+            if _time.monotonic() >= deadline:
+                if p.get("not_found", "跳过") == "停止工作流":
+                    ctx.stop_workflow()
+                return
+            ctx.player.wait(float(p.get("interval_ms", 400)) / 1000.0)
+
+
 class NoteTask(BaseTask):
     type = "note"
     name = "注释"
@@ -138,4 +182,5 @@ register(MouseActionTask())
 register(KeyboardInputTask())
 register(DelayTask())
 register(RecordReplayTask())
+register(ImageClickTask())
 register(NoteTask())

@@ -18,6 +18,7 @@ class RunContext:
     base_y: int = 0
     stopping: bool = False
     on_progress: Optional[Callable[[int, int], None]] = None
+    stop_workflow: Callable[[], None] = lambda: None
 
     def offset_for(self, use_relative: bool, x: int, y: int) -> tuple:
         if use_relative:
@@ -80,6 +81,7 @@ class Executor:
             base_x=base_x, base_y=base_y,
             stopping=self._stop.is_set(),
             on_progress=on_progress,
+            stop_workflow=self.stop_run,
         )
         node_repeat = max(int(ctx.params.get("repeat", 1)), 1)
         for _ in range(node_repeat):

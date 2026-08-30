@@ -56,9 +56,23 @@ class ParamsPanel(QWidget):
                 self._form.addRow(d["label"], w)
                 self.widgets[key] = w
                 continue
+            elif ptype == "file":
+                w = QLineEdit(str(value or ""))
+                row = QWidget(); from PySide6.QtWidgets import QHBoxLayout
+                lay = QHBoxLayout(row); lay.setContentsMargins(0, 0, 0, 0)
+                lay.addWidget(w)
+                browse = QToolButton(); browse.setText("选择…")
+                browse.clicked.connect(lambda _=False, lw=w: self._browse_image(lw))
+                shot = QToolButton(); shot.setText("截取模板")
+                shot.setToolTip("框选屏幕一块区域保存为模板图（会填入路径）")
+                shot.clicked.connect(lambda _=False, lw=w: self._snip_template(lw))
+                lay.addWidget(browse); lay.addWidget(shot)
+                self._form.addRow(d["label"], row)
+                self.widgets[key] = w
+                continue
             else:
                 w = QLineEdit(str(value if value is not None else ""))
-                if ptype == "text" and key in ("keys", "text"):
+                if ptype == "text" and key == "keys":
                     btn = QToolButton(); btn.setText("捕获")
                     btn.clicked.connect(lambda _=False, lw=w: self.capture_requested.emit(lw))
                     row = QWidget(); from PySide6.QtWidgets import QHBoxLayout
@@ -93,3 +107,26 @@ class ParamsPanel(QWidget):
         w = self.widgets.get(key)
         if isinstance(w, QLineEdit):
             w.setText(f"{count} 个事件")
+
+    # ---- 文件类参数辅助 ----
+    def _browse_image(self, line_edit) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "选择模板图片", "", "图片 (*.png *.jpg *.jpeg *.bmp)")
+        if path:
+            line_edit.setText(path)
+            self.params_changed.emit()
+
+    def _snip_template(self, line_edit) -> None:
+        """调用 macOS 系统交互式框选截图，保存为模板文件并回填路径。"""
+        import subprocess, os, time
+        os.makedirs("workflows/templates", exist_ok=True)
+        path = os.path.abspath(f"workflows/templates/tpl_{int(time.time())}.png")
+        # 最小化本窗口干扰；screencapture -i 阻塞直到用户框选完成
+        proc = subprocess.Popen(["screencapture", "-i", "-o", path])
+        def wait_done():
+            if proc.poll() is None:
+                QTimer.singleShot(300, wait_done)
+                return
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                line_edit.setText(path)
+                self.params_changed.emit()
+        QTimer.singleShot(300, wait_done)
