@@ -6,3 +6,5 @@ workflows/*.json
 build/
 dist/
 *.spec
+tests/__pycache__/
+.pytest_cache/

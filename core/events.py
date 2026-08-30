@@ -91,24 +91,17 @@ class Workflow:
         nodes = data.get("nodes")
         if nodes is None and isinstance(data.get("events"), list):
             # 兼容 Tauri 版裸事件脚本：整体作为一个录制回放节点
-            events = [MacroEvent(
-                ts_ms=e.get("ts_ms", 0), kind=e.get("kind", "move"),
-                key=e.get("key"), button=e.get("button"), pressed=e.get("pressed"),
-                x=int(e.get("x", 0)), y=int(e.get("y", 0)),
-                wheel_dx=int(e.get("wheel_dx", 0)), wheel_dy=int(e.get("wheel_dy", 0)),
-            ) for e in nodes_or_events(data["events"])]
+            from tasks.builtin import tolerant_event
+            events = [tolerant_event(e) for e in data["events"]]
             wf.nodes.append(Node(type="record_replay", params={
                 "events": [asdict(ev) for ev in events],
-                "origin_x": data.get("origin_x", 0),
-                "origin_y": data.get("origin_y", 0),
+                "origin_x": int(data.get("origin_x", 0)),
+                "origin_y": int(data.get("origin_y", 0)),
+                "use_relative": True,
             }))
         else:
             wf.nodes = [Node.from_dict(n) for n in (nodes or [])]
         return wf
-
-
-def nodes_or_events(lst: list) -> list:
-    return lst
 
 
 def now_ms() -> int:

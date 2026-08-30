@@ -54,6 +54,13 @@ ui/
 workflows/       # 工作流 JSON 存放处
 ```
 
+## 开发
+
+```bash
+./.venv/bin/python -m pytest tests/ -q   # 核心逻辑测试（18 例）
+QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 无界面冒烟
+```
+
 ## YOLO 模型
 
 自带 `models/yolo11n.onnx`。换模型：用 [ultralytics](https://docs.ultralytics.com/modes/export/) 导出

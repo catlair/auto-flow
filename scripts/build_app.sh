@@ -14,6 +14,7 @@ cd "$(dirname "$0")/.."
   --hidden-import Vision \
   --hidden-import Quartz \
   --add-data "workflows:workflows" \
+  --add-data "models:models" \
   main.py
 
 APP="dist/Auto Flow.app"

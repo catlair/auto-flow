@@ -40,15 +40,14 @@ def name_to_key(name: str):
             return KeyCode.from_vk(int(name[3:]))
         except ValueError:
             return None
-    low = name.lower()
-    if low in _NAME_MAP:  # 脚本名（Space 等）→ pynput name
-        return Key[_NAME_MAP[low].lower()] if _NAME_MAP[low].lower() in Key.__members__ else None
-    if low in _REV_MAP:
-        pname = _REV_MAP[name].lower()
+    if name in _REV_MAP:            # 脚本键名（Space/Return/UpArrow/F9…）
+        pname = _REV_MAP[name]
         return Key[pname] if pname in Key.__members__ else None
+    low = name.lower()
+    if low in _NAME_MAP:            # 直接给了 pynput 名（space/enter/f9…）
+        return Key[low] if low in Key.__members__ else None
     if len(name) == 1:
         return name
-    # 直接尝试 pynput 原始名称
-    if low in Key.__members__:
+    if low in Key.__members__:      # 其它 pynput 原始名
         return Key[low]
     return None

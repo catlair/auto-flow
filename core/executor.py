@@ -16,10 +16,14 @@ class RunContext:
     speed: float = 1.0
     base_x: int = 0
     base_y: int = 0
-    stopping: bool = False
     on_progress: Optional[Callable[[int, int], None]] = None
     stop_workflow: Callable[[], None] = lambda: None
     set_condition: Callable[[bool], None] = lambda v: None
+    is_stopping: Callable[[], bool] = lambda: False
+
+    @property
+    def stopping(self) -> bool:
+        return bool(self.is_stopping())
 
     def offset_for(self, use_relative: bool, x: int, y: int) -> tuple:
         if use_relative:
@@ -51,7 +55,8 @@ class Executor:
     def run_workflow(self, wf: Workflow, base_x: int = 0, base_y: int = 0,
                      on_node: Optional[Callable[[int, str], None]] = None,
                      on_progress: Optional[Callable[[int, int], None]] = None,
-                     on_done: Optional[Callable[[bool], None]] = None) -> None:
+                     on_done: Optional[Callable[[bool], None]] = None,
+                     on_error: Optional[Callable[[int, str, Exception], None]] = None) -> None:
         """在工作流线程执行；结束/被停止后调用 on_done(stopped)。"""
         self.reset()
         self.running = True
@@ -73,14 +78,14 @@ class Executor:
                         continue
                     if on_node:
                         on_node(idx, node.type)
-                    self._run_node(node, wf.speed, base_x, base_y, on_progress)
+                    self._run_node(node, wf.speed, base_x, base_y, on_progress, on_error)
         finally:
             self.running = False
             if on_done:
                 on_done(self._stop.is_set())
 
     def _run_node(self, node: Node, wf_speed: float, base_x: int, base_y: int,
-                  on_progress: Optional[Callable]) -> None:
+                  on_progress: Optional[Callable], on_error: Optional[Callable] = None) -> None:
         import tasks.builtin  # noqa: F401  确保节点已注册
         from tasks.base import get_task
         task = get_task(node.type)
@@ -91,13 +96,20 @@ class Executor:
             player=self.player,
             speed=max(wf_speed, 0.01),
             base_x=base_x, base_y=base_y,
-            stopping=self._stop.is_set(),
             on_progress=on_progress,
             stop_workflow=self.stop_run,
             set_condition=self.set_condition,
+            is_stopping=lambda: self._stop.is_set(),
         )
         node_repeat = max(int(ctx.params.get("repeat", 1)), 1)
         for _ in range(node_repeat):
             if self._stop.is_set():
                 break
-            task.run(ctx)
+            try:
+                task.run(ctx)
+            except Exception as e:  # 节点异常不拖垮整个工作流
+                self._stop.set()
+                self.player.stop_playback()
+                if on_error:
+                    on_error(-1, node.type, e)
+                return

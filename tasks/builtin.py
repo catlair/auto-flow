@@ -1,12 +1,24 @@
-"""内置任务节点：鼠标、键盘、延时、录制回放、循环、日志注释。"""
+"""内置任务节点：鼠标、键盘、延时、录制回放、图像/文字/YOLO 查找、条件、注释。"""
 from __future__ import annotations
 
 from pynput.mouse import Button
 
 from tasks.base import BaseTask, ParamDef, register
-from core.player import PlayOptions, Player
+from core.player import PlayOptions
 from core.events import MacroEvent
 from core.keymap import name_to_key
+
+# 全局热键名：回放录制事件时跳过，避免回放又触发热键
+HOTKEY_NAMES = {"F9", "F10", "F11"}
+
+
+def tolerant_event(d: dict) -> MacroEvent:
+    """容忍缺字段/多字段的 MacroEvent 构造。"""
+    keys = {"ts_ms", "kind", "key", "button", "pressed", "x", "y", "wheel_dx", "wheel_dy"}
+    defaults = {"ts_ms": 0, "kind": "move", "key": None, "button": None, "pressed": None,
+                "x": 0, "y": 0, "wheel_dx": 0, "wheel_dy": 0}
+    data = {k: d.get(k, v) for k, v in defaults.items() if k in keys}
+    return MacroEvent(**data)
 
 
 class MouseActionTask(BaseTask):
@@ -107,7 +119,7 @@ class RecordReplayTask(BaseTask):
 
     def run(self, ctx) -> None:
         p = ctx.params
-        events = [MacroEvent(**e) for e in (p.get("events") or [])]
+        events = [tolerant_event(e) for e in (p.get("events") or [])]
         repeat = max(int(p.get("repeat", 1)), 1)
         for _ in range(repeat):
             if ctx.stopping:
@@ -117,6 +129,7 @@ class RecordReplayTask(BaseTask):
                 use_relative=bool(p.get("use_relative", False)),
                 base_x=ctx.base_x, base_y=ctx.base_y,
                 origin_x=int(p.get("origin_x", 0)), origin_y=int(p.get("origin_y", 0)),
+                suppress_keys=set(HOTKEY_NAMES),
             )
             ctx.player.play(events, opt, on_progress=ctx.on_progress)
 
@@ -231,8 +244,12 @@ class YoloClickTask(BaseTask):
     def run(self, ctx) -> None:
         import time as _time
         from core import yolo, vision
+        from core.paths import default_model
         p = ctx.params
-        engine = yolo.get_engine(str(p.get("model_path", "")))
+        model = str(p.get("model_path") or "") or default_model()
+        if not model:
+            raise FileNotFoundError("未指定 YOLO 模型，且未找到默认模型 yolo11n.onnx")
+        engine = yolo.get_engine(model)
         label = str(p.get("label", "")).strip()
         want_idx = max(int(p.get("index", 1)), 1)
         deadline = _time.monotonic() + float(p.get("timeout_s", 3.0))
@@ -291,11 +308,15 @@ class ConditionTask(BaseTask):
             if method == "文字存在":
                 return ocr.find_text(str(p.get("text", ""))) is not None
             if method == "目标存在(YOLO)":
+                from core.paths import default_model
+                model = str(p.get("model_path") or "") or default_model()
+                if not model:
+                    return False
                 screen, scale = vision.grab_screen_bgr()
-                engine = yolo.get_engine(str(p.get("model_path", "")))
+                engine = yolo.get_engine(model)
                 label = str(p.get("label", "")).strip()
-                conf = float(p.get("confidence", 0.8))
-                dets = engine.detect_bgr(screen, scale, min(conf, 0.99))
+                conf = min(float(p.get("confidence", 0.8)), 0.99)
+                dets = engine.detect_bgr(screen, scale, conf)
                 return any(not label or d.label == label for d in dets)
             m = vision.find_template(float(p.get("confidence", 0.8)),
                                      template_path=str(p.get("image_path", "")))

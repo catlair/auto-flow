@@ -13,6 +13,7 @@ from typing import Callable, Optional
 from pynput import mouse, keyboard
 
 from core.events import MacroEvent, RecordResult, now_ms
+from core.keymap import key_to_name
 
 MOVE_THRESHOLD_PX = 4
 MAX_RECORD_EVENTS = 20000
@@ -51,7 +52,6 @@ class Recorder:
             wheel_dx=0, wheel_dy=int(dy), x=int(x), y=int(y)))
 
     def _on_key(self, key, pressed: bool) -> None:
-        from core.keymap import key_to_name
         self._push(MacroEvent(
             ts_ms=now_ms() - self._start_ms, kind="key",
             key=key_to_name(key), pressed=pressed))

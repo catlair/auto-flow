@@ -27,6 +27,7 @@ class Signals(QObject):
     record_event = Signal(object)       # MacroEvent
     record_stopped = Signal(object)     # RecordResult
     node_running = Signal(int, str)
+    node_error = Signal(str, str)       # node_type, error
     play_progress = Signal(int, int)
     play_done = Signal(bool)
     status = Signal(str)
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         self.scheduler = Scheduler()
         self.scheduler.fire.connect(self._scheduled_run)
         self.signals.node_running.connect(self._on_node_running)
+        self.signals.node_error.connect(self._on_node_error)
         self.signals.play_progress.connect(self._on_play_progress)
         self.signals.play_done.connect(self._on_play_done)
         self.signals.record_event.connect(self._on_record_event)
@@ -178,6 +180,7 @@ class MainWindow(QMainWindow):
         self.node_list.setCurrentRow(len(self.wf.nodes) - 1)
 
     def _refresh_node_list(self) -> None:
+        prev = self.node_list.currentRow()
         self.node_list.blockSignals(True)
         self.node_list.clear()
         for n in self.wf.nodes:
@@ -189,6 +192,9 @@ class MainWindow(QMainWindow):
                 extra = f" · {len(n.params.get('events', []))} 事件"
             self.node_list.addItem(QListWidgetItem(f"{title}{mark}{extra}"))
         self.node_list.blockSignals(False)
+        row = prev if 0 <= prev < len(self.wf.nodes) else (0 if self.wf.nodes else -1)
+        if row >= 0:
+            self.node_list.setCurrentRow(row)   # 触发 _on_node_selected 重建面板
 
     def _current_node(self) -> Node | None:
         row = self.node_list.currentRow()
@@ -199,11 +205,16 @@ class MainWindow(QMainWindow):
     def _on_node_selected(self, row: int) -> None:
         if 0 <= row < len(self.wf.nodes):
             node = self.wf.nodes[row]
+            self._panel_node_type = node.type
             self.params_panel.build(node.type, node.params)
+        else:
+            self._panel_node_type = None
+            self.params_panel.build("", {})
 
     def _commit_params(self) -> None:
         node = self._current_node()
-        if node:
+        # 面板必须正对着当前节点（类型一致），否则跳过提交，避免旧控件污染新数据
+        if node and getattr(self, "_panel_node_type", None) == node.type:
             node.params.update(self.params_panel.values())
 
     def _move_up(self) -> None:
@@ -233,6 +244,9 @@ class MainWindow(QMainWindow):
 
     # ---------- 录制 ----------
     def toggle_record(self) -> None:
+        if self.executor.running:
+            self.signals.status.emit("工作流运行中，先停止再录制 (F10 停止)")
+            return
         if self.recorder:
             self._stop_record()
         else:
@@ -330,6 +344,9 @@ class MainWindow(QMainWindow):
         if self.executor.running:
             self.stop_run()
             return
+        if self.recorder:
+            self.signals.status.emit("录制中，先停止录制 (F9)")
+            return
         self._commit_params()
         if not self.wf.nodes:
             QMessageBox.information(self, "提示", "工作流为空，请先添加节点")
@@ -344,7 +361,10 @@ class MainWindow(QMainWindow):
         worker = _ExecWorker(self.executor, self.wf, base, self.signals)
         worker.moveToThread(self.exec_thread)
         self.exec_thread.started.connect(worker.run)
-        worker.finished.connect(self.exec_thread.quit)
+        thread = self.exec_thread
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         self._exec_worker = worker
         self.exec_thread.start()
 
@@ -355,6 +375,10 @@ class MainWindow(QMainWindow):
     def _on_node_running(self, idx: int, ntype: str) -> None:
         self.node_list.setCurrentRow(idx)
         self.signals.status.emit(f"运行节点 {idx + 1}: {ntype}")
+
+    def _on_node_error(self, ntype: str, err: str) -> None:
+        self.signals.status.emit(f"节点 {ntype} 异常，已停止：{err}")
+        QMessageBox.warning(self, "节点异常", f"{ntype} 执行出错，工作流已停止：\n{err}")
 
     def _on_play_progress(self, done: int, total: int) -> None:
         self.signals.status.emit(f"回放进度 {done}/{total}")
@@ -468,5 +492,6 @@ class _ExecWorker(QObject):
             on_node=lambda i, t: self.signals.node_running.emit(i, t),
             on_progress=lambda d, t: self.signals.play_progress.emit(d, t),
             on_done=lambda stopped: self.signals.play_done.emit(stopped),
+            on_error=lambda i, t, e: self.signals.node_error.emit(t, str(e)),
         )
         self.finished.emit()

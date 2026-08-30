@@ -72,31 +72,43 @@ class Player:
 
         pos = start
         held_button: Optional[Button] = None
+        pressed_keys: list = []
         total = len(events)
-        for i, ev in enumerate(events):
-            if self.stopping:
-                break
-            if on_progress and (i % 25 == 0 or i == total - 1):
-                on_progress(i + 1, total)
-            budget_s = ev.ts_ms / 1000.0 / speed - self._elapsed_s()
-            if ev.kind == "key":
-                self._wait(budget_s)
-                self._play_key(ev, opt)
-            elif ev.kind in ("mouse", "move", "wheel"):
-                target = (ev.x + dx, ev.y + dy)
-                pos = self._glide(pos, target, max(budget_s, 0.0))
-                if ev.kind == "mouse":
-                    btn = self._button(ev.button)
-                    if ev.pressed:
-                        held_button = btn
-                        self.mouse.press(btn)
-                    else:
-                        held_button = None
-                        self.mouse.release(btn)
-                elif ev.kind == "wheel":
-                    self.mouse.scroll(ev.wheel_dx, ev.wheel_dy)
-        if held_button and not self.stopping:
-            self.mouse.release(held_button)
+        try:
+            for i, ev in enumerate(events):
+                if self.stopping:
+                    break
+                if on_progress and (i % 25 == 0 or i == total - 1):
+                    on_progress(i + 1, total)
+                budget_s = ev.ts_ms / 1000.0 / speed - self._elapsed_s()
+                if ev.kind == "key":
+                    self._wait(budget_s)
+                    self._play_key(ev, opt, pressed_keys)
+                elif ev.kind in ("mouse", "move", "wheel"):
+                    target = (ev.x + dx, ev.y + dy)
+                    pos = self._glide(pos, target, max(budget_s, 0.0))
+                    if ev.kind == "mouse":
+                        btn = self._button(ev.button)
+                        if ev.pressed:
+                            held_button = btn
+                            self.mouse.press(btn)
+                        else:
+                            held_button = None
+                            self.mouse.release(btn)
+                    elif ev.kind == "wheel":
+                        self.mouse.scroll(ev.wheel_dx, ev.wheel_dy)
+        finally:
+            # 中断/异常时也要松开，避免鼠标键或键盘卡在按下状态
+            if held_button:
+                try:
+                    self.mouse.release(held_button)
+                except Exception:
+                    pass
+            for k in pressed_keys:
+                try:
+                    self.kb.release(k)
+                except Exception:
+                    pass
         if on_progress:
             on_progress(total, total)
 
@@ -153,7 +165,7 @@ class Player:
         self.mouse.position = (tx, ty)
         return (tx, ty)
 
-    def _play_key(self, ev: MacroEvent, opt: PlayOptions) -> None:
+    def _play_key(self, ev: MacroEvent, opt: PlayOptions, pressed_keys: list) -> None:
         if ev.key in opt.suppress_keys:
             return
         key = name_to_key(ev.key or "")
@@ -162,7 +174,10 @@ class Player:
         try:
             if ev.pressed:
                 self.kb.press(key)
+                pressed_keys.append(key)
             else:
                 self.kb.release(key)
+                if key in pressed_keys:
+                    pressed_keys.remove(key)
         except Exception:
             pass
