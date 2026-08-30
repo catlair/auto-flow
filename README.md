@@ -5,8 +5,9 @@ Python + PySide6 实现的本地键鼠录制 / 回放 / 工作流工具（macOS 
 
 ## 功能
 
-- **工作流节点**：录制回放 / 图像匹配点击 / 找文字点击(OCR) / 条件判断 / 鼠标操作 / 键盘输入 / 延时 / 注释，节点可排序、启停
+- **工作流节点**：录制回放 / 图像匹配点击 / 找文字点击(OCR) / YOLO找目标点击 / 条件判断 / 鼠标操作 / 键盘输入 / 延时 / 注释，节点可排序、启停
 - **OCR**：macOS Vision 框架离线识别（支持中英文），按文字找位置点击，或作为条件判断的「文字存在」检测
+- **YOLO 目标检测**：onnxruntime + CoreML 加速，跑标准 YOLO ONNX 模型（自带 `models/yolo11n.onnx`，COCO 80 类，可放同名 .txt 换自定义类别）；支持指定类别、置信度、命中序号，也可作为条件判断
 - **录制回放**：全局监听键鼠 → 轨迹插值回放（10px 步长平滑移动，不瞬移）
 - **图像匹配**：截屏找图 → 点击/双击/移动到目标，可设置信度、超时重试、找不到时跳过或停止；参数面板里可直接「截取模板」框选屏幕取图（Retina 坐标自动换算）
 - **相对坐标**：以录制时首个鼠标位置为原点，回放时设定新基点，整条轨迹平移
@@ -52,6 +53,17 @@ ui/
   params_panel.py# 依据节点定义通用渲染的参数表单
 workflows/       # 工作流 JSON 存放处
 ```
+
+## YOLO 模型
+
+自带 `models/yolo11n.onnx`。换模型：用 [ultralytics](https://docs.ultralytics.com/modes/export/) 导出
+
+```bash
+pip install ultralytics
+yolo export model=yolov8n.pt format=onnx imgsz=640   # 或 yolo11n.pt / 自己训练的 .pt
+```
+
+把 `.onnx` 放进 `models/`，节点参数里选它即可；自定义类别在模型旁放同名 `.txt`（每行一个类别名）。
 
 ## 打包
 

@@ -29,12 +29,37 @@ def _scale_factor(monitor: dict) -> float:
     return monitor["width"] / max(logical_w, 1)
 
 
+def _quartz_grab_bgr() -> tuple[np.ndarray, float]:
+    """mss 枚举不到显示器时（休眠/锁屏）的兜底：Quartz 全屏捕获。"""
+    import Quartz
+    from AppKit import NSScreen
+    cgimg = Quartz.CGWindowListCreateImage(
+        Quartz.CGRectInfinite, Quartz.kCGWindowListOptionOnScreenOnly,
+        Quartz.kCGNullWindowID, Quartz.kCGWindowImageDefault)
+    if cgimg is None:
+        raise RuntimeError("屏幕捕获不可用")
+    from AppKit import NSBitmapImageRep
+    rep = NSBitmapImageRep.alloc().initWithCGImage_(cgimg)
+    data = rep.representationUsingType_properties_(4, None)  # 4 = NSBitmapImageFileTypePNG
+    arr = np.frombuffer(bytes(data), dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise RuntimeError("屏幕捕获解码失败")
+    logical_w = int(NSScreen.mainScreen().frame().size.width)
+    return img, img.shape[1] / max(logical_w, 1)
+
+
 def grab_screen_bgr() -> tuple[np.ndarray, float]:
     """全屏截图（BGR）+ 缩放系数。"""
-    with mss.mss() as sct:
-        mon = sct.monitors[1]  # 主屏
-        img = np.asarray(sct.grab(mon))[:, :, :3]  # BGRA -> BGR
-        return img, _scale_factor(mon)
+    try:
+        with mss.mss() as sct:
+            mons = sct.monitors
+            if len(mons) > 1 and mons[1]["width"] > 0:
+                img = np.asarray(sct.grab(mons[1]))[:, :, :3]
+                return img, _scale_factor(mons[1])
+    except Exception:
+        pass
+    return _quartz_grab_bgr()
 
 
 def find_template(threshold: float = 0.8,

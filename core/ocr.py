@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import mss
 import numpy as np
 
 import Quartz
@@ -31,17 +30,13 @@ def _scale_factor(mon: dict) -> float:
 
 def grab_region_bgr(region: tuple | None = None) -> tuple[np.ndarray, float]:
     """region=(left, top, w, h) 逻辑坐标；None 为全主屏。"""
-    with mss.mss() as sct:
-        main = sct.monitors[1]
-        scale = _scale_factor(main)
-        if region is None:
-            mon = main
-        else:
-            l, t, w, h = region
-            mon = {"left": main["left"] + int(l * scale), "top": main["top"] + int(t * scale),
-                   "width": int(w * scale), "height": int(h * scale)}
-        img = np.asarray(sct.grab(mon))[:, :, :3]
-        return img, scale
+    from core import vision
+    if region is None:
+        return vision.grab_screen_bgr()
+    img, scale = vision.grab_screen_bgr()
+    l, t, w, h = region
+    crop = img[max(int(t*scale), 0):int((t+h)*scale), max(int(l*scale), 0):int((l+w)*scale)]
+    return crop, scale
 
 
 def recognize_texts(bgr: np.ndarray, scale: float,
