@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from core.events import Workflow, Node, MacroEvent
 from core.recorder import Recorder
 from core.executor import Executor
+from core.maclistener import MacKeyboardListener
 from core import permissions
 import tasks.builtin  # noqa: F401  触发节点注册
 from tasks.base import all_definitions, get_task
@@ -31,6 +32,7 @@ class Signals(QObject):
     play_progress = Signal(int, int)
     play_done = Signal(bool)
     status = Signal(str)
+    hotkey = Signal(str)                # record / run / pick（监听线程 → 主线程）
 
 
 class MainWindow(QMainWindow):
@@ -162,14 +164,22 @@ class MainWindow(QMainWindow):
 
     # ---------- 热键 ----------
     def _build_hotkeys(self) -> None:
-        from pynput import keyboard
-        self.hotkey_listener = keyboard.GlobalHotKeys({
-            '<f9>': self.toggle_record,
-            '<f10>': self.toggle_run,
-            '<f11>': self.pick_base_point,
-        })
-        self.hotkey_listener.daemon = True
+        # 自建 CGEventTap 键盘监听（pynput 在 macOS 15 会崩溃）；F9/F10/F11 经信号回主线程
+        self.hotkey_listener = MacKeyboardListener(self._on_global_key)
         self.hotkey_listener.start()
+        self.signals.hotkey.connect(self._dispatch_hotkey)
+
+    def _on_global_key(self, name: str, pressed: bool) -> None:
+        if pressed:
+            self.signals.hotkey.emit({"F9": "record", "F10": "run", "F11": "pick"}.get(name, ""))
+
+    def _dispatch_hotkey(self, action: str) -> None:
+        if action == "record":
+            self.toggle_record()
+        elif action == "run":
+            self.toggle_run()
+        elif action == "pick":
+            self.pick_base_point()
 
     # ---------- 节点管理 ----------
     def add_node(self, node_type: str) -> None:
@@ -325,16 +335,18 @@ class MainWindow(QMainWindow):
             return
         self._capturing_widget = widget
         widget.setText("按任意键…")
-        from pynput import keyboard
-        self._capture_listener = keyboard.Listener(on_release=self._on_capture_key)
+        self._capture_listener = MacKeyboardListener(self._on_capture_key)
         self._capture_listener.start()
 
-    def _on_capture_key(self, key) -> None:
-        from core.keymap import key_to_name
-        name = key_to_name(key)
+    def _on_capture_key(self, name: str, pressed: bool) -> None:
+        if not pressed:
+            return
         w = self._capturing_widget
         self._capturing_widget = None
-        self._capture_listener.stop()
+        lis = self._capture_listener
+        self._capture_listener = None
+        if lis:
+            lis.stop()
         if w:
             from PySide6.QtCore import QMetaObject, Q_ARG
             QMetaObject.invokeMethod(w, "setText", Qt.QueuedConnection, Q_ARG(str, name))

@@ -286,7 +286,51 @@ def test_record_replay_task_builds_options(monkeypatch):
     assert opt.suppress_keys == {"F9", "F10", "F11"}
 
 
-# ---------- paths ----------
+# ---------- macOS 键盘监听（自建 tap，替代 pynput） ----------
+def test_vk_table_covers_script_names():
+    from core.mackeys import VK_NAMES, vk_to_name
+    specials = ["Space", "Return", "Escape", "Tab", "Backspace", "Delete",
+                "Home", "End", "PageUp", "PageDown", "UpArrow", "DownArrow",
+                "LeftArrow", "RightArrow", "Command", "Option", "Control",
+                "Shift", "CapsLock", "F1", "F9", "F11", "F12"]
+    named = set(VK_NAMES.values())
+    for s in specials:
+        assert s in named, f"{s} 不在 VK 表"
+    assert vk_to_name(0x00) == "a"
+    assert vk_to_name(9999) is None
+
+
+def test_vk_names_playable():
+    """VK 表里的每个名字都必须能被回放侧还原（否则录制后无法回放）。"""
+    from core.mackeys import VK_NAMES
+    for name in set(VK_NAMES.values()):
+        if name.startswith("Keypad") or name == "Help":
+            continue  # 小键盘/Help：pynput 无对应键，回放时静默跳过
+        assert keymap.name_to_key(name) is not None, name
+
+
+def test_modifier_edge():
+    from core.mackeys import modifier_edge
+    assert modifier_edge(0x38, 0x20000, 0x0) is True      # shift 按下
+    assert modifier_edge(0x38, 0x20000, 0x20000) is None  # 无变化
+    assert modifier_edge(0x38, 0x0, 0x20000) is False     # 释放
+    assert modifier_edge(0x00, 0x20000, 0x0) is None      # 非修饰键
+    assert modifier_edge(0x39, 0x10000, 0x0) is True      # capslock 开
+    assert modifier_edge(0x37, 0x100000, 0x0) is True     # command 按下
+
+
+def test_maclistener_callback_logic(monkeypatch):
+    """不创建真实 tap，验证 _dispatch 对无名键码的过滤。"""
+    from core import maclistener
+    got = []
+    lis = maclistener.MacKeyboardListener(lambda n, p: got.append((n, p)))
+    lis._dispatch("a", True)
+    lis._dispatch(None, True)     # 未知键码应被丢弃
+    lis._dispatch("Return", False)
+    assert got == [("a", True), ("Return", False)]
+
+
+
 def test_paths_dirs(tmp_path, monkeypatch):
     from core import paths
     monkeypatch.setattr(paths, "app_dir", lambda: str(tmp_path))

@@ -10,10 +10,11 @@ import threading
 import queue
 from typing import Callable, Optional
 
-from pynput import mouse, keyboard
+from pynput import mouse
 
 from core.events import MacroEvent, RecordResult, now_ms
 from core.keymap import key_to_name
+from core.maclistener import MacKeyboardListener
 
 MOVE_THRESHOLD_PX = 4
 MAX_RECORD_EVENTS = 20000
@@ -33,7 +34,7 @@ class Recorder:
         self._stopped_by_limit = False
         self._stopping = False
         self._mouse_listener: Optional[mouse.Listener] = None
-        self._kb_listener: Optional[keyboard.Listener] = None
+        self._kb_listener: Optional[MacKeyboardListener] = None
         self._lock = threading.Lock()
 
     # ---- 监听回调（监听线程里执行，只入队） ----
@@ -51,10 +52,10 @@ class Recorder:
             ts_ms=now_ms() - self._start_ms, kind="wheel",
             wheel_dx=0, wheel_dy=int(dy), x=int(x), y=int(y)))
 
-    def _on_key(self, key, pressed: bool) -> None:
+    def _on_key_event(self, name: str, pressed: bool) -> None:
         self._push(MacroEvent(
             ts_ms=now_ms() - self._start_ms, kind="key",
-            key=key_to_name(key), pressed=pressed))
+            key=name, pressed=pressed))
 
     def _push(self, ev: MacroEvent) -> None:
         if not self._stopping:
@@ -67,14 +68,9 @@ class Recorder:
         self._mouse_listener = mouse.Listener(
             on_move=self._on_move, on_click=self._on_click, on_scroll=self._on_scroll)
         self._mouse_listener.start()
-        self._kb_listener = keyboard.Listener(on_press=self._on_key_press, on_release=self._on_key_release)
+        # 键盘用自建 CGEventTap（pynput 键盘监听在 macOS 15 会崩溃，见 maclistener.py）
+        self._kb_listener = MacKeyboardListener(self._on_key_event)
         self._kb_listener.start()
-
-    def _on_key_press(self, key) -> None:
-        self._on_key(key, True)
-
-    def _on_key_release(self, key) -> None:
-        self._on_key(key, False)
 
     def stop(self) -> None:
         self._stopping = True
