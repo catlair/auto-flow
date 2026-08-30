@@ -19,6 +19,7 @@ class RunContext:
     stopping: bool = False
     on_progress: Optional[Callable[[int, int], None]] = None
     stop_workflow: Callable[[], None] = lambda: None
+    set_condition: Callable[[bool], None] = lambda v: None
 
     def offset_for(self, use_relative: bool, x: int, y: int) -> tuple:
         if use_relative:
@@ -33,10 +34,15 @@ class Executor:
         self.player = Player()
         self._stop = threading.Event()
         self.running = False
+        self._condition = False
 
     def stop_run(self) -> None:
         self._stop.set()
         self.player.stop_playback()
+
+    def set_condition(self, value: bool) -> None:
+        """供条件节点写入最近一次判断结果。"""
+        self._condition = value
 
     def reset(self) -> None:
         self._stop.clear()
@@ -49,6 +55,7 @@ class Executor:
         """在工作流线程执行；结束/被停止后调用 on_done(stopped)。"""
         self.reset()
         self.running = True
+        self._condition = False
         try:
             repeat = max(wf.repeat, 1)
             for r in range(repeat):
@@ -58,6 +65,11 @@ class Executor:
                     if self._stop.is_set():
                         break
                     if not node.enabled or node.type in ("note",):
+                        continue
+                    run_when = (node.params or {}).get("run_when", "总是")
+                    if run_when == "条件成立" and not self._condition:
+                        continue
+                    if run_when == "条件不成立" and self._condition:
                         continue
                     if on_node:
                         on_node(idx, node.type)
@@ -82,6 +94,7 @@ class Executor:
             stopping=self._stop.is_set(),
             on_progress=on_progress,
             stop_workflow=self.stop_run,
+            set_condition=self.set_condition,
         )
         node_repeat = max(int(ctx.params.get("repeat", 1)), 1)
         for _ in range(node_repeat):

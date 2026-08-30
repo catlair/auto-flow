@@ -84,6 +84,12 @@ class ParamsPanel(QWidget):
             w.setToolTip(d["tooltip"])
             self._form.addRow(d["label"], w)
             self.widgets[key] = w
+        # 通用参数：执行条件（依赖最近一次「条件判断」节点结果）
+        w = QComboBox(); w.addItems(["总是", "条件成立", "条件不成立"])
+        w.setCurrentText(str(params.get("run_when", "总是")))
+        w.setToolTip("配合「条件判断」节点：控制本节点在条件成立/不成立时才执行")
+        self._form.addRow("执行条件", w)
+        self.widgets["run_when"] = w
 
     def values(self) -> dict:
         out = {}

@@ -86,7 +86,7 @@ class DelayTask(BaseTask):
         self.params = [ParamDef("ms", "毫秒", "int", 500, min_value=0)]
 
     def run(self, ctx) -> None:
-        ctx.player.wait(float(ctx.params.get("ms", 500)) / max(ctx.speed, 0.01))
+        ctx.player.wait(float(ctx.params.get("ms", 500)) / 1000.0 / max(ctx.speed, 0.01))
 
 
 @register
@@ -166,6 +166,43 @@ class ImageClickTask(BaseTask):
             ctx.player.wait(float(p.get("interval_ms", 400)) / 1000.0)
 
 
+@register
+class ConditionTask(BaseTask):
+    """检测条件并把结果写入执行状态，供后续节点的「执行条件」使用。"""
+    type = "condition"
+    name = "条件判断"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.params = [
+            ParamDef("check", "检测方式", "select", "图像存在", ["图像存在"]),
+            ParamDef("image_path", "模板图片", "file", ""),
+            ParamDef("confidence", "置信度", "float", 0.8, min_value=0.1),
+            ParamDef("timeout_s", "等待超时(秒)", "float", 0.0, min_value=0.0,
+                     tooltip=">0 时在超时时间内反复检测，出现即算成立"),
+        ]
+
+    def run(self, ctx) -> None:
+        import time as _time
+        from core import vision
+        p = ctx.params
+        timeout = float(p.get("timeout_s", 0.0))
+        deadline = _time.monotonic() + timeout
+        while True:
+            if ctx.player.stopping:
+                ctx.set_condition(False)
+                return
+            m = vision.find_template(float(p.get("confidence", 0.8)),
+                                     template_path=str(p.get("image_path", "")))
+            if m.found:
+                ctx.set_condition(True)
+                return
+            if _time.monotonic() >= deadline:
+                ctx.set_condition(False)
+                return
+            ctx.player.wait(0.3)
+
+
 class NoteTask(BaseTask):
     type = "note"
     name = "注释"
@@ -183,4 +220,5 @@ register(KeyboardInputTask())
 register(DelayTask())
 register(RecordReplayTask())
 register(ImageClickTask())
+register(ConditionTask())
 register(NoteTask())
