@@ -477,6 +477,34 @@ class MainWindow(QMainWindow):
         if box.clickedButton() is btn:
             permissions.open_accessibility_settings()
 
+    # ---------- 权限横幅（未授权时持续重检） ----------
+    def show_permission_banner(self) -> None:
+        from PySide6.QtWidgets import QLabel
+        if getattr(self, "_perm_banner", None) is None:
+            self._perm_banner = QLabel(
+                "⚠ 未获得「辅助功能」权限，回放无效 —— 授权后无需重启，稍候自动检测通过即消失")
+            self._perm_banner.setStyleSheet(
+                "background:#8a3324; color:white; padding:6px; font-weight:bold;")
+            bar = QWidget()
+            lay = QHBoxLayout(bar); lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(self._perm_banner, 1)
+            from PySide6.QtWidgets import QPushButton
+            btn = QPushButton("打开设置")
+            btn.clicked.connect(permissions.open_accessibility_settings)
+            lay.addWidget(btn)
+            self.centralWidget().layout().insertWidget(0, bar)
+            self._perm_timer = QTimer(self)
+            self._perm_timer.setInterval(2000)
+            self._perm_timer.timeout.connect(self._check_permissions)
+            self._perm_timer.start()
+
+    def _check_permissions(self) -> None:
+        if permissions.check_accessibility():
+            if getattr(self, "_perm_banner", None) is not None:
+                self._perm_banner.parentWidget().hide()
+            self._perm_timer.stop()
+            self.signals.status.emit("辅助功能权限已就绪 ✓")
+
     def closeEvent(self, event) -> None:
         self.executor.stop_run()
         if self.recorder:

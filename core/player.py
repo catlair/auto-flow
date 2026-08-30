@@ -55,6 +55,7 @@ class Player:
         """回放一段事件序列；相对模式下偏移由基点与原点计算。"""
         self._stop.clear()
         speed = max(opt.speed, 0.01)
+        has_mouse = any(ev.kind in ("move", "mouse", "wheel") for ev in events)
         ox, oy = opt.origin_x, opt.origin_y
         if opt.use_relative:
             if ox == 0 and oy == 0:
@@ -62,12 +63,15 @@ class Player:
                     if ev.kind in ("move", "mouse", "wheel"):
                         ox, oy = ev.x, ev.y
                         break
-            dx, dy = opt.base_x - ox, opt.base_y - oy
-            start = (opt.base_x, opt.base_y)
+            # 基点未设置（默认 0,0）→ 视为在原位置回放，避免整条轨迹飞到屏幕左上角
+            base = (opt.base_x, opt.base_y) if (opt.base_x, opt.base_y) != (0, 0) else (ox, oy)
+            dx, dy = base[0] - ox, base[1] - oy
+            start = base
         else:
             dx, dy = 0, 0
             start = self._first_xy(events, opt)
-        self.mouse.position = start
+        if has_mouse:
+            self.mouse.position = start
         self._t0 = time.monotonic()
 
         pos = start

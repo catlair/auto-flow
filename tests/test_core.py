@@ -240,6 +240,31 @@ def test_player_suppress_hotkeys(monkeypatch):
     assert "a" in keys and not any(getattr(k, "name", "") == "f9" for k in keys)
 
 
+def test_player_relative_base_unset_falls_back_to_origin(monkeypatch):
+    """基点未设置（0,0 默认值）→ 在原位置回放，不飞到屏幕左上角。"""
+    p, fm, fk = make_player(monkeypatch)
+    fm.pos = (500.0, 400.0)
+    events = [
+        MacroEvent(ts_ms=0, kind="move", x=100, y=100),
+        MacroEvent(ts_ms=100, kind="move", x=200, y=150),
+    ]
+    p.play(events, PlayOptions(use_relative=True, base_x=0, base_y=0,
+                                origin_x=100, origin_y=100))
+    assert fm.pos == (200.0, 150.0)  # 原位回放：偏移 0
+
+
+def test_player_keyboard_only_keeps_cursor(monkeypatch):
+    """纯键盘脚本：不得挪动光标。"""
+    p, fm, fk = make_player(monkeypatch)
+    fm.pos = (777.0, 888.0)
+    events = [MacroEvent(ts_ms=0, kind="key", key="a", pressed=True),
+              MacroEvent(ts_ms=30, kind="key", key="a", pressed=False)]
+    p.play(events, PlayOptions(use_relative=True, base_x=0, base_y=0))
+    assert fm.pos == (777.0, 888.0)
+    downs = [k for op, k in fk.log if op == "down"]
+    assert "a" in downs
+
+
 def test_glide_reaches_target(monkeypatch):
     p, fm, fk = make_player(monkeypatch)
     p._glide((0, 0), (990, 630), 0.5)
