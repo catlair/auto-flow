@@ -123,9 +123,9 @@ class ParamsPanel(QWidget):
 
     def _snip_template(self, line_edit) -> None:
         """调用 macOS 系统交互式框选截图，保存为模板文件并回填路径。"""
-        import subprocess, os, time
-        os.makedirs("workflows/templates", exist_ok=True)
-        path = os.path.abspath(f"workflows/templates/tpl_{int(time.time())}.png")
+        import subprocess, time
+        from core.paths import templates_dir
+        path = os.path.join(templates_dir(), f"tpl_{int(time.time())}.png")
         # 最小化本窗口干扰；screencapture -i 阻塞直到用户框选完成
         proc = subprocess.Popen(["screencapture", "-i", "-o", path])
         def wait_done():

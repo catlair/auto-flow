@@ -19,6 +19,7 @@ from core import permissions
 import tasks.builtin  # noqa: F401  触发节点注册
 from tasks.base import all_definitions, get_task
 from ui.params_panel import ParamsPanel
+from core.paths import workflows_dir
 
 
 class Signals(QObject):
@@ -375,14 +376,14 @@ class MainWindow(QMainWindow):
 
     def save_workflow_as(self) -> None:
         self._commit_params()
-        path, _ = QFileDialog.getSaveFileName(self, "保存工作流", "workflows", "工作流 (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "保存工作流", workflows_dir(), "工作流 (*.json)")
         if path:
             self.wf.save(path)
             self.saved_path = path
             self.signals.status.emit(f"已保存 {path}")
 
     def load_workflow(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "打开工作流", "workflows", "工作流 (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "打开工作流", workflows_dir(), "工作流 (*.json)")
         if not path:
             return
         try:
