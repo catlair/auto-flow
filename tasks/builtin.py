@@ -167,6 +167,48 @@ class ImageClickTask(BaseTask):
 
 
 @register
+class OcrClickTask(BaseTask):
+    type = "ocr_click"
+    name = "找文字点击"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.params = [
+            ParamDef("text", "文字", "text", "", tooltip="要找的屏幕文字（macOS Vision 离线识别，支持中英文）"),
+            ParamDef("action", "动作", "select", "click", ["click", "double_click", "move"]),
+            ParamDef("timeout_s", "查找超时(秒)", "float", 3.0, min_value=0.0),
+            ParamDef("interval_ms", "重试间隔(ms)", "int", 500, min_value=50),
+            ParamDef("not_found", "找不到时", "select", "跳过", ["跳过", "停止工作流"]),
+            ParamDef("offset_x", "偏移X", "int", 0),
+            ParamDef("offset_y", "偏移Y", "int", 0),
+        ]
+
+    def run(self, ctx) -> None:
+        import time as _time
+        from core import ocr
+        p = ctx.params
+        deadline = _time.monotonic() + float(p.get("timeout_s", 3.0))
+        while True:
+            if ctx.player.stopping:
+                return
+            hit = ocr.find_text(str(p.get("text", "")))
+            if hit:
+                x, y = hit.x + int(p.get("offset_x", 0)), hit.y + int(p.get("offset_y", 0))
+                ctx.player.glide_now((x, y))
+                action = p.get("action", "click")
+                if action == "move":
+                    return
+                btn = Button.left
+                ctx.player.mouse.click(btn, 2 if action == "double_click" else 1)
+                return
+            if _time.monotonic() >= deadline:
+                if p.get("not_found", "跳过") == "停止工作流":
+                    ctx.stop_workflow()
+                return
+            ctx.player.wait(float(p.get("interval_ms", 500)) / 1000.0)
+
+
+@register
 class ConditionTask(BaseTask):
     """检测条件并把结果写入执行状态，供后续节点的「执行条件」使用。"""
     type = "condition"
@@ -175,8 +217,9 @@ class ConditionTask(BaseTask):
     def __init__(self) -> None:
         super().__init__()
         self.params = [
-            ParamDef("check", "检测方式", "select", "图像存在", ["图像存在"]),
+            ParamDef("check", "检测方式", "select", "图像存在", ["图像存在", "文字存在"]),
             ParamDef("image_path", "模板图片", "file", ""),
+            ParamDef("text", "文字", "text", "", tooltip="检测方式=文字存在 时使用"),
             ParamDef("confidence", "置信度", "float", 0.8, min_value=0.1),
             ParamDef("timeout_s", "等待超时(秒)", "float", 0.0, min_value=0.0,
                      tooltip=">0 时在超时时间内反复检测，出现即算成立"),
@@ -184,17 +227,24 @@ class ConditionTask(BaseTask):
 
     def run(self, ctx) -> None:
         import time as _time
-        from core import vision
+        from core import vision, ocr
         p = ctx.params
+        use_text = p.get("check", "图像存在") == "文字存在"
         timeout = float(p.get("timeout_s", 0.0))
         deadline = _time.monotonic() + timeout
+
+        def check() -> bool:
+            if use_text:
+                return ocr.find_text(str(p.get("text", ""))) is not None
+            m = vision.find_template(float(p.get("confidence", 0.8)),
+                                     template_path=str(p.get("image_path", "")))
+            return m.found
+
         while True:
             if ctx.player.stopping:
                 ctx.set_condition(False)
                 return
-            m = vision.find_template(float(p.get("confidence", 0.8)),
-                                     template_path=str(p.get("image_path", "")))
-            if m.found:
+            if check():
                 ctx.set_condition(True)
                 return
             if _time.monotonic() >= deadline:
@@ -220,5 +270,6 @@ register(KeyboardInputTask())
 register(DelayTask())
 register(RecordReplayTask())
 register(ImageClickTask())
+register(OcrClickTask())
 register(ConditionTask())
 register(NoteTask())

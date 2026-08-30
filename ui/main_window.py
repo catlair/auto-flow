@@ -20,6 +20,7 @@ import tasks.builtin  # noqa: F401  触发节点注册
 from tasks.base import all_definitions, get_task
 from ui.params_panel import ParamsPanel
 from core.paths import workflows_dir
+from ui.scheduler import Scheduler, ScheduleDialog
 
 
 class Signals(QObject):
@@ -51,6 +52,8 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_hotkeys()
+        self.scheduler = Scheduler()
+        self.scheduler.fire.connect(self._scheduled_run)
         self.signals.node_running.connect(self._on_node_running)
         self.signals.play_progress.connect(self._on_play_progress)
         self.signals.play_done.connect(self._on_play_done)
@@ -150,6 +153,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction("另存为…", self.save_workflow_as)
         help_menu = bar.addMenu("帮助")
         help_menu.addAction("macOS 权限说明", self.show_permissions)
+        tool_menu = bar.addMenu("工具")
+        tool_menu.addAction("定时运行…", self._open_schedule)
 
         self.statusBar().showMessage("就绪")
 
@@ -398,6 +403,30 @@ class MainWindow(QMainWindow):
         if self.wf.nodes:
             self.node_list.setCurrentRow(0)
         self.signals.status.emit(f"已加载 {path}")
+
+    # ---------- 定时运行 ----------
+    def _open_schedule(self) -> None:
+        dlg = ScheduleDialog(self.scheduler, self)
+        if dlg.exec():
+            nxt = self.scheduler.next_fire_text()
+            self.signals.status.emit("定时已启用，下次 " + nxt if nxt else "定时已关闭")
+
+    def _scheduled_run(self, path: str) -> None:
+        """定时触发：从磁盘重新加载工作流后运行。"""
+        if self.executor.running or self.recorder:
+            self.signals.status.emit("定时跳过：正在录制/运行中")
+            return
+        try:
+            self.wf = Workflow.load(path)
+        except Exception as e:
+            self.signals.status.emit(f"定时运行失败：{e}")
+            return
+        self.saved_path = path
+        self.speed_spin.setValue(self.wf.speed)
+        self.repeat_spin.setValue(self.wf.repeat)
+        self._refresh_node_list()
+        self.signals.status.emit("定时触发运行")
+        self.toggle_run()
 
     def show_permissions(self) -> None:
         ok = permissions.check_accessibility()
