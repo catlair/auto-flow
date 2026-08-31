@@ -103,12 +103,24 @@ class MainWindow(QMainWindow):
 
         node_box = QGroupBox("工作流节点")
         nl = QVBoxLayout(node_box)
-        add_btn = QToolButton(); add_btn.setText("＋ 添加节点")
+        add_btn = QPushButton("＋ 添加节点  ▾")
         menu = QMenu(add_btn)
         for d in all_definitions():
             act = menu.addAction(d["name"])
             act.triggered.connect(lambda _=False, t=d["type"]: self.add_node(t))
-        add_btn.setMenu(menu); add_btn.setPopupMode(QToolButton.InstantPopup)
+        add_btn.setMenu(menu)
+        add_btn.setObjectName("addNodeBtn")
+        add_btn.setStyleSheet("""
+            QPushButton#addNodeBtn {
+                background: #ffffff; border: 1px solid #c9ccd4; border-radius: 6px;
+                padding: 6px 14px; font-size: 13px; color: #1d2129; text-align: center;
+            }
+            QPushButton#addNodeBtn:hover {
+                background: #f0f4ff; border-color: #3b6ef5; color: #2b5be0;
+            }
+            QPushButton#addNodeBtn:pressed { background: #e0e9ff; }
+            QPushButton#addNodeBtn::menu-indicator { image: none; width: 0px; }
+        """)
         nl.addWidget(add_btn)
         self.node_list = QListWidget()
         self.node_list.currentRowChanged.connect(self._on_node_selected)
