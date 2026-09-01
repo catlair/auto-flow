@@ -454,9 +454,13 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 
 ### 15.2 授权持久性 spike（P0-S）构建与状态（2026-09-01）
 
-**结论（部分）**：spike 后端可正常以「onedir + 固定路径 + MacDev 自签」形式运行并
-通过 stdio JSON-RPC 通信；**剩下的「授权是否跨重建持久」需用户在系统设置手动授权三项后，
-再做一次覆盖安装来验证（T5，见下方步骤）**。
+**结论（P0-S 已通过）**：spike 后端可正常以「onedir + 固定路径 + MacDev 自签」形式运行并
+通过 stdio JSON-RPC 通信。**授权持久性已验证**：连续两次「同源代码重建 + 覆盖安装」后
+CDHash 不变（`97ebf3ec…e1c819`），辅助功能授权保持为 `true`；屏幕录制由用户在 GUI 会话
+确认 `true`（agent 后台会话该值为会话敏感假阴性，见坑 3）。即 §12.1 假设成立，P0 解锁。
+
+**后续注意（源码改动会换 CDHash）**：见坑 4——编辑 Python 源码会改变嵌入 PYZ →
+CDHash 变化 → 旧的 TCC 授权失效，需用户重新授权一次；此后同源代码重建仍确定性持久。
 
 **打包脚本（新增）**
 
@@ -492,6 +496,22 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
    屏幕录制 `CGRequestScreenCaptureAccess`），TCC 按调用进程的签名记录授权。本 spike 的
    `app.requestPermissions` 已演示该模式，P1 接真实视觉节点时应照搬。
 
+4. **改源码会换 CDHash（本会话踩到）**：PyInstaller 把 Python 字节码打进 `autoflow-sidecar`
+   可执行文件的 PYZ 段，**该段落在签名覆盖范围内**，故编辑 `core/permissions.py` 等源码会让
+   整份可执行文件 CDHash 变化（`97ebf3ec…` → `8eedd926…`）。CDHash 变了，用户在系统设置里
+   的 TCC 授权便不再匹配新二进制，**需重新授权一次**；之后同源代码重建确定性保持同一 CDHash
+   → 授权持久。配套修正：`scripts/build_spike_app.sh` 改为**总是先 `build_sidecar.sh` 重建
+   onedir**（不再「存在即跳过」），避免把旧 CDHash 的旧二进制装进 `.app` 而排查无果。
+
+5. **PyObjC 首次懒加载 `-32000`（已修）**：`ApplicationServices.AXIsProcessTrusted` 等符号
+   在进程内首次访问时，`objc/_lazyimport.py` 的 `get_constant` 可能抛 `KeyError`
+   （框架尚未完全载入），**第二次访问即成功**（符号被缓存）。未修前 `app.info` 第一次调用会
+   在 `core/permissions.py` 炸出 `-32000 Internal error, detail 'AXIsProcessTrusted'`
+   （用户首跑即中招，第二跑正常）。修复：在 `core/permissions.py` 加 `_retry_call(fn)`，
+   对 `check_accessibility / check_input_monitoring / check_screen_recording` 的 PyObjC 调用
+   失败重试一次；并对 `rpc/server.py` 的 `_perm_loop` 轮询线程加 try/except，避免单轮快照异常
+   打死 daemon 线程。修后首跑即返回干净结果（不再 -32000）。
+
 **已验证的 RPC 面**
 
 `app.info` / `app.diagnose` / `app.shutdown` / `app.requestPermissions` /
@@ -511,7 +531,8 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 �
    **坑**：`CGPreflightScreenCaptureAccess`（屏幕录制预检）对调用进程所在会话敏感，
    非 GUI/Aqua 会话（如 CI、agent 后台 Bash）一律返 false——此时 `app.info` 的
    `screenRecording:false` 是**假阴性**，须以用户在 GUI 会话的终端查询为准。
-3. 重建并覆盖安装（同内容 + 同 MacDev 签名，cdhash 不变）：
+3. 重建并覆盖安装（**本次若改过源码，cdhash 已变，必须先完成第 1 步重新授权**；
+   同源代码重建则 cdhash 不变，授权持久）：
    `./scripts/build_sidecar.sh && ./scripts/build_spike_app.sh`，
    再 `rm -rf "/Applications/Auto Flow RPC Spike.app" && cp -R "dist/Auto Flow RPC Spike.app" /Applications/.`
 4. 再次跑 `app.info`，三项仍为 `true` → **§12.1 假设成立，P0 解锁**；否则转 §12.1 退路。

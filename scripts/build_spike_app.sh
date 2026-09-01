@@ -19,11 +19,11 @@
 set -e
 cd "$(dirname "$0")/.."
 
-# 确保 onedir 已构建
-if [ ! -x dist/autoflow-sidecar/autoflow-sidecar ]; then
-  echo "未找到 onedir 产物，先运行 scripts/build_sidecar.sh"
-  ./scripts/build_sidecar.sh
-fi
+# 总是重新构建 onedir（绝不复用已存在的产物）。
+# 注意：编辑 Python 源码会改变嵌入的 PYZ，进而改变可执行文件 CDHash；
+# 若这里「存在即跳过」，会把旧源码的旧 CDHash 二进制装进 .app，导致 TCC 授权仍指向旧
+# CDHash 而排查无果。确定性 CDHash 只对「同一份源码」成立，因此必须从源码重建。
+./scripts/build_sidecar.sh
 
 APP="dist/Auto Flow RPC Spike.app"
 rm -rf "$APP"

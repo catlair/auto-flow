@@ -116,12 +116,21 @@ def _snapshot_permissions() -> dict:
 
 def _perm_loop() -> None:
     global _last_perm
-    _last_perm = _snapshot_permissions()
+    try:
+        _last_perm = _snapshot_permissions()
+    except Exception:  # noqa: BLE001
+        logger.exception("initial permission snapshot failed")
+        _last_perm = {}
     while not _shutdown.is_set():
         _shutdown.wait(2.0)
         if _shutdown.is_set():
             break
-        cur = _snapshot_permissions()
+        try:
+            cur = _snapshot_permissions()
+        except Exception:  # noqa: BLE001
+            # 单轮快照失败不应打死轮询线程；记录后跳过本轮，下个周期再试
+            logger.exception("permission snapshot failed; skip this round")
+            continue
         if cur != _last_perm:
             _last_perm = cur
             _send_notification("permission.changed", cur)
