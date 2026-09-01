@@ -508,6 +508,9 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 �
      会弹「辅助功能」「屏幕录制」系统提示，点「允许 / 打开系统设置」即可；输入监控仍需走 A。
 2. 验证已授权：`./scripts/run_spike.sh app.info` → 三项权限应为 `true`
    （注意 `inputMonitoring` 的 `true` 在未建 tap 时是「无限制」假阳性，见 §11/§15 说明）。
+   **坑**：`CGPreflightScreenCaptureAccess`（屏幕录制预检）对调用进程所在会话敏感，
+   非 GUI/Aqua 会话（如 CI、agent 后台 Bash）一律返 false——此时 `app.info` 的
+   `screenRecording:false` 是**假阴性**，须以用户在 GUI 会话的终端查询为准。
 3. 重建并覆盖安装（同内容 + 同 MacDev 签名，cdhash 不变）：
    `./scripts/build_sidecar.sh && ./scripts/build_spike_app.sh`，
    再 `rm -rf "/Applications/Auto Flow RPC Spike.app" && cp -R "dist/Auto Flow RPC Spike.app" /Applications/.`
