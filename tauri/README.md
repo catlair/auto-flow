@@ -14,32 +14,31 @@ tauri/
     components/*.vue        # 7 个组件 + App 三栏布局
   src-tauri/           # Rust 外壳
     src/lib.rs              # 拉起 sidecar、stdout 逐行 emit rpc_event、send_rpc 写 stdin、守护重启
-    tauri.conf.json         # Resources 固定路径放 sidecar onedir（§12）
+    tauri.conf.json         # Resources 固定路径放 sidecar onedir（§12）；bundle.resources = autoflow-sidecar/**/*
     capabilities/default.json
-    resources/autoflow-sidecar/   # 构建前放入 sidecar onedir（见下）
+    autoflow-sidecar/        # 构建前放入 sidecar onedir（见下；已被 .gitignore 忽略，不入库）
     icons/                  # 见 icons/README.md（构建前需 tauri icon 生成）
 ```
 
 ## 前提
 
-1. **安装 Rust 工具链**（本机当前未装）：
-
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   source "$HOME/.cargo/env"
-   ```
+1. **Rust 工具链**：本机已通过 rustup 装在 `~/.cargo/bin`（stable-aarch64-apple-darwin，
+   rustc 1.91）。构建时把它加入 PATH 即可（`export PATH="$HOME/.cargo/bin:$PATH"`），无需再装。
 
 2. **放入 sidecar onedir**：把 `scripts/build_sidecar.sh` 产出的 `dist/autoflow-sidecar/`
-   整目录复制到 `tauri/src-tauri/resources/autoflow-sidecar/`，使最终路径为
-   `tauri/src-tauri/resources/autoflow-sidecar/autoflow-sidecar`（可执行文件）。
+   整目录复制到 `tauri/src-tauri/autoflow-sidecar/`，使最终路径为
+   `tauri/src-tauri/autoflow-sidecar/autoflow-sidecar`（可执行文件）。
+   Tauri 的 `bundle.resources` 相对 `src-tauri` 解析并保留目录结构，故必须放在
+   `src-tauri/autoflow-sidecar/`（**不要**放进 `src-tauri/resources/`，否则会嵌套成
+   `Contents/Resources/resources/...`，与 `lib.rs` 的 `resource_dir().join("autoflow-sidecar")` 错位）。
 
    ```bash
    ./scripts/build_sidecar.sh
-   mkdir -p src-tauri/resources
-   cp -R ../dist/autoflow-sidecar src-tauri/resources/autoflow-sidecar
+   cp -R ../dist/autoflow-sidecar src-tauri/autoflow-sidecar
    ```
 
 3. **生成图标**（见 `src-tauri/icons/README.md`）：`npm run tauri icon <1024.png>`。
+   （仓库已带 `icon-source.png` 可作源；首次需生成 `icons/` 各尺寸。）
 
 ## 运行 / 构建
 

@@ -571,8 +571,10 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 
 - **工程**：`tauri/package.json`（Tauri 2 + Vue3 + TDesign + Pinia + vuedraggable + plugin-dialog）、
   `vite.config.ts`（dev 1420）、`tsconfig*.json`、`index.html`、`tauri.conf.json`
-  （`bundle.resources = ["resources/autoflow-sidecar/**"]`，Rust 侧用 `resource_dir()` 拼固定路径 spawn，
-  **非 externalBin**，见 §12）、`capabilities/default.json`（event + dialog）。
+  （`bundle.resources = ["autoflow-sidecar/**/*"]`，相对 `src-tauri` 解析并保留目录结构，故 sidecar
+  onedir 须放在 `src-tauri/autoflow-sidecar/`（**不能**放 `src-tauri/resources/`，否则会嵌套成
+  `Contents/Resources/resources/...` 与 `lib.rs` 的 `resource_dir().join("autoflow-sidecar")` 错位）；
+  Rust 侧用 `resource_dir()` 拼固定路径 spawn，**非 externalBin**，见 §12）、`capabilities/default.json`（event + dialog）。
 - **通信（§13）**：`src/rpc/client.ts` 订阅 Rust `rpc_event` 事件，按 `\n` 累积缓冲切分（半包/粘包兜底），
   `request()` 返回 Promise 按自增 id 匹配；`send_rpc` invoke 写 sidecar stdin。
 - **状态（§10）**：`src/stores/app.ts` 一个 Pinia store，后端为唯一真源；握手 `app.info` 校验
@@ -586,10 +588,24 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
   绝对路径 `Command::spawn`，stdout 逐行 `emit("rpc_event")`，`send_rpc` 命令写 stdin，stdout EOF 后
   守护重启（§5 崩溃恢复）；`Cargo.toml` / `build.rs` / `main.rs` / `capabilities`。
 
-**本机验证状态**：前端 `npm install` + `vue-tsc --noEmit` + `vite build` 可独立校验（不依赖 Rust）；
-Rust 侧需先装 Rust 工具链（`rustup`）并放入 sidecar onedir + `tauri icon` 生成图标后才能
-`npm run tauri dev/build`（本机当时未装 cargo，Rust 侧仅源码交付，待用户装好 Rust 后一键构建）。
-`tauri/README.md` 写明三步前置与运行命令。
+**本机验证状态（2026-09-01 晚，Rust 已就绪后实打实构建）**：
+
+- Rust 工具链本就在本机（`~/.cargo/bin`，rustup stable-aarch64-apple-darwin，rustc 1.91；只是
+  该 shell 的 PATH 没带 `~/.cargo/bin`），`cargo build`（debug）与 `cargo build --release` 均通过。
+- `npm run tauri build` 一次成功产出 **`Auto Flow.app` + `Auto Flow_0.1.0_aarch64.dmg`**
+  （`target/release/bundle/`）：Rust release 二进制进 `Contents/MacOS/autoflow-tauri`，
+  前端 `dist/` 进 `Contents/Resources/`，sidecar onedir 进 **`Contents/Resources/autoflow-sidecar/`**
+  （与 §12 / `lib.rs` 路径一致）。
+- **踩坑（已修）**：`bundle.resources` 的 glob 原写 `resources/autoflow-sidecar/**`，结果 Tauri 把
+  路径原样保留成 `Contents/Resources/resources/autoflow-sidecar/`（双 `resources`），`sidecar_exe`
+  按 `resource_dir().join("autoflow-sidecar")` 找不到 → 改 sidecar 物理位置到 `src-tauri/autoflow-sidecar/`
+  且 glob 改 `autoflow-sidecar/**/*`（`**` 裸写只匹配目录本身、Tauri 的 `ResourcePaths` 会跳过目录→
+  零匹配报 `GlobPathNotFound`，故必须 `**/*`），落点即正确。
+- **嵌入 sidecar 冒烟测试**：直接拉起 `.app` 内的 `Contents/Resources/autoflow-sidecar/autoflow-sidecar`
+  喂 `app.info`，返回合法 NDJSON 帧（`protocolVersion:1`、`frozen:true`、三项权限快照），协议链路通。
+- **待用户 GUI 会话验证**：本机为无显示（headless）环境，Tauri webview 窗体无法在此渲染；真正的
+  窗体启动 + 前端↔Rust↔sidecar 三方联调需在用户的 Aqua 会话里 `npm run tauri dev` 或双击 `.app`。
+`tauri/README.md` 已更正前置步骤（Rust 已在、sidecar 复制目标目录）与运行命令。
 
 ---
 
@@ -656,5 +672,4 @@ Rust 侧需先装 Rust 工具链（`rustup`）并放入 sidecar onedir + `tauri 
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
 
 **进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
-P1-5 Tauri 2 脚手架已完成（`tauri/`，前端可 `vite build` 校验，Rust 侧待用户装 Rust 后 `tauri dev`）。
-P2（前端 7 组件）/ P3（打包签名）已随 P1-5 一并铺好骨架，剩余为真实打包签名联调与打磨（P4）。
+P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview）；② P3 真实打包签名（MacDev 双签 + notary 流程 + `sync_app.sh` + 权限引导页，产出可分发 `.app`/`.dmg`）。

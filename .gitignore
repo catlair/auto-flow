@@ -9,6 +9,8 @@ tauri/dist/
 tauri/src-tauri/target/
 tauri/src-tauri/gen/
 tauri/src-tauri/resources/
+tauri/src-tauri/autoflow-sidecar/
+tauri/vite.config.ts.timestamp-*.mjs
 workflows/templates/*.png
 .DS_Store
 build/

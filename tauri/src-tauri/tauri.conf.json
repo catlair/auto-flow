@@ -27,7 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["resources/autoflow-sidecar/**"],
+    "resources": ["autoflow-sidecar/**/*"],
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
