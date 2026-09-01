@@ -459,8 +459,10 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 CDHash 不变（`97ebf3ec…e1c819`），辅助功能授权保持为 `true`；屏幕录制由用户在 GUI 会话
 确认 `true`（agent 后台会话该值为会话敏感假阴性，见坑 3）。即 §12.1 假设成立，P0 解锁。
 
-**后续注意（源码改动会换 CDHash）**：见坑 4——编辑 Python 源码会改变嵌入 PYZ →
-CDHash 变化 → 旧的 TCC 授权失效，需用户重新授权一次；此后同源代码重建仍确定性持久。
+**后续注意（改源码会换 CDHash，但授权仍持久）**：见坑 4——编辑 Python 源码会改变嵌入 PYZ →
+CDHash 变化，但 **MacDev 自签身份稳定时 TCC 授权按证书+identifier 匹配、不绑定 CDHash**，
+故授权跨源码改动仍持久，无需重授权。只有 ad-hoc 签名（`codesign -`）才会把 CDHash 写进
+授权要求，那种才需在换 CDHash 后重授权。
 
 **打包脚本（新增）**
 
@@ -496,12 +498,15 @@ CDHash 变化 → 旧的 TCC 授权失效，需用户重新授权一次；此后
    屏幕录制 `CGRequestScreenCaptureAccess`），TCC 按调用进程的签名记录授权。本 spike 的
    `app.requestPermissions` 已演示该模式，P1 接真实视觉节点时应照搬。
 
-4. **改源码会换 CDHash（本会话踩到）**：PyInstaller 把 Python 字节码打进 `autoflow-sidecar`
-   可执行文件的 PYZ 段，**该段落在签名覆盖范围内**，故编辑 `core/permissions.py` 等源码会让
-   整份可执行文件 CDHash 变化（`97ebf3ec…` → `8eedd926…`）。CDHash 变了，用户在系统设置里
-   的 TCC 授权便不再匹配新二进制，**需重新授权一次**；之后同源代码重建确定性保持同一 CDHash
-   → 授权持久。配套修正：`scripts/build_spike_app.sh` 改为**总是先 `build_sidecar.sh` 重建
-   onedir**（不再「存在即跳过」），避免把旧 CDHash 的旧二进制装进 `.app` 而排查无果。
+4. **改源码会换 CDHash，但 MacDev 自签下授权仍持久（本会话踩到并纠正）**：PyInstaller 把
+   Python 字节码打进 `autoflow-sidecar` 可执行文件的 PYZ 段，该段在 codesign 覆盖范围内，故
+   编辑 `core/permissions.py` 等源码会让整份可执行文件 CDHash 变化（修复 -32000 时实测
+   `97ebf3ec…` → `8eedd926…`）。**但 TCC 授权并不绑定裸 CDHash**：用 MacDev 自签（稳定身份）
+   时，designated requirement 锁定 `identifier + 证书(MacDev)`、不含 CDHash，所以换 CDHash 后
+   授权依旧匹配、三项仍 `true`（用户在 GUI 会话实测确认，且未重新授权）。**只有 ad-hoc 签名
+   `codesign -` 才把 CDHash 写进授权要求，那种才需在换 CDHash 后重授权。** 因此 P1 任何源码
+   改动都无需重授权，只要 MacDev 身份与 bundle id 不变。配套修正：`scripts/build_spike_app.sh`
+   改为**总是先 `build_sidecar.sh` 重建 onedir**（不再「存在即跳过」），避免装旧二进制而排查无果。
 
 5. **PyObjC 首次懒加载 `-32000`（已修）**：`ApplicationServices.AXIsProcessTrusted` 等符号
    在进程内首次访问时，`objc/_lazyimport.py` 的 `get_constant` 可能抛 `KeyError`
@@ -531,8 +536,8 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 �
    **坑**：`CGPreflightScreenCaptureAccess`（屏幕录制预检）对调用进程所在会话敏感，
    非 GUI/Aqua 会话（如 CI、agent 后台 Bash）一律返 false——此时 `app.info` 的
    `screenRecording:false` 是**假阴性**，须以用户在 GUI 会话的终端查询为准。
-3. 重建并覆盖安装（**本次若改过源码，cdhash 已变，必须先完成第 1 步重新授权**；
-   同源代码重建则 cdhash 不变，授权持久）：
+3. 重建并覆盖安装（MacDev 自签身份稳定时，改源码换 CDHash 也**不影响**已授权项，
+   无需重授权；仅 ad-hoc 签名换 CDHash 才需重授权）：
    `./scripts/build_sidecar.sh && ./scripts/build_spike_app.sh`，
    再 `rm -rf "/Applications/Auto Flow RPC Spike.app" && cp -R "dist/Auto Flow RPC Spike.app" /Applications/.`
 4. 再次跑 `app.info`，三项仍为 `true` → **§12.1 假设成立，P0 解锁**；否则转 §12.1 退路。
