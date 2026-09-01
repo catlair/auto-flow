@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 ./.venv/bin/python -m PyInstaller --noconfirm --windowed --name "Auto Flow" \
   --icon assets/icon.icns \
-  --osx-bundle-identifier com.catlair.autoflow \
+  --osx-bundle-identifier com.example.autoflow \
   --collect-all pynput \
   --hidden-import ApplicationServices \
   --hidden-import AppKit \

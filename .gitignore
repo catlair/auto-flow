@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 workflows/*.json
+workflows/templates/*.png
 .DS_Store
 build/
 dist/

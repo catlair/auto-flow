@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 if [ ! -x .venv/bin/python ]; then
   echo "[auto-flow] 创建虚拟环境…"
-  /Users/catlair/.local/bin/python3.12 -m venv .venv || python3.12 -m venv .venv
+  python3.12 -m venv .venv
   ./.venv/bin/pip install --upgrade pip -q
 fi
 

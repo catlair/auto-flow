@@ -57,7 +57,7 @@ workflows/       # 工作流 JSON 存放处
 ## 开发
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q   # 核心逻辑测试（18 例）
+./.venv/bin/python -m pytest tests/ -q   # 核心逻辑测试（24 例）
 QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 无界面冒烟
 ```
 
@@ -78,6 +78,8 @@ yolo export model=yolov8n.pt format=onnx imgsz=640   # 或 yolo11n.pt / 自己�
 ./scripts/build_app.sh          # 产出 dist/Auto Flow.app（MacDev 自签，授权跨构建保持）
 ./scripts/build_app.sh --dmg    # 额外产出 dist/Auto Flow.dmg
 ```
+
+> ⚠️ `scripts/build_app.sh` 默认 `--osx-bundle-identifier com.example.autoflow`，发布前请改为你自己的 bundle id。
 
 ## 后续规划
 
