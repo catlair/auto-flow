@@ -237,6 +237,12 @@ _HANDLERS = {
     "node.toggle": _ctl(lambda p: _CTRL.node_toggle(p.get("index", -1), p.get("enabled", True))),
     "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"), p.get("value"))),
     "nodes.definitions": _ctl(lambda p: _CTRL.nodes_definitions()),
+    # --- 运行 / 录制（§5/§9.5，P1-2） ---
+    "run.start": _ctl(lambda p: _CTRL.run_start(p.get("base_x", 0), p.get("base_y", 0))),
+    "run.stop": _ctl(lambda p: _CTRL.run_stop()),
+    "record.start": _ctl(lambda p: _CTRL.record_start()),
+    "record.stop": _ctl(lambda p: _CTRL.record_stop()),
+    "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
 }
 
 

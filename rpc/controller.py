@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+from dataclasses import asdict
 from typing import Any, Callable, Optional
 
 from core.events import Node, Workflow
@@ -49,6 +51,9 @@ class AppController:
         self.path: Optional[str] = None
         self.executor = _executor_mod.Executor()
         self.recorder = None  # 在 P1-2 装入 Recorder
+        self._last_record = None
+        self._rec_poller = None
+        self._rec_poller_rec = None
         self.running = False
         self.recording = False
         self._lock = threading.RLock()
@@ -183,3 +188,107 @@ class AppController:
             out.append(d)
         out.sort(key=lambda d: _NODE_ORDER.get(d.get("type", ""), 999))
         return out
+
+    # ---- run.*（Executor 包装，§5/§9.5） ----
+    def run_start(self, base_x: int = 0, base_y: int = 0) -> dict:
+        import tasks.builtin  # 确保节点已注册
+        with self._lock:
+            if self.running:
+                raise ControllerError(-32001, "already_running")
+            if self.recording:
+                raise ControllerError(-32002, "busy_recording")
+            runnable = [n for n in self.workflow.nodes if n.enabled and n.type != "note"]
+            if not runnable:
+                raise ControllerError(-32004, "workflow_empty")
+            wf = self.workflow
+            self.running = True
+
+        def on_node(idx, ntype):
+            self._notify("run.node", {"index": idx, "type": ntype})
+
+        def on_progress(done, total):
+            self._notify("run.progress", {"done": done, "total": total})
+
+        def on_done(stopped):
+            self.running = False
+            self._notify("run.finished", {"stopped": bool(stopped)})
+
+        def on_error(idx, ntype, exc):
+            self._notify("run.error", {"index": idx, "type": ntype, "message": str(exc)})
+
+        threading.Thread(
+            target=self.executor.run_workflow,
+            args=(wf, base_x, base_y),
+            kwargs={"on_node": on_node, "on_progress": on_progress,
+                    "on_done": on_done, "on_error": on_error},
+            name="run-workflow", daemon=True,
+        ).start()
+        return {"running": True}
+
+    def run_stop(self) -> dict:
+        self.executor.stop_run()
+        return {"running": self.running}
+
+    # ---- record.*（Recorder 包装，100ms 批量推 record.event，§5 节流） ----
+    def record_start(self) -> dict:
+        from core.recorder import Recorder
+        with self._lock:
+            if self.recording:
+                raise ControllerError(-32001, "already_running")
+            if self.running:
+                raise ControllerError(-32002, "busy_recording")
+            self.recorder = Recorder()
+            self.recorder.start()
+            self.recording = True
+            self._rec_poller_rec = self.recorder
+        self._rec_poller = threading.Thread(target=self._record_poll, name="rec-poll", daemon=True)
+        self._rec_poller.start()
+        return {"recording": True}
+
+    def _record_poll(self) -> None:
+        # 仅用启动时刻捕获的 rec 引用；record_stop 会置空 self.recorder，这里绝不回读属性
+        rec = self._rec_poller_rec
+        while self.recording:
+            time.sleep(0.1)
+            if not self.recording:
+                break
+            evs = rec.poll()
+            if evs:
+                self._notify("record.event", {"events": [asdict(e) for e in evs]})
+        # 退出前再 flush 一次残留
+        evs = rec.poll()
+        if evs:
+            self._notify("record.event", {"events": [asdict(e) for e in evs]})
+
+    def record_stop(self) -> dict:
+        with self._lock:
+            if not self.recording or self.recorder is None:
+                raise ControllerError(-32003, "not_recording")
+            rec = self.recorder
+            self.recorder = None
+            self.recording = False
+        result = rec.stop()
+        self._last_record = result
+        self._notify("record.stopped", {
+            "count": len(result.events),
+            "origin": [result.origin_x, result.origin_y],
+            "stopped_by_limit": result.stopped_by_limit,
+        })
+        return {"count": len(result.events),
+                "origin": [result.origin_x, result.origin_y],
+                "stopped_by_limit": result.stopped_by_limit}
+
+    def record_to_node(self) -> dict:
+        res = self._last_record
+        if res is None:
+            raise ControllerError(-32003, "no_record_result")
+        node = Node(type="record_replay", params={
+            "events": [asdict(e) for e in res.events],
+            "origin_x": res.origin_x, "origin_y": res.origin_y,
+            "use_relative": True,
+        }, enabled=True)
+        with self._lock:
+            self.workflow.nodes.append(node)
+            inserted = len(self.workflow.nodes) - 1
+        self._broadcast_workflow()
+        return {"index": inserted, "node": node.to_dict()}

@@ -209,3 +209,56 @@ def test_workflow_error_codes() -> None:
     finally:
         _rpc(p, "app.shutdown")
         p.wait(timeout=5)
+
+
+# --------------------------------------------------------------------------- #
+# P1-2：run/record RPC（§5/§9.5）
+# --------------------------------------------------------------------------- #
+def test_run_and_record_error_codes() -> None:
+    p = _start()
+    try:
+        # 空工作流运行 -> -32004
+        e1 = _call(p, "run.start", req_id=1)
+        assert e1["id"] == 1 and e1["error"]["code"] == -32004
+
+        # 录制前 toNode -> -32003
+        e2 = _call(p, "record.toNode", req_id=2)
+        assert e2["id"] == 2 and e2["error"]["code"] == -32003
+
+        # 未录制就 stop -> -32003
+        e3 = _call(p, "record.stop", req_id=3)
+        assert e3["id"] == 3 and e3["error"]["code"] == -32003
+
+        # 重复 record.start -> -32001（already_running）
+        _call(p, "record.start", req_id=4)
+        e4 = _call(p, "record.start", req_id=5)
+        assert e4["id"] == 5 and e4["error"]["code"] == -32001
+        # 录制中运行 -> -32002（busy_recording）
+        e5 = _call(p, "run.start", req_id=6)
+        assert e5["id"] == 6 and e5["error"]["code"] == -32002
+        _call(p, "record.stop", req_id=7)
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
+def test_record_to_node_roundtrip() -> None:
+    """真实起停 Recorder（需要辅助功能/输入监控授权），录一小段再写回节点。"""
+    p = _start()
+    try:
+        _call(p, "record.start", req_id=1)
+        time.sleep(0.3)  # 让监听线程抓到若干事件（无操作也会落移动/原点）
+        stopped = _call(p, "record.stop", req_id=2)
+        assert stopped["id"] == 2 and stopped["result"]["count"] >= 0
+        # 写回节点
+        to_node = _call(p, "record.toNode", req_id=3)
+        assert to_node["id"] == 3
+        node = to_node["result"]["node"]
+        assert node["type"] == "record_replay"
+        assert "events" in node["params"] and node["params"]["use_relative"] is True
+        # 节点已进工作流
+        cur = _call(p, "workflow.current", req_id=4)
+        assert len(cur["result"]["workflow"]["nodes"]) == 1
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)

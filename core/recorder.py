@@ -72,7 +72,7 @@ class Recorder:
         self._kb_listener = MacKeyboardListener(self._on_key_event)
         self._kb_listener.start()
 
-    def stop(self) -> None:
+    def stop(self) -> RecordResult:
         self._stopping = True
         for lis in (self._mouse_listener, self._kb_listener):
             if lis:
@@ -84,6 +84,7 @@ class Recorder:
             except queue.Empty:
                 break
             self._accept(ev)
+        return self.result()
 
     def poll(self) -> list[MacroEvent]:
         out = []
