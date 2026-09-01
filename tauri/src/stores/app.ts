@@ -228,10 +228,16 @@ export const useAppStore = defineStore("app", {
     async toggleRecord() {
       if (this.recording) {
         await rpc.request("record.stop");
+        await this.recordSubscribe(false);
       } else {
         this.recordBuffer = [];
         await rpc.request("record.start");
+        await this.recordSubscribe(true);
       }
+    },
+    async recordSubscribe(on: boolean) {
+      // §3.2：录制面板打开/录制开始时订阅事件流，关闭时退订，避免高频事件打爆管道。
+      await rpc.request("record.subscribe", { on });
     },
     async recordToNode() {
       await rpc.request("record.toNode");

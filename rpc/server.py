@@ -243,6 +243,7 @@ _HANDLERS = {
     "record.start": _ctl(lambda p: _CTRL.record_start()),
     "record.stop": _ctl(lambda p: _CTRL.record_stop()),
     "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
+    "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
     # --- 热键 / 键盘捕获 / 取点 / 定时（P1-3，§3.2/§9.2） ---
     "hotkey.set": _ctl(lambda p: _CTRL.hotkey_set(p.get("actions"))),
     "hotkey.clear": _ctl(lambda p: _CTRL.hotkey_clear()),

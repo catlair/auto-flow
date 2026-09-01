@@ -357,3 +357,60 @@ def test_schedule_fire_reloads_workflow(tmp_path) -> None:
     ctrl.shutdown()
     if os.path.exists(cfg_file):
         os.remove(cfg_file)
+
+
+def test_record_subscribe_gates_event_stream() -> None:
+    """§3.2：record.subscribe 切换订阅态；未订阅时 _record_poll 不推送 record.event。
+
+    直接驱动控制器（无真实 Recorder / 权限依赖），用替身 recorder 验证逻辑门控。
+    """
+    from rpc.controller import AppController
+    from core.events import MacroEvent
+
+    cfg_file = os.path.join(REPO, "config.json")
+    if os.path.exists(cfg_file):
+        os.remove(cfg_file)  # 避免启动装定残留定时配置
+
+    class _FakeRec:
+        def __init__(self, ctrl, events):
+            self._ctrl = ctrl
+            self._events = events
+            self.poll_calls = 0
+
+        def poll(self):
+            self.poll_calls += 1
+            if self.poll_calls == 1:
+                return self._events
+            # 第二轮让轮询循环退出（模拟 record_stop 置空 running 态）
+            self._ctrl.recording = False
+            return []
+
+    def _run_once(ctrl, events):
+        ctrl.recording = True
+        rec = _FakeRec(ctrl, events)
+        ctrl._rec_poller_rec = rec
+        ctrl._record_poll()
+        return rec
+
+    ctrl = AppController()
+    collected = []
+    ctrl.set_notifier(lambda m, p: collected.append((m, p)))
+
+    # 默认未订阅；开关返回正确
+    assert ctrl._record_subscribed is False
+    assert ctrl.record_subscribe(True) == {"subscribed": True}
+    assert ctrl._record_subscribed is True
+    assert ctrl.record_subscribe(False) == {"subscribed": False}
+    assert ctrl._record_subscribed is False
+
+    # 门控：未订阅时 _record_poll 不应推送 record.event
+    _run_once(ctrl, [MacroEvent(ts_ms=0, kind="move", x=1, y=2)])
+    assert all(m != "record.event" for m, _ in collected), "未订阅不应推送 record.event"
+
+    # 订阅后推送 record.event
+    ctrl.record_subscribe(True)
+    _run_once(ctrl, [MacroEvent(ts_ms=5, kind="move", x=3, y=4)])
+    assert any(m == "record.event" for m, _ in collected)
+    ctrl.shutdown()
+    if os.path.exists(cfg_file):
+        os.remove(cfg_file)

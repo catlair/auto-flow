@@ -63,6 +63,7 @@ class AppController:
         self._rec_poller_rec = None
         self.running = False
         self.recording = False
+        self._record_subscribed = False  # §3.2：仅订阅后推送 record.event
         self._lock = threading.RLock()
         self._notify: Callable[[str, Any], None] = lambda _m, _p: None
 
@@ -269,6 +270,12 @@ class AppController:
         self._rec_poller.start()
         return {"recording": True}
 
+    def record_subscribe(self, on: bool) -> dict:
+        """§3.2：仅当录制面板订阅时才向 stdout 推送 record.event，避免高频事件打爆管道。"""
+        with self._lock:
+            self._record_subscribed = bool(on)
+        return {"subscribed": self._record_subscribed}
+
     def _record_poll(self) -> None:
         # 仅用启动时刻捕获的 rec 引用；record_stop 会置空 self.recorder，这里绝不回读属性
         rec = self._rec_poller_rec
@@ -277,11 +284,11 @@ class AppController:
             if not self.recording:
                 break
             evs = rec.poll()
-            if evs:
+            if evs and self._record_subscribed:
                 self._notify("record.event", {"events": [asdict(e) for e in evs]})
-        # 退出前再 flush 一次残留
+        # 退出前再 flush 一次残留（仍受订阅门控）
         evs = rec.poll()
-        if evs:
+        if evs and self._record_subscribed:
             self._notify("record.event", {"events": [asdict(e) for e in evs]})
 
     def record_stop(self) -> dict:

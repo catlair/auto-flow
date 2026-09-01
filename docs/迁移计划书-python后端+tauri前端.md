@@ -554,7 +554,7 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 **后端 `rpc/controller.py` + `rpc/server.py` 已接齐 §9 全部方法**（前端尚未建，P2）：
 
 - **P1-1 工作流真源（§9/§10）**：`workflow.current/load/save/new/update`、`node.add/remove/move/toggle/params.set`、`nodes.definitions`（含 `common_params` + §9.4 顺序）。结构变更统一广播 `workflow.changed`。
-- **P1-2 运行/录制（§5/§9.5）**：`run.start/stop`（Executor 包装，错误码 -32001/-32002/-32004）、`record.start/stop/toNode`（Recorder 包装，100ms 批 `record.event`，错误码 -32003）；修 `Recorder.stop()` 漏 `return` 的潜藏 bug。
+- **P1-2 运行/录制（§5/§9.5）**：`run.start/stop`（Executor 包装，错误码 -32001/-32002/-32004）、`record.start/stop/toNode`（Recorder 包装，100ms 批 `record.event`，错误码 -32003）、`record.subscribe`（§3.2 订阅门控：仅录制面板订阅后才向 stdout 推送 `record.event`，避免高频事件打爆管道）；修 `Recorder.stop()` 漏 `return` 的潜藏 bug。
 - **P1-3 热键/捕获/取点/定时（§3.2 + §9.2）**：
   - `hotkey.set/clear`：单一 `MacKeyboardListener`，F9/F10/F11 → record/run/pick，捕获 `hotkey.triggered {action}`。
   - `key.capture` / `key.capture.stop`：复用同一 listener，捕获期间**暂挂热键分发**，捕获到键经 `key.captured {name}` 异步回填（新增 `key.capture.stop` 取消，原 §3.1 表仅列 `key.capture`）。
@@ -563,7 +563,7 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 
 **错误码表（§9.5）全部落地**：-32000 内部、-32601 未知方法、-32602 参数非法、-32700 解析、-32001 already_running、-32002 busy_recording、-32003 not_recording/no_record_result、-32004 workflow_empty。（`-32005 permission_missing` 已定义但当前未由任何 handler 主动发出。）
 
-**测试**：`tests/test_rpc.py` 由 3 例扩至 **11 例全过**（端到端拉起真实 sidecar，校验协议帧、stdio 洁净性、错误码、热键/捕获/取点/定时闭环与 schedule 触发重载）。
+**测试**：`tests/test_rpc.py` 由 3 例扩至 **12 例全过**（端到端拉起真实 sidecar，校验协议帧、stdio 洁净性、错误码、热键/捕获/取点/定时闭环、schedule 触发重载，以及 `record.subscribe` 订阅门控：`_record_poll` 未订阅时绝不推送 `record.event`，订阅后正常推送）。
 
 ## 15.4 Tauri 2 前端脚手架（P1-5，2026-09-01）
 
@@ -655,6 +655,6 @@ Rust 侧需先装 Rust 工具链（`rustup`）并放入 sidecar onedir + `tauri 
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
 
-**进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 11 例 pytest 通过（§15.3）；
+**进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
 P1-5 Tauri 2 脚手架已完成（`tauri/`，前端可 `vite build` 校验，Rust 侧待用户装 Rust 后 `tauri dev`）。
 P2（前端 7 组件）/ P3（打包签名）已随 P1-5 一并铺好骨架，剩余为真实打包签名联调与打磨（P4）。
