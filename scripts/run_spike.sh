@@ -6,7 +6,8 @@
 #   ./scripts/run_spike.sh app.requestPermissions
 #   ./scripts/run_spike.sh '{"jsonrpc":"2.0","id":1,"method":"app.shutdown"}'
 set -e
-SIDECAR="/Applications/Auto Flow RPC Spike.app/Contents/Resources/sidecar/autoflow-sidecar"
+# 运行的是 .app 的主可执行文件（Contents/MacOS），它正是被 TCC 授权（屏幕录制等）的二进制。
+SIDECAR="/Applications/Auto Flow RPC Spike.app/Contents/MacOS/autoflow-sidecar"
 if [ ! -x "$SIDECAR" ]; then
   echo "未找到 spike，请先运行 scripts/build_spike_app.sh 并安装到 /Applications" >&2
   exit 1

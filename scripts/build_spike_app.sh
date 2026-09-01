@@ -1,16 +1,18 @@
 #!/bin/zsh
 # 组装 Auto Flow RPC Spike.app —— P0-S 授权持久性验证用的独立 .app 包。
 #
-# 设计（对照 docs/迁移计划书 §12 的「Tauri 把 onedir sidecar 放进
-# .app/Contents/Resources/ 固定路径 spawn」生产形态）：
-# - 把 PyInstaller onedir 产物整体拷进 .app/Contents/Resources/sidecar/，
-#   sidecar 可执行文件与它的 _internal 保持同级（onedir 原生布局）。
-# - CFBundleExecutable 软链到该 onedir 可执行文件。由于可执行文件位于
-#   Contents/MacOS 之外，PyInstaller bootloader 走「onedir 模式」，直接找
-#   同级的 _internal，无需把 libpython / base_library.zip / PyObjC 绑定
-#   塞进 Contents/Frameworks（那套是「sidecar 当 CFBundleExecutable 放在
-#   MacOS 里」时才会触发的 .app 模式，更脆弱）。
-# - 固定路径 + MacDev 自签 → 三项 TCC 授权跨重新构建保持稳定。
+# 为什么用「Frameworks 模式」而不是把 onedir 塞进 Contents/Resources：
+# 系统设置里手动给「屏幕录制 / 辅助功能 / 输入监控」授权时，`+` 只能选 .app 包本身，
+# TCC 授权的是 .app 的主可执行文件（Contents/MacOS/CFBundleExecutable）。为了让「被授权的
+# 二进制」与「实际运行的二进制」完全一致，这里让 Contents/MacOS/autoflow-sidecar 就是
+# 真正运行的 sidecar，并补齐 PyInstaller .app 模式所需的 Frameworks 布局：
+#   - Contents/Frameworks/libpython3.12.dylib
+#   - Contents/Frameworks/base_library.zip -> ../Resources/base_library.zip（软链）
+#   - Contents/Frameworks/{AppKit,CoreFoundation,CoreText,Foundation,HIServices,objc,Quartz,ApplicationServices}
+#   - Contents/Resources/base_library.zip（真实 stdlib）
+# 这与正式 Auto Flow.app（scripts/build_app.sh 产物）的布局一致。
+#
+# 固定路径 + MacDev 自签 → 三项 TCC 授权跨重新构建保持稳定（§12.1 待验证）。
 #
 # 用法：先 ./scripts/build_sidecar.sh，再 ./scripts/build_spike_app.sh
 # 产物：dist/Auto Flow RPC Spike.app
@@ -25,9 +27,9 @@ fi
 
 APP="dist/Auto Flow RPC Spike.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/sidecar"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 
-# Info.plist
+# Info.plist（CFBundleExecutable = autoflow-sidecar，位于 Contents/MacOS）
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -44,12 +46,20 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# onedir 整体拷进 Resources/sidecar（可执行 + _internal 同级）
-cp -R dist/autoflow-sidecar/. "$APP/Contents/Resources/sidecar/"
+# 主可执行文件（即 CFBundleExecutable，也是被 TCC 授权的二进制）
+cp dist/autoflow-sidecar/autoflow-sidecar "$APP/Contents/MacOS/"
 
-# CFBundleExecutable 必须是常规文件（codesign --deep 拒绝 symlink）。
-# 复制一份可执行到 MacOS/，与 Resources/sidecar 内容一致 → 同一 TCC 签名身份。
-cp dist/autoflow-sidecar/autoflow-sidecar "$APP/Contents/MacOS/autoflow-sidecar"
+# .app 模式所需：libpython + PyObjC 绑定进 Frameworks
+cp dist/autoflow-sidecar/_internal/libpython3.12.dylib "$APP/Contents/Frameworks/"
+for f in AppKit CoreFoundation CoreText Foundation HIServices objc Quartz ApplicationServices; do
+  if [ -e "dist/autoflow-sidecar/_internal/$f" ]; then
+    cp -R "dist/autoflow-sidecar/_internal/$f" "$APP/Contents/Frameworks/"
+  fi
+done
+
+# stdlib：真实文件在 Resources，Frameworks 用软链指向它（与正式 .app 一致）
+cp dist/autoflow-sidecar/_internal/base_library.zip "$APP/Contents/Resources/"
+ln -sf ../Resources/base_library.zip "$APP/Contents/Frameworks/base_library.zip"
 
 # 签名（MacDev，保持 TCC 授权跨构建稳定）
 if security find-identity -v -p codesigning | grep -q "MacDev"; then
@@ -60,8 +70,8 @@ else
   echo "警告：未找到 MacDev 证书，使用 ad-hoc 签名（重新构建后需重新授权）"
 fi
 
-# 清 quarantine（本地构建无下载来源，但仍清一遍以防万一）
+# 清 quarantine
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
 echo "完成: $APP"
-echo "运行: $APP/Contents/Resources/sidecar/autoflow-sidecar"
+echo "运行: $APP/Contents/MacOS/autoflow-sidecar"

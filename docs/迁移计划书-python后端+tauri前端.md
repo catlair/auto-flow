@@ -463,22 +463,34 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 - `scripts/build_sidecar.sh`：PyInstaller `--onedir` 打包 `rpc/server.py` →
   `dist/autoflow-sidecar/`（体积基线 23 MB），MacDev 自签。`--hidden-import` 仅含
   ApplicationServices/AppKit/Foundation/CoreFoundation/Quartz（P1 接视觉节点后体积重测）。
-- `scripts/build_spike_app.sh`：把 onedir 整体拷进
-  `.app/Contents/Resources/sidecar/`（可执行 + `_internal` 同级），`Contents/MacOS/autoflow-sidecar`
-  为**常规文件副本**（codesign `--deep` 拒绝 symlink 作 CFBundleExecutable），MacDev 自签。
-  产物 `dist/Auto Flow RPC Spike.app`，bundle id `com.example.autoflow.rpc-spike`。
+- `scripts/build_spike_app.sh`：按 PyInstaller 真实 `.app` 模式打包——`Contents/MacOS/autoflow-sidecar`
+  即**实际运行的 sidecar（也是 CFBundleExecutable、被 TCC 授权的二进制）**，`Contents/Frameworks/`
+  放 libpython + PyObjC 绑定 + `base_library.zip` 软链（`→ ../Resources/base_library.zip`），
+  `Contents/Resources/base_library.zip` 为真实 stdlib。MacDev 自签。产物
+  `dist/Auto Flow RPC Spike.app`，bundle id `com.example.autoflow.rpc-spike`。
 
-**踩坑（当时 spike 经 `/Applications` pipe 运行无 stdout 的根因）**
+**踩坑（spike 经 `/Applications` pipe 运行无 stdout 的根因 + TCC 授权口径）**
 
-手动把 onedir 包成 `.app` 时，若把 sidecar 当 `CFBundleExecutable` 放在
-`Contents/MacOS/`，PyInstaller bootloader 进入「.app 模式」并把 `PYTHONHOME` 指向
-`Contents/Frameworks`，需要：libpython 在 `Frameworks`、`base_library.zip` 软链
-`Frameworks/base_library.zip → ../Resources/base_library.zip`、PyObjC 绑定
-（objc/AppKit/CoreFoundation/…）也得在 `Frameworks`。漏掉任一都会「启动即退出且无输出」
-（stdout 被重定向、stderr 又常被吞，极难定位）。**正确且更稳的做法是让 sidecar 位于
-`Contents/MacOS` 之外（本 spike 用 `Contents/Resources/sidecar/`）**，bootloader 走
-onedir 模式直接找同级 `_internal`，无需任何 Frameworks 处理——这也与 §12 的
-「Tauri 把 onedir sidecar 放进 Resources 固定路径 spawn」一致。
+1. 手动把 onedir 包成 `.app` 时，若把 sidecar 当 `CFBundleExecutable` 放在
+   `Contents/MacOS/`，PyInstaller bootloader 进入「.app 模式」并把 `PYTHONHOME` 指向
+   `Contents/Frameworks`，需要：libpython 在 `Frameworks`、`base_library.zip` 软链
+   `Frameworks/base_library.zip → ../Resources/base_library.zip`、PyObjC 绑定
+   （objc/AppKit/CoreFoundation/…）也得在 `Frameworks`。漏掉任一都会「启动即退出且无输出」
+   （stdout 被重定向、stderr 又常被吞，极难定位）。`scripts/build_spike_app.sh` 已按此
+   正确布局打包，且让 `Contents/MacOS/autoflow-sidecar` 就是**实际运行的 sidecar**。
+
+2. **TCC 授权口径（关键）**：系统设置里手动给「屏幕录制 / 辅助功能 / 输入监控」授权时，
+   `+` 只能选 **`.app` 包本身**，TCC 授权的是 `.app` 的主可执行文件
+   （`Contents/MacOS/CFBundleExecutable`）。因此 spike 必须让「被授权的二进制」=
+   「实际运行的二进制」= `Contents/MacOS/autoflow-sidecar`，否则会出现「钻进包里选嵌套
+   二进制被拒 / 加整个 .app 却授权到另一份副本」的尴尬。早期把 sidecar 放到
+   `Contents/Resources/sidecar` 的版本虽能跑，但 TCC 授权对不上，已弃用。
+
+3. **生产侧提醒（§12 设计要修正）**：Tauri `.app` 里把 sidecar 放 `Contents/Resources/`
+   时，**同样无法用系统设置手动 `+` 选中那个嵌套二进制**。正确做法是由 sidecar 自身在
+   启动时调用请求 API 弹系统提示让用户点允许（辅助功能 `AXIsProcessTrustedWithOptions`、
+   屏幕录制 `CGRequestScreenCaptureAccess`），TCC 按调用进程的签名记录授权。本 spike 的
+   `app.requestPermissions` 已演示该模式，P1 接真实视觉节点时应照搬。
 
 **已验证的 RPC 面**
 
@@ -486,14 +498,16 @@ onedir 模式直接找同级 `_internal`，无需任何 Frameworks 处理——�
 `app.openPermissionSettings` 均可用；未知方法 → `-32601`，非法 JSON → `-32700`，
 stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 例全过。
 
-**T5 验证步骤（待用户手动授权）**
+**T5 验证步骤（待用户授权）**
 
-1. 打开「系统设置 → 隐私与安全性」，把 `/Applications/Auto Flow RPC Spike.app`
-   加入**辅助功能 / 输入监控 / 屏幕录制**三项（输入监控无 prompt API，必须手动加）。
-   或运行 `app.requestPermissions` 弹辅助功能 + 屏幕录制提示。
-2. 验证已授权：`printf '{"jsonrpc":"2.0","id":1,"method":"app.info"}' | \
-   "/Applications/Auto Flow RPC Spike.app/Contents/Resources/sidecar/autoflow-sidecar"`
-   → 三项权限应为 `true`。
+1. 授权三项（二选一，推荐写法 B）：
+   - **A. 手动加**：系统设置 → 隐私与安全性 → 辅助功能 / 输入监控 / 屏幕录制，分别点 `+`，
+     **选中 `.app` 包本身**（`/Applications/Auto Flow RPC Spike.app`），**不要钻进 Contents 选嵌套文件**。
+     输入监控无 prompt API，只能走这条。
+   - **B. 运行提示（最稳，尤其屏幕录制）**：`./scripts/run_spike.sh app.requestPermissions`
+     会弹「辅助功能」「屏幕录制」系统提示，点「允许 / 打开系统设置」即可；输入监控仍需走 A。
+2. 验证已授权：`./scripts/run_spike.sh app.info` → 三项权限应为 `true`
+   （注意 `inputMonitoring` 的 `true` 在未建 tap 时是「无限制」假阳性，见 §11/§15 说明）。
 3. 重建并覆盖安装（同内容 + 同 MacDev 签名，cdhash 不变）：
    `./scripts/build_sidecar.sh && ./scripts/build_spike_app.sh`，
    再 `rm -rf "/Applications/Auto Flow RPC Spike.app" && cp -R "dist/Auto Flow RPC Spike.app" /Applications/.`
