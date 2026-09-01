@@ -28,6 +28,7 @@ import threading
 from typing import Any, Optional
 
 from rpc import PROTOCOL_VERSION, __version__ as APP_VERSION
+from rpc.controller import AppController, ControllerError, _err
 
 from core import permissions
 from core.paths import app_dir
@@ -41,6 +42,9 @@ _shutdown = threading.Event()
 
 # 权限状态缓存，用于检测变化后推送
 _last_perm: Optional[dict] = None
+
+# 后端应用控制器：持有 current_workflow 唯一真源（§10）
+_CTRL = AppController()
 
 
 # --------------------------------------------------------------------------- #
@@ -139,6 +143,20 @@ def _perm_loop() -> None:
 # --------------------------------------------------------------------------- #
 # 方法实现
 # --------------------------------------------------------------------------- #
+def _ctl(method):
+    """把 controller 方法包成 JSON-RPC handler：成功 (True, result)；
+    ControllerError → 对应业务错误码；其余异常 → -32000。"""
+    def handler(params: dict) -> tuple:
+        try:
+            return (True, method(params or {}))
+        except ControllerError as e:
+            return _err(e.code, e.message, e.data)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("controller error: %s", method)
+            return _err(-32000, "Internal error", {"detail": str(e)})
+    return handler
+
+
 def _app_info() -> dict:
     return {
         "appVersion": APP_VERSION,
@@ -202,10 +220,23 @@ def _request_permissions() -> dict:
 
 
 _HANDLERS = {
+    # --- 应用/权限（P0-S） ---
     "app.info": lambda _p: (True, _app_info()),
     "app.diagnose": lambda _p: (True, _diagnose()),
     "app.openPermissionSettings": lambda p: (True, _open_settings((p or {}).get("panel"))),
     "app.requestPermissions": lambda _p: (True, _request_permissions()),
+    # --- 工作流真源（§9/§10，P1-1） ---
+    "workflow.current": _ctl(lambda p: _CTRL.workflow_current()),
+    "workflow.load": _ctl(lambda p: _CTRL.workflow_load(p.get("path", ""))),
+    "workflow.save": _ctl(lambda p: _CTRL.workflow_save(p.get("path"))),
+    "workflow.new": _ctl(lambda p: _CTRL.workflow_new()),
+    "workflow.update": _ctl(lambda p: _CTRL.workflow_update(p.get("patch", {}))),
+    "node.add": _ctl(lambda p: _CTRL.node_add(p.get("type", ""), p.get("index"))),
+    "node.remove": _ctl(lambda p: _CTRL.node_remove(p.get("index", -1))),
+    "node.move": _ctl(lambda p: _CTRL.node_move(p.get("index", -1), p.get("to", -1))),
+    "node.toggle": _ctl(lambda p: _CTRL.node_toggle(p.get("index", -1), p.get("enabled", True))),
+    "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"), p.get("value"))),
+    "nodes.definitions": _ctl(lambda p: _CTRL.nodes_definitions()),
 }
 
 
@@ -225,7 +256,11 @@ def _handle(msg: dict) -> None:
             _send_error(req_id, -32000, "Internal error", {"detail": str(e)})
         return
     if req_id is not None:
-        _send_response(req_id, result if ok else {})
+        if ok:
+            _send_response(req_id, result)
+        else:
+            # 业务错误：result = {code, message, data}
+            _send_error(req_id, result["code"], result["message"], result.get("data"))
 
 
 def _request_shutdown() -> None:
@@ -249,6 +284,8 @@ def main() -> int:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
     logger.info("Auto Flow sidecar v%s protocol v%d 启动", APP_VERSION, PROTOCOL_VERSION)
+
+    _CTRL.set_notifier(_send_notification)
 
     threading.Thread(target=_writer_loop, name="rpc-writer", daemon=True).start()
     threading.Thread(target=_perm_loop, name="perm-poll", daemon=True).start()
