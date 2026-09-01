@@ -665,11 +665,11 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 | ~~P0.5~~ | ~~修 §15 两个功能故障（截取模板、定时运行）+ 死代码清理 + 节点顺序~~ | ✅ 已完成（§15.1）；剩余「节点顺序 + 死代码清理」并入 P4 |
 | P1 | 后端服务化：§9 全部方法 + 工作流真源迁后端（§10）+ 三项权限（§11）+ 调度器 + 按键/模板捕获 | 1.5 天 |
 | P2 | 前端 7 组件 + RPC client + Pinia + 动态表单（含 `common_params`） | 1 天 |
-| P3 | 打包：resources 方案 + deep 签名 + notary 流程 + sync_app.sh 更新 + 权限引导页 | 1 天 |
+| ~~P3~~ | ~~打包：resources 方案 + deep 签名 + notary 流程 + sync_app.sh 更新 + 权限引导页~~ | ✅ 已完成（resources 方案 P1-5 已落地；MacDev 双签 + 强化运行时 + `sync_app.sh` + `docs/权限引导.md` 已提交 `8caf38b`）；notary 需用户提供 Apple 凭证后实跑 |
 | P4 | 打磨：拖拽排序、事件流虚拟滚动、中文输入改进、诊断面板、崩溃重连提示；节点顺序修正（§9.4）+ 死代码清理 | 0.5~1 天（可裁剪） |
 
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
 
 **进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
-P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview）；② P3 真实打包签名（MacDev 双签 + notary 流程 + `sync_app.sh` + 权限引导页，产出可分发 `.app`/`.dmg`）。
+P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。P3 签名基础设施已落地并提交 `8caf38b`：`scripts/sign_tauri_app.sh` 对 `.app` 做 MacDev 双签 + 强化运行时（`--options runtime`）+ 安全时间戳，自底向上先签 sidecar 再签 `.app` 外壳（已实跑验证主二进制与 sidecar 均 `flags=0x10000(runtime)`、`Authority=MacDev`、整体 `valid on disk`）；`scripts/sync_app.sh` 改指 Tauri 产物、签名自检后 `cp -R` 到 `/Applications` 并去 quarantine、`open`；`docs/权限引导.md` 写就三项隐私权限作用与授予方式。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview，前端↔Rust↔sidecar 三方需双击 `.app` 或 `npm run tauri dev` 验证）；② 可选 notarization——提供 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` 后 `bash scripts/sign_tauri_app.sh` 实跑 `notarytool submit --wait` + `stapler staple`，即可免手动授权弹窗直接分发。
