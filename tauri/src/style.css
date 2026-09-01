@@ -1,0 +1,54 @@
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+.af-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 300px 1fr 320px;
+  min-height: 0;
+}
+
+.af-col {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  border-right: 1px solid #e7e7e7;
+}
+
+.af-col:last-child {
+  border-right: none;
+  border-left: 1px solid #e7e7e7;
+}
+
+.af-banner {
+  padding: 8px 12px;
+  color: #fff;
+  background: #e34d59;
+  font-size: 13px;
+}
+
+.af-banner.ok {
+  background: #059669;
+}
+
+.af-banner.warn {
+  background: #ed7b2f;
+}
+
+.af-panel-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #1f2329;
+}

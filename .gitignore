@@ -3,6 +3,12 @@ __pycache__/
 *.pyc
 config.json
 workflows/*.json
+# Tauri 前端（tauri/）
+tauri/node_modules/
+tauri/dist/
+tauri/src-tauri/target/
+tauri/src-tauri/gen/
+tauri/src-tauri/resources/
 workflows/templates/*.png
 .DS_Store
 build/

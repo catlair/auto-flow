@@ -565,6 +565,32 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 
 **测试**：`tests/test_rpc.py` 由 3 例扩至 **11 例全过**（端到端拉起真实 sidecar，校验协议帧、stdio 洁净性、错误码、热键/捕获/取点/定时闭环与 schedule 触发重载）。
 
+## 15.4 Tauri 2 前端脚手架（P1-5，2026-09-01）
+
+按 §3.2/§4/§12/§13 落地 `tauri/` 子项目（Vue 3 + Vite + TDesign + Pinia + Rust 外壳）：
+
+- **工程**：`tauri/package.json`（Tauri 2 + Vue3 + TDesign + Pinia + vuedraggable + plugin-dialog）、
+  `vite.config.ts`（dev 1420）、`tsconfig*.json`、`index.html`、`tauri.conf.json`
+  （`bundle.resources = ["resources/autoflow-sidecar/**"]`，Rust 侧用 `resource_dir()` 拼固定路径 spawn，
+  **非 externalBin**，见 §12）、`capabilities/default.json`（event + dialog）。
+- **通信（§13）**：`src/rpc/client.ts` 订阅 Rust `rpc_event` 事件，按 `\n` 累积缓冲切分（半包/粘包兜底），
+  `request()` 返回 Promise 按自增 id 匹配；`send_rpc` invoke 写 sidecar stdin。
+- **状态（§10）**：`src/stores/app.ts` 一个 Pinia store，后端为唯一真源；握手 `app.info` 校验
+  `protocolVersion===1`；订阅全部通知（workflow.changed / permission.changed / hotkey.triggered /
+  key.captured / record.* / run.* / schedule.fired / rpc_up / rpc_down）；输入框聚焦时屏蔽热键（§14）。
+- **7 组件**：`RunPanel` / `NodeList`（vuedraggable 拖拽→`node.move`）/ `ParamsPanel`（按
+  `nodes.definitions` 的 schema 动态渲染 int/float/bool/select/text/file/keys，keys 走 `key.capture` 回填）/
+  `RecordPanel`（事件流）/ `PermissionBanner`（订阅 permission.changed）/ `ScheduleDialog`（配置存后端）/
+  `WorkflowMenu`（打开/保存走 Tauri 对话框）；`App.vue` 三栏布局。
+- **Rust 外壳**：`src-tauri/src/lib.rs` 用 `resource_dir()` 拼 `Resources/autoflow-sidecar/autoflow-sidecar`
+  绝对路径 `Command::spawn`，stdout 逐行 `emit("rpc_event")`，`send_rpc` 命令写 stdin，stdout EOF 后
+  守护重启（§5 崩溃恢复）；`Cargo.toml` / `build.rs` / `main.rs` / `capabilities`。
+
+**本机验证状态**：前端 `npm install` + `vue-tsc --noEmit` + `vite build` 可独立校验（不依赖 Rust）；
+Rust 侧需先装 Rust 工具链（`rustup`）并放入 sidecar onedir + `tauri icon` 生成图标后才能
+`npm run tauri dev/build`（本机当时未装 cargo，Rust 侧仅源码交付，待用户装好 Rust 后一键构建）。
+`tauri/README.md` 写明三步前置与运行命令。
+
 ---
 
 ## 16. 持久化与配置分工
@@ -628,3 +654,7 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
+
+**进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 11 例 pytest 通过（§15.3）；
+P1-5 Tauri 2 脚手架已完成（`tauri/`，前端可 `vite build` 校验，Rust 侧待用户装 Rust 后 `tauri dev`）。
+P2（前端 7 组件）/ P3（打包签名）已随 P1-5 一并铺好骨架，剩余为真实打包签名联调与打磨（P4）。
