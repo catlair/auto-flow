@@ -7,10 +7,12 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 from core.events import Node, Workflow
@@ -28,6 +30,11 @@ COMMON_PARAMS = [
     {"key": "run_when", "label": "执行条件", "ptype": "select",
      "default": "总是", "options": ["总是", "条件成立", "条件不成立"]},
 ]
+
+# 热键物理键顺序：F9/F10/F11 依次对应 record/run/pick（与现状 ui/main_window 一致）。
+_HOTKEY_KEYS = ["F9", "F10", "F11"]
+_HOTKEY_ACTIONS = {"record", "run", "pick"}
+_VALID_SCHEDULE_MODES = {"每天时刻", "固定间隔"}
 
 
 class ControllerError(Exception):
@@ -58,6 +65,23 @@ class AppController:
         self.recording = False
         self._lock = threading.RLock()
         self._notify: Callable[[str, Any], None] = lambda _m, _p: None
+
+        # ---- 热键 / 键盘捕获（P1-3，§3.2）----
+        # 单一 MacKeyboardListener，按 _key_mode 在「热键分发」与「按键捕获」间切换，
+        # 捕获期间暂挂热键分发（复用同一 listener，避免捕获键被当热键触发）。
+        self._key_listener = None
+        self._key_mode = "idle"        # idle | hotkey | capture
+        self._hotkey_map: dict = {}    # 物理键名 -> 动作（record/run/pick）
+        self._capturing = False
+
+        # ---- 取点（F11，base.pick）由 pynput 直接读全局光标位置 ----
+
+        # ---- 定时（P1-3，§9.2）：配置持久化到 config.json，后端 threading.Timer 触发 ----
+        self._schedule: dict = self._schedule_load()
+        self._schedule_timer = None
+        if self._schedule:
+            # 启动时若已有持久化配置则恢复装定（仅 enabled 且路径有效才真正起计时器）
+            self._schedule_arm(self._schedule)
 
     # ---- 通知 ----
     def set_notifier(self, fn: Callable[[str, Any], None]) -> None:
@@ -292,3 +316,208 @@ class AppController:
             inserted = len(self.workflow.nodes) - 1
         self._broadcast_workflow()
         return {"index": inserted, "node": node.to_dict()}
+
+    # ---- 热键 / 键盘捕获（P1-3，§3.2 + §9 说明） ----
+    def _ensure_key_listener(self) -> None:
+        """确保全局键盘监听线程存活（CGEventTap 失败则返回，线程随即结束）。"""
+        if self._key_listener is None or not self._key_listener.is_alive():
+            from core.maclistener import MacKeyboardListener
+            self._key_listener = MacKeyboardListener(self._on_key)
+            self._key_listener.start()
+
+    def _stop_key_listener(self) -> None:
+        lis = self._key_listener
+        self._key_listener = None
+        if lis is not None:
+            try:
+                lis.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_key(self, name: str, pressed: bool) -> None:
+        """单一 listener 回调：按 _key_mode 在捕获 / 热键间分发。"""
+        if not name:
+            return
+        with self._lock:
+            mode = self._key_mode
+        if mode == "capture":
+            if pressed:
+                with self._lock:
+                    self._capturing = False
+                    self._key_mode = "hotkey" if self._hotkey_map else "idle"
+                self._notify("key.captured", {"name": name})
+            return
+        if mode == "hotkey" and pressed:
+            with self._lock:
+                action = self._hotkey_map.get(name)
+            if action:
+                self._notify("hotkey.triggered", {"action": action})
+
+    def hotkey_set(self, actions: Any) -> dict:
+        """绑定 F9/F10/F11 → record/run/pick。
+
+        actions 可以是数组（按 F9/F10/F11 顺序，元素为动作名或 None 解除绑定），
+        也可以是对象 {record, run, pick}。返回当前三键绑定快照。
+        """
+        if isinstance(actions, dict):
+            actions = [actions.get("record"), actions.get("run"), actions.get("pick")]
+        if not isinstance(actions, (list, tuple)):
+            raise ControllerError(-32602, "参数无效：actions 须为数组或对象")
+        mapping: dict = {}
+        for i, act in enumerate(actions[:3]):
+            if act and str(act) in _HOTKEY_ACTIONS:
+                mapping[_HOTKEY_KEYS[i]] = str(act)
+        with self._lock:
+            self._hotkey_map = mapping
+            if not self._capturing:
+                self._key_mode = "hotkey" if mapping else "idle"
+        if mapping or self._capturing:
+            self._ensure_key_listener()
+        else:
+            self._stop_key_listener()
+        return {"hotkeys": [mapping.get(k) for k in _HOTKEY_KEYS]}
+
+    def hotkey_clear(self) -> dict:
+        with self._lock:
+            self._hotkey_map = {}
+            if not self._capturing:
+                self._key_mode = "idle"
+        if not self._capturing:
+            self._stop_key_listener()
+        return {"hotkeys": [None, None, None]}
+
+    def key_capture_start(self) -> dict:
+        """进入按键捕获模式（暂挂热键分发），捕获到的键经 `key.captured` 异步回填。"""
+        with self._lock:
+            self._capturing = True
+            self._key_mode = "capture"
+        self._ensure_key_listener()
+        return {"capturing": True}
+
+    def key_capture_stop(self) -> dict:
+        with self._lock:
+            self._capturing = False
+            self._key_mode = "hotkey" if self._hotkey_map else "idle"
+        return {"capturing": False}
+
+    def base_pick(self) -> dict:
+        """F11 取点：读全局光标位置（与现状 pynput 坐标空间一致，供相对回放对齐）。"""
+        from pynput.mouse import Controller as MouseController
+        pos = MouseController().position
+        return {"x": int(round(pos[0])), "y": int(round(pos[1]))}
+
+    # ---- 定时运行（P1-3，§9.2） ----
+    def _schedule_path(self) -> str:
+        from core.paths import app_dir
+        return os.path.join(app_dir(), "config.json")
+
+    def _schedule_load(self) -> dict:
+        try:
+            with open(self._schedule_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return data.get("schedule", {}) or {}
+
+    def _schedule_save(self, cfg: dict) -> None:
+        from core.paths import app_dir
+        os.makedirs(app_dir(), exist_ok=True)
+        try:
+            with open(self._schedule_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        data["schedule"] = cfg
+        try:
+            with open(self._schedule_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def _schedule_next_fire(self, cfg: dict) -> Optional[datetime]:
+        if not cfg:
+            return None
+        now = datetime.now()
+        if cfg.get("mode") == "固定间隔":
+            iv = max(int(cfg.get("intervalMin", 1)), 1)
+            return now + timedelta(minutes=iv)
+        at = str(cfg.get("atTime", "09:00"))
+        try:
+            hh, mm = map(int, at.split(":"))
+        except ValueError:
+            hh, mm = 9, 0
+        nxt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += timedelta(days=1)
+        return nxt
+
+    def _schedule_cancel_timer(self) -> None:
+        t = self._schedule_timer
+        self._schedule_timer = None
+        if t is not None:
+            t.cancel()
+
+    def _schedule_arm(self, cfg: dict) -> None:
+        self._schedule_cancel_timer()
+        if not (cfg.get("enabled") and cfg.get("workflowPath")):
+            return
+        nxt = self._schedule_next_fire(cfg)
+        if nxt is None:
+            return
+        delay = max((nxt - datetime.now()).total_seconds(), 0.1)
+        self._schedule_timer = threading.Timer(delay, self._schedule_fire)
+        self._schedule_timer.daemon = True
+        self._schedule_timer.start()
+
+    def schedule_configure(self, cfg: Any) -> dict:
+        if not isinstance(cfg, dict):
+            raise ControllerError(-32602, "参数无效：cfg 须为对象")
+        mode = cfg.get("mode", "每天时刻")
+        if mode not in _VALID_SCHEDULE_MODES:
+            raise ControllerError(-32602, "mode 须为 每天时刻 或 固定间隔", {"mode": mode})
+        at_time = str(cfg.get("atTime", "09:00"))
+        try:
+            interval = int(cfg.get("intervalMin", 30))
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "intervalMin 须为整数")
+        path = cfg.get("workflowPath", "") or ""
+        enabled = bool(cfg.get("enabled", False)) and bool(path)
+        clean = {
+            "mode": mode, "atTime": at_time, "intervalMin": interval,
+            "workflowPath": path, "enabled": enabled,
+        }
+        with self._lock:
+            self._schedule = clean
+        self._schedule_save(clean)
+        self._schedule_arm(clean)
+        nxt = self._schedule_next_fire(clean)
+        return {"schedule": clean, "nextFire": nxt.strftime("%Y-%m-%d %H:%M") if nxt else ""}
+
+    def schedule_get(self) -> dict:
+        with self._lock:
+            cfg = dict(self._schedule)
+        nxt = self._schedule_next_fire(cfg) if cfg else None
+        return {"schedule": cfg, "nextFire": nxt.strftime("%Y-%m-%d %H:%M") if nxt else ""}
+
+    def _schedule_fire(self) -> None:
+        """定时触发：从磁盘重载工作流并广播 workflow.changed + schedule.fired，再装定下一次。"""
+        with self._lock:
+            cfg = dict(self._schedule)
+        path = cfg.get("workflowPath")
+        if path and os.path.exists(path):
+            try:
+                wf = Workflow.load(path)
+            except Exception:  # noqa: BLE001
+                wf = None
+            if wf is not None:
+                with self._lock:
+                    self.workflow = wf
+                    self.path = path
+                self._broadcast_workflow()
+        self._notify("schedule.fired", {"path": path})
+        self._schedule_arm(cfg)
+
+    # ---- 停机清理（app.shutdown 时调用） ----
+    def shutdown(self) -> None:
+        self._schedule_cancel_timer()
+        self._stop_key_listener()

@@ -262,3 +262,98 @@ def test_record_to_node_roundtrip() -> None:
     finally:
         _rpc(p, "app.shutdown")
         p.wait(timeout=5)
+
+
+# --------------------------------------------------------------------------- #
+# P1-3：热键 / 键盘捕获 / 取点 / 定时（§3.2 + §9.2）
+# --------------------------------------------------------------------------- #
+def test_hotkey_set_clear_and_key_capture() -> None:
+    p = _start()
+    try:
+        # F9/F10/F11 -> record/run/pick
+        s = _call(p, "hotkey.set", {"actions": ["record", "run", "pick"]}, req_id=1)
+        assert s["id"] == 1
+        assert s["result"]["hotkeys"] == ["record", "run", "pick"]
+
+        # 解除绑定
+        c = _call(p, "hotkey.clear", req_id=2)
+        assert c["id"] == 2
+        assert c["result"]["hotkeys"] == [None, None, None]
+
+        # 键盘捕获起停
+        cap = _call(p, "key.capture", req_id=3)
+        assert cap["id"] == 3 and cap["result"]["capturing"] is True
+        stop = _call(p, "key.capture.stop", req_id=4)
+        assert stop["id"] == 4 and stop["result"]["capturing"] is False
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
+def test_base_pick_returns_coords() -> None:
+    p = _start()
+    try:
+        bp = _call(p, "base.pick", req_id=1)
+        assert bp["id"] == 1
+        r = bp["result"]
+        assert isinstance(r["x"], int) and isinstance(r["y"], int)
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
+def test_schedule_configure_and_get() -> None:
+    """schedule.configure/get 闭环 + 持久化到 config.json（§9.2）。"""
+    cfg_file = os.path.join(REPO, "config.json")
+    if os.path.exists(cfg_file):
+        os.remove(cfg_file)
+    p = _start()
+    try:
+        cfg = {"mode": "每天时刻", "atTime": "09:00", "intervalMin": 30,
+               "workflowPath": "", "enabled": False}
+        r = _call(p, "schedule.configure", cfg, req_id=1)
+        assert r["id"] == 1
+        assert "result" in r and "error" not in r
+        got = _call(p, "schedule.get", req_id=2)
+        assert got["id"] == 2
+        assert got["result"]["schedule"]["mode"] == "每天时刻"
+        assert got["result"]["schedule"]["enabled"] is False
+        assert isinstance(got["result"]["nextFire"], str)
+        # 退出后配置应落盘
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+        assert os.path.exists(cfg_file)
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert data.get("schedule", {}).get("mode") == "每天时刻"
+    finally:
+        if os.path.exists(cfg_file):
+            os.remove(cfg_file)
+
+
+def test_schedule_fire_reloads_workflow(tmp_path) -> None:
+    """直接驱动控制器：定时触发从磁盘重载工作流并广播 changed/fired（无真实计时等待）。"""
+    from rpc.controller import AppController
+    cfg_file = os.path.join(REPO, "config.json")
+    if os.path.exists(cfg_file):
+        os.remove(cfg_file)  # 避免启动时装定残留配置
+    ctrl = AppController()
+    collected = []
+    ctrl.set_notifier(lambda m, p: collected.append((m, p)))
+    wf_path = tmp_path / "wf.json"
+    wf_path.write_text(json.dumps({
+        "name": "sched", "speed": 1.0, "repeat": 1,
+        "nodes": [{"type": "mouse", "params": {}, "enabled": True}],
+    }))
+    ctrl.schedule_configure({"mode": "固定间隔", "intervalMin": 1,
+                             "workflowPath": str(wf_path), "enabled": True})
+    ctrl._schedule_cancel_timer()  # 取下真实计时器，避免测试后残留线程
+    ctrl._schedule_fire()          # 直接模拟触发
+    assert ctrl.path == str(wf_path)
+    assert ctrl.workflow.name == "sched"
+    methods = [m for m, _ in collected]
+    assert "workflow.changed" in methods
+    assert "schedule.fired" in methods
+    ctrl.shutdown()
+    if os.path.exists(cfg_file):
+        os.remove(cfg_file)

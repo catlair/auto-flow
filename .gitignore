@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+config.json
 workflows/*.json
 workflows/templates/*.png
 .DS_Store

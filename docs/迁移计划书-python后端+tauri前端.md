@@ -83,13 +83,15 @@
 | `record.stop` | — | RecordResult（事件+原点） |
 | `record.toNode` | `{"targetNodeId"?}` | 更新后的节点（等价 UI 两个按钮） |
 | `base.pick` | — | `{x, y}`（F11 取点，读全局光标位置） |
-| `hotkey.set` | `{"record","run","pick"}` | — |
+| `hotkey.set` | `{"actions":["record","run","pick"]}` | 三键绑定快照 `[record,run,pick]`（元素可 null 解绑；也接受 `{record,run,pick}` 对象） |
 | `workflow.current` | — | 后端当前工作流树（重连/重启后恢复用） |
 | `workflow.update` | `{"workflow"}` | —（结构变更后整棵提交，后端为唯一真源） |
 | `node.add` | `{"type","index"?}` | 新节点（已填 defaults） |
 | `node.remove` / `node.move` / `node.toggle` / `node.params.set` | `{"index", …}` | 更新后的工作流 |
 | `template.capture` | `{"paramKey"?}` | —（异步，调 `screencapture -i`） |
-| `key.capture` | — | —（异步，按键捕获回填参数） |
+| `key.capture` | — | —（异步，按键捕获回填参数；捕获期间暂挂热键分发） |
+| `key.capture.stop` | — | 取消捕获（恢复热键分发，无 `key.captured` 回填） |
+| `hotkey.clear` | — | 解除全部热键绑定并停监听线程 |
 | `record.subscribe` | `{"on": bool}` | —（仅录制面板打开时订阅事件流） |
 | `schedule.get` / `schedule.configure` | 见 §9.2 | 当前定时配置 / `nextFire` |
 | `app.shutdown` | — | —（优雅停机：停录制/运行、松键、退出） |
@@ -521,7 +523,10 @@ CDHash 变化，但 **MacDev 自签身份稳定时 TCC 授权按证书+identifie
 
 `app.info` / `app.diagnose` / `app.shutdown` / `app.requestPermissions` /
 `app.openPermissionSettings` 均可用；未知方法 → `-32601`，非法 JSON → `-32700`，
-stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 例全过。
+stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部业务方法：
+`workflow.*` / `node.*` / `nodes.definitions` / `run.*` / `record.*` /
+`hotkey.set` / `hotkey.clear` / `key.capture`(+`.stop`) / `base.pick` /
+`schedule.get` / `schedule.configure`，详见 §15.3。`tests/test_rpc.py` 11 例全过。
 
 **T5 验证步骤（待用户授权）**
 
@@ -541,6 +546,24 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 �
    `./scripts/build_sidecar.sh && ./scripts/build_spike_app.sh`，
    再 `rm -rf "/Applications/Auto Flow RPC Spike.app" && cp -R "dist/Auto Flow RPC Spike.app" /Applications/.`
 4. 再次跑 `app.info`，三项仍为 `true` → **§12.1 假设成立，P0 解锁**；否则转 §12.1 退路。
+
+---
+
+### 15.3 RPC 后端方法进度（P1-1 / P1-2 / P1-3，2026-09-01）
+
+**后端 `rpc/controller.py` + `rpc/server.py` 已接齐 §9 全部方法**（前端尚未建，P2）：
+
+- **P1-1 工作流真源（§9/§10）**：`workflow.current/load/save/new/update`、`node.add/remove/move/toggle/params.set`、`nodes.definitions`（含 `common_params` + §9.4 顺序）。结构变更统一广播 `workflow.changed`。
+- **P1-2 运行/录制（§5/§9.5）**：`run.start/stop`（Executor 包装，错误码 -32001/-32002/-32004）、`record.start/stop/toNode`（Recorder 包装，100ms 批 `record.event`，错误码 -32003）；修 `Recorder.stop()` 漏 `return` 的潜藏 bug。
+- **P1-3 热键/捕获/取点/定时（§3.2 + §9.2）**：
+  - `hotkey.set/clear`：单一 `MacKeyboardListener`，F9/F10/F11 → record/run/pick，捕获 `hotkey.triggered {action}`。
+  - `key.capture` / `key.capture.stop`：复用同一 listener，捕获期间**暂挂热键分发**，捕获到键经 `key.captured {name}` 异步回填（新增 `key.capture.stop` 取消，原 §3.1 表仅列 `key.capture`）。
+  - `base.pick`：F11 取点，读全局光标位置（与 pynput 录制坐标空间一致）。
+  - `schedule.configure` / `schedule.get`：后端 `threading.Timer` 触发，触发时从磁盘重载工作流并广播 `schedule.fired` + `workflow.changed`；配置持久化到 `~/Library/Application Support/AutoFlow/config.json`（dev 模式下为项目根 `config.json`），启动时自动恢复。
+
+**错误码表（§9.5）全部落地**：-32000 内部、-32601 未知方法、-32602 参数非法、-32700 解析、-32001 already_running、-32002 busy_recording、-32003 not_recording/no_record_result、-32004 workflow_empty。（`-32005 permission_missing` 已定义但当前未由任何 handler 主动发出。）
+
+**测试**：`tests/test_rpc.py` 由 3 例扩至 **11 例全过**（端到端拉起真实 sidecar，校验协议帧、stdio 洁净性、错误码、热键/捕获/取点/定时闭环与 schedule 触发重载）。
 
 ---
 

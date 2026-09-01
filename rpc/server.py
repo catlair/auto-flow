@@ -243,6 +243,14 @@ _HANDLERS = {
     "record.start": _ctl(lambda p: _CTRL.record_start()),
     "record.stop": _ctl(lambda p: _CTRL.record_stop()),
     "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
+    # --- 热键 / 键盘捕获 / 取点 / 定时（P1-3，§3.2/§9.2） ---
+    "hotkey.set": _ctl(lambda p: _CTRL.hotkey_set(p.get("actions"))),
+    "hotkey.clear": _ctl(lambda p: _CTRL.hotkey_clear()),
+    "key.capture": _ctl(lambda p: _CTRL.key_capture_start()),
+    "key.capture.stop": _ctl(lambda p: _CTRL.key_capture_stop()),
+    "base.pick": _ctl(lambda p: _CTRL.base_pick()),
+    "schedule.get": _ctl(lambda p: _CTRL.schedule_get()),
+    "schedule.configure": _ctl(lambda p: _CTRL.schedule_configure(p or {})),
 }
 
 
@@ -318,6 +326,12 @@ def main() -> int:
                 _send_error(msg["id"], -32000, "Internal error", {"detail": str(e)})
         if _shutdown.is_set():
             break
+
+    # 停机清理：停定时计时器、松键监听线程（守护线程随之退出）
+    try:
+        _CTRL.shutdown()
+    except Exception:  # noqa: BLE001
+        pass
 
     # 收尾：把排队的（通知）同步写完，不依赖 daemon writer 线程，避免进程退出丢帧
     _shutdown.set()
