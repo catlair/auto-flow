@@ -178,10 +178,25 @@ def _open_settings(panel: Optional[str]) -> None:
         handler()
 
 
+def _request_permissions() -> dict:
+    """弹系统授权提示：辅助功能 + 屏幕录制（输入监控无直接 prompt API，需手动在
+    系统设置添加；这里只回传当前快照）。用于 P0-S 授权 spike（T5）。"""
+    try:
+        permissions.check_accessibility(prompt=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("request accessibility prompt failed")
+    try:
+        permissions.check_screen_recording(prompt=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("request screen recording prompt failed")
+    return _snapshot_permissions()
+
+
 _HANDLERS = {
     "app.info": lambda _p: (True, _app_info()),
     "app.diagnose": lambda _p: (True, _diagnose()),
     "app.openPermissionSettings": lambda p: (True, _open_settings((p or {}).get("panel"))),
+    "app.requestPermissions": lambda _p: (True, _request_permissions()),
 }
 
 

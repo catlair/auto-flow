@@ -452,6 +452,53 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 **未做**：多屏支持（`vision` 只取 `monitors[1]`）、`pynput kb.type()` 中文输入、
 节点双注册与菜单顺序（§9.4）——这三项属行为变更，放在 P0.5/P4 与迁移一并处理。
 
+### 15.2 授权持久性 spike（P0-S）构建与状态（2026-09-01）
+
+**结论（部分）**：spike 后端可正常以「onedir + 固定路径 + MacDev 自签」形式运行并
+通过 stdio JSON-RPC 通信；**剩下的「授权是否跨重建持久」需用户在系统设置手动授权三项后，
+再做一次覆盖安装来验证（T5，见下方步骤）**。
+
+**打包脚本（新增）**
+
+- `scripts/build_sidecar.sh`：PyInstaller `--onedir` 打包 `rpc/server.py` →
+  `dist/autoflow-sidecar/`（体积基线 23 MB），MacDev 自签。`--hidden-import` 仅含
+  ApplicationServices/AppKit/Foundation/CoreFoundation/Quartz（P1 接视觉节点后体积重测）。
+- `scripts/build_spike_app.sh`：把 onedir 整体拷进
+  `.app/Contents/Resources/sidecar/`（可执行 + `_internal` 同级），`Contents/MacOS/autoflow-sidecar`
+  为**常规文件副本**（codesign `--deep` 拒绝 symlink 作 CFBundleExecutable），MacDev 自签。
+  产物 `dist/Auto Flow RPC Spike.app`，bundle id `com.example.autoflow.rpc-spike`。
+
+**踩坑（当时 spike 经 `/Applications` pipe 运行无 stdout 的根因）**
+
+手动把 onedir 包成 `.app` 时，若把 sidecar 当 `CFBundleExecutable` 放在
+`Contents/MacOS/`，PyInstaller bootloader 进入「.app 模式」并把 `PYTHONHOME` 指向
+`Contents/Frameworks`，需要：libpython 在 `Frameworks`、`base_library.zip` 软链
+`Frameworks/base_library.zip → ../Resources/base_library.zip`、PyObjC 绑定
+（objc/AppKit/CoreFoundation/…）也得在 `Frameworks`。漏掉任一都会「启动即退出且无输出」
+（stdout 被重定向、stderr 又常被吞，极难定位）。**正确且更稳的做法是让 sidecar 位于
+`Contents/MacOS` 之外（本 spike 用 `Contents/Resources/sidecar/`）**，bootloader 走
+onedir 模式直接找同级 `_internal`，无需任何 Frameworks 处理——这也与 §12 的
+「Tauri 把 onedir sidecar 放进 Resources 固定路径 spawn」一致。
+
+**已验证的 RPC 面**
+
+`app.info` / `app.diagnose` / `app.shutdown` / `app.requestPermissions` /
+`app.openPermissionSettings` 均可用；未知方法 → `-32601`，非法 JSON → `-32700`，
+stdout 仅含 compact NDJSON（§13 洁净性成立）。`tests/test_rpc.py` 3 例全过。
+
+**T5 验证步骤（待用户手动授权）**
+
+1. 打开「系统设置 → 隐私与安全性」，把 `/Applications/Auto Flow RPC Spike.app`
+   加入**辅助功能 / 输入监控 / 屏幕录制**三项（输入监控无 prompt API，必须手动加）。
+   或运行 `app.requestPermissions` 弹辅助功能 + 屏幕录制提示。
+2. 验证已授权：`printf '{"jsonrpc":"2.0","id":1,"method":"app.info"}' | \
+   "/Applications/Auto Flow RPC Spike.app/Contents/Resources/sidecar/autoflow-sidecar"`
+   → 三项权限应为 `true`。
+3. 重建并覆盖安装（同内容 + 同 MacDev 签名，cdhash 不变）：
+   `./scripts/build_sidecar.sh && ./scripts/build_spike_app.sh`，
+   再 `rm -rf "/Applications/Auto Flow RPC Spike.app" && cp -R "dist/Auto Flow RPC Spike.app" /Applications/.`
+4. 再次跑 `app.info`，三项仍为 `true` → **§12.1 假设成立，P0 解锁**；否则转 §12.1 退路。
+
 ---
 
 ## 16. 持久化与配置分工
