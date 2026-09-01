@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
+from PySide6.QtCore import Qt, QTime, QTimer, Signal, QObject
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QComboBox, QTimeEdit, QSpinBox,
-    QCheckBox, QDialogButtonBox, QLabel, QFileDialog,
+    QCheckBox, QDialogButtonBox, QLabel, QPushButton, QFileDialog, QMessageBox,
 )
 
 from core.paths import workflows_dir
@@ -73,14 +73,13 @@ class ScheduleDialog(QDialog):
         form = QFormLayout()
         self.mode_cb = QComboBox(); self.mode_cb.addItems(["每天时刻", "固定间隔"])
         self.mode_cb.setCurrentText(sched.mode)
-        from PySide6.QtWidgets import QTimeEdit
         self.time_edit = QTimeEdit()
         hh, mm = map(int, (sched.at_time or "09:00").split(":"))
         self.time_edit.setTime(QTime(hh, mm))
         self.interval_spin = QSpinBox(); self.interval_spin.setRange(1, 1440)
         self.interval_spin.setValue(sched.interval_min)
-        self.path_edit = QLabel(sched.workflow_path or "（未选择）")
-        from PySide6.QtWidgets import QPushButton
+        self._path = sched.workflow_path or ""
+        self.path_edit = QLabel(self._path or "（未选择）")
         pick = QPushButton("选择工作流…")
         pick.clicked.connect(self._pick)
         self.enable_cb = QCheckBox("启用定时")
@@ -100,14 +99,18 @@ class ScheduleDialog(QDialog):
     def _pick(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择工作流", workflows_dir(), "工作流 (*.json)")
         if path:
+            self._path = path
             self.path_edit.setText(path)
 
     def _apply(self) -> None:
+        if self.enable_cb.isChecked() and not self._path:
+            QMessageBox.warning(self, "定时运行", "请先选择一个工作流文件")
+            return
         self.sched.configure(
             mode=self.mode_cb.currentText(),
             at_time=self.time_edit.time().toString("HH:mm"),
             interval_min=self.interval_spin.value(),
-            workflow_path=self.path_edit.text(),
+            workflow_path=self._path,
             enabled=self.enable_cb.isChecked(),
         )
         self.accept()

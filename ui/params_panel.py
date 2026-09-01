@@ -1,12 +1,15 @@
 """参数面板：根据节点定义通用渲染参数控件。"""
 from __future__ import annotations
 
+import os
+import subprocess
+import time
 from typing import Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QFormLayout, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
-    QCheckBox, QToolButton, QFileDialog,
+    QWidget, QFormLayout, QHBoxLayout, QLineEdit, QSpinBox, QDoubleSpinBox,
+    QComboBox, QCheckBox, QToolButton, QFileDialog,
 )
 
 from tasks.base import get_task
@@ -58,7 +61,7 @@ class ParamsPanel(QWidget):
                 continue
             elif ptype == "file":
                 w = QLineEdit(str(value or ""))
-                row = QWidget(); from PySide6.QtWidgets import QHBoxLayout
+                row = QWidget()
                 lay = QHBoxLayout(row); lay.setContentsMargins(0, 0, 0, 0)
                 lay.addWidget(w)
                 browse = QToolButton(); browse.setText("选择…")
@@ -75,7 +78,7 @@ class ParamsPanel(QWidget):
                 if ptype == "text" and key == "keys":
                     btn = QToolButton(); btn.setText("捕获")
                     btn.clicked.connect(lambda _=False, lw=w: self.capture_requested.emit(lw))
-                    row = QWidget(); from PySide6.QtWidgets import QHBoxLayout
+                    row = QWidget()
                     lay = QHBoxLayout(row); lay.setContentsMargins(0, 0, 0, 0)
                     lay.addWidget(w); lay.addWidget(btn)
                     self._form.addRow(d["label"], row)
@@ -122,17 +125,37 @@ class ParamsPanel(QWidget):
             self.params_changed.emit()
 
     def _snip_template(self, line_edit) -> None:
-        """调用 macOS 系统交互式框选截图，保存为模板文件并回填路径。"""
-        import subprocess, time
+        """调用 macOS 系统交互式框选截图，保存为模板文件并回填路径。
+
+        screencapture -i 会阻塞直到用户框选完成（或按 Esc 取消，此时不落盘），
+        因此用 QTimer 每 300ms 轮询子进程状态，不阻塞 UI 线程。
+        """
         from core.paths import templates_dir
         path = os.path.join(templates_dir(), f"tpl_{int(time.time())}.png")
-        # 最小化本窗口干扰；screencapture -i 阻塞直到用户框选完成
+
         proc = subprocess.Popen(["screencapture", "-i", "-o", path])
-        def wait_done():
+
+        def wait_done() -> None:
             if proc.poll() is None:
                 QTimer.singleShot(300, wait_done)
                 return
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 line_edit.setText(path)
                 self.params_changed.emit()
+            else:
+                self._snip_failed(line_edit, "未生成模板图（已取消或框选无效）")
+
         QTimer.singleShot(300, wait_done)
+
+    def _snip_failed(self, line_edit, message: str) -> None:
+        """截取模板失败（用户取消/框选无效）时提示。
+
+        期间用户可能已切换节点导致面板重建、底层 C++ 对象被销毁，故整体容错。
+        """
+        try:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "截取模板", message)
+            if line_edit is not None:
+                line_edit.setToolTip(message)
+        except RuntimeError:
+            pass
