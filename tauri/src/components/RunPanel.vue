@@ -3,6 +3,7 @@ import { ref, watch } from "vue";
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
 
+import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 const speed = ref(store.workflow.speed);
 const repeat = ref(store.workflow.repeat);
@@ -31,7 +32,7 @@ async function onToggleRun() {
   try {
     await store.toggleRun();
   } catch (e) {
-    MessagePlugin.error("运行失败：" + (e as Error).message);
+    MessagePlugin.error("运行失败：" + errMessage(e));
   }
 }
 </script>

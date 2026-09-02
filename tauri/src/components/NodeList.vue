@@ -4,6 +4,7 @@ import draggable from "vuedraggable";
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
 
+import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 
 // 本地镜像，避免 vuedraggable 直接改 store 真源；后端广播 workflow.changed 时再同步回来。
@@ -30,7 +31,7 @@ async function onAdd(type: string) {
     const idx = await store.addNode(type);
     store.selectNode(idx);
   } catch (e) {
-    MessagePlugin.error("添加失败：" + (e as Error).message);
+    MessagePlugin.error("添加失败：" + errMessage(e));
   }
 }
 async function onToggle(index: number, val: boolean) {

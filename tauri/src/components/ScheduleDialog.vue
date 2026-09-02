@@ -4,6 +4,7 @@ import { useAppStore } from "@/stores/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { MessagePlugin } from "tdesign-vue-next";
 
+import { errMessage } from "@/rpc/client";
 const props = defineProps<{ visible: boolean }>();
 const emit = defineEmits<{ (e: "update:visible", v: boolean): void }>();
 
@@ -44,7 +45,7 @@ async function onConfirm() {
     MessagePlugin.success("定时已保存（下次启动自动恢复）");
     emit("update:visible", false);
   } catch (e) {
-    MessagePlugin.error("保存失败：" + (e as Error).message);
+    MessagePlugin.error("保存失败：" + errMessage(e));
   }
 }
 </script>

@@ -1,6 +1,6 @@
 // 全局状态：后端是唯一真源（§10），前端近乎无状态——只持有视图态、表单草稿、运行/录制态镜像。
 import { defineStore } from "pinia";
-import { rpc } from "@/rpc/client";
+import { errMessage, rpc } from "@/rpc/client";
 import type {
   JsonRpcNotification,
   NodeDefinition,
@@ -16,6 +16,8 @@ type CapturedKeyHandler = (name: string) => void;
 export const useAppStore = defineStore("app", {
   state: () => ({
     connected: false,
+    // Rust 侧最近一次断连原因（含查找路径 / sidecar stderr），用于给出可读提示。
+    rpcDownDetail: "",
     protocolOk: true,
     appVersion: "",
     running: false,
@@ -66,6 +68,22 @@ export const useAppStore = defineStore("app", {
     async init() {
       await rpc.connect();
       rpc.onNotify((n) => this.handleNotification(n));
+      // sidecar 上下线由 Rust 以 Tauri 事件广播（rpc_up / rpc_down），与 stdout 上的
+      // NDJSON 通知是两条通道——此前只监听 rpc_event，故断连时前端毫无感知。
+      rpc.onStatus((up, detail) => {
+        this.connected = up;
+        if (up) {
+          this.rpcDownDetail = "";
+          this.clearBanner();
+        } else {
+          this.rpcDownDetail = detail || "";
+          // detail 可能含查找路径 + sidecar 最近 stderr：横幅只显示首行，全文进 console。
+          const first =
+            (detail || "").split("\n")[0] || "后端 sidecar 断开，正在重连…";
+          this.setBanner(first, "warn");
+          if (detail) console.error("[rpc_down]", detail);
+        }
+      });
       try {
         const info = await rpc.request("app.info");
         this.appVersion = info.appVersion ?? "";
@@ -80,7 +98,10 @@ export const useAppStore = defineStore("app", {
         }
       } catch (e) {
         this.connected = false;
-        this.setBanner("无法连接后端 sidecar：" + String((e as Error).message));
+        // 优先用 Rust 侧带查找路径/stderr 的详情，比 send_rpc 的裸错误（"sidecar 未连接"）可读。
+        this.setBanner(
+          "无法连接后端 sidecar：" + (this.rpcDownDetail || errMessage(e))
+        );
       }
       // 拉取定义 + 当前工作流 + 定时配置（三者均来自后端真源）
       try {
@@ -156,14 +177,8 @@ export const useAppStore = defineStore("app", {
         case "schedule.fired":
           this.setBanner("定时触发：" + (n.params.path ?? ""), "ok");
           break;
-        case "rpc_down":
-          this.connected = false;
-          this.setBanner("后端 sidecar 断开，正在重连…", "warn");
-          break;
-        case "rpc_up":
-          this.connected = true;
-          this.clearBanner();
-          break;
+        // 注：sidecar 上下线走 Tauri 事件（见 init() 里的 rpc.onStatus），
+        // 不再作为 NDJSON 通知处理——Rust 从未在 stdout 上发过这两个 method。
       }
     },
 

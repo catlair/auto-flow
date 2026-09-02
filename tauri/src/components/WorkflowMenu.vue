@@ -2,6 +2,7 @@
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
 
+import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 
 async function onNew() {
@@ -12,7 +13,7 @@ async function onOpen() {
   try {
     await store.loadWorkflow();
   } catch (e) {
-    MessagePlugin.error("打开失败：" + (e as Error).message);
+    MessagePlugin.error("打开失败：" + errMessage(e));
   }
 }
 async function onSave() {
@@ -20,14 +21,14 @@ async function onSave() {
     await store.saveWorkflow();
     MessagePlugin.success("已保存");
   } catch (e) {
-    MessagePlugin.error("保存失败：" + (e as Error).message);
+    MessagePlugin.error("保存失败：" + errMessage(e));
   }
 }
 async function onSaveAs() {
   try {
     await store.saveWorkflowAs();
   } catch (e) {
-    MessagePlugin.error("另存失败：" + (e as Error).message);
+    MessagePlugin.error("另存失败：" + errMessage(e));
   }
 }
 </script>

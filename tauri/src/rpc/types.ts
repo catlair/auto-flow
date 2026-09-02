@@ -77,6 +77,13 @@ export interface NodeDefinition {
 
 export type RpcNotificationHandler = (n: JsonRpcNotification) => void;
 
+/**
+ * sidecar 上下线回调（Rust 侧以 Tauri 事件 rpc_up / rpc_down 广播，
+ * 与 stdout 上的 NDJSON 通知分属两条通道）。detail 为断连原因，
+ * 可能含查找路径与 sidecar 最近 stderr。
+ */
+export type RpcStatusHandler = (up: boolean, detail: string) => void;
+
 export const RPC_ERROR_MESSAGES: Record<number, string> = {
   [-32000]: "内部错误",
   [-32601]: "未知方法",

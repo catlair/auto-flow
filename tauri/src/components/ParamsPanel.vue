@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { ParamDef } from "@/rpc/types";
 import { MessagePlugin } from "tdesign-vue-next";
 
+import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 const capturing = ref(false);
 let unsub: (() => void) | null = null;
@@ -29,7 +30,7 @@ async function setVal(p: ParamDef, v: any) {
   try {
     await store.setParam(idx, p.key, v);
   } catch (e) {
-    MessagePlugin.error("设置参数失败：" + (e as Error).message);
+    MessagePlugin.error("设置参数失败：" + errMessage(e));
   }
 }
 
@@ -50,7 +51,7 @@ async function startCapture(p: ParamDef) {
   try {
     await store.startCapture();
   } catch (e) {
-    MessagePlugin.error("开始捕获失败：" + (e as Error).message);
+    MessagePlugin.error("开始捕获失败：" + errMessage(e));
     capturing.value = false;
   }
 }

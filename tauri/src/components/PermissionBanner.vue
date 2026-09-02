@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useAppStore } from "@/stores/app";
+import { errMessage } from "@/rpc/client";
 
 const store = useAppStore();
 
@@ -17,7 +18,7 @@ async function onRequest() {
     await store.requestPermissions();
     store.setBanner("已弹出系统授权提示，请在系统设置中允许", "ok");
   } catch (e) {
-    store.setBanner("请求授权失败：" + (e as Error).message, "error");
+    store.setBanner("请求授权失败：" + errMessage(e), "error");
   }
 }
 async function onOpenPanel(panel: string) {

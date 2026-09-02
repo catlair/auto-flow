@@ -18,3 +18,5 @@ dist/
 *.spec
 tests/__pycache__/
 .pytest_cache/
+# WorkBuddy 本地会话记忆（非源码，不入库）
+.workbuddy/

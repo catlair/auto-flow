@@ -2,13 +2,14 @@
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
 
+import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 
 async function onToggleRecord() {
   try {
     await store.toggleRecord();
   } catch (e) {
-    MessagePlugin.error("录制失败：" + (e as Error).message);
+    MessagePlugin.error("录制失败：" + errMessage(e));
   }
 }
 async function onToNode() {
@@ -16,7 +17,7 @@ async function onToNode() {
     await store.recordToNode();
     MessagePlugin.success("已写入节点");
   } catch (e) {
-    MessagePlugin.error("写入失败：" + (e as Error).message);
+    MessagePlugin.error("写入失败：" + errMessage(e));
   }
 }
 </script>
