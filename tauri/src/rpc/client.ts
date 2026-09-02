@@ -133,7 +133,7 @@ class RpcClient {
     const req: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      invoke("send_rpc", { line: JSON.stringify(req) }).catch((e) => {
+      invoke("send_rpc", { line: JSON.stringify(req) }).catch((e: unknown) => {
         this.pending.delete(id);
         reject(e);
       });

@@ -24,10 +24,16 @@ if ! codesign --verify --deep --verbose=0 "$APP_SRC" >/dev/null 2>&1; then
   ./scripts/sign_tauri_app.sh
 fi
 
-# 2) 停掉旧实例并覆盖安装
+# 2) 停掉旧实例并安装
 pkill -f "Auto Flow.app/Contents/MacOS" 2>/dev/null || true
 sleep 1
-rm -rf "$APP_DST"
+# 旧 .app 移入废纸篓而非 rm -rf：整包删除不可恢复，一旦路径写错就是灾难；
+# 移废纸篓既可反悔，也避免触发批量删除确认。
+if [ -d "$APP_DST" ]; then
+  TRASH_DST="$HOME/.Trash/Auto Flow $(date +%Y%m%d-%H%M%S).app"
+  mv "$APP_DST" "$TRASH_DST"
+  echo "旧版本已移入废纸篓: $TRASH_DST"
+fi
 cp -R "$APP_SRC" "$APP_DST"
 # 去掉 quarantine 标记，避免未公证时首次打开被 Gatekeeper 拦（已公证则自动放行）
 xattr -dr com.apple.quarantine "$APP_DST" 2>/dev/null || true

@@ -24,10 +24,63 @@ struct SidecarState {
     last_status: Mutex<(bool, String)>,
 }
 
-/// 拼出固定路径：<Resources>/autoflow-sidecar/autoflow-sidecar（见 docs §12）。
+/// 把外壳侧的关键事件（sidecar 候选路径、spawn 结果、stderr、断连）落到文件。
+///
+/// 为什么必须落盘：从 Finder 启动的 App，其 stdout/stderr 都不可见；headless 开发环境
+/// 又看不到 GUI——没有这个文件，sidecar 起不来时（如「请求授权失败」那次）就只能靠猜。
+/// 位置：`$HOME/Library/Logs/autoflow-tauri.log`，追加写。
+fn log_line(msg: &str) {
+    use std::io::Write as _;
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(home).join("Library").join("Logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("autoflow-tauri.log"))
+    else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(f, "[{ts}] {msg}");
+}
+
+/// 拼出 sidecar 路径（见 docs §12 固定路径），并留开发态回退：
+/// `tauri dev` 时 resource_dir 指向 target/debug/，那里没有打包资源，
+/// 回退到源码树内由 build_sidecar.sh 放置的 `src-tauri/autoflow-sidecar/`。
 fn sidecar_exe(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    let dir = app.path().resource_dir().ok()?;
-    Some(dir.join("autoflow-sidecar").join("autoflow-sidecar"))
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join("autoflow-sidecar").join("autoflow-sidecar"));
+    }
+    candidates.push(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("autoflow-sidecar")
+            .join("autoflow-sidecar"),
+    );
+    log_line(&format!(
+        "sidecar 候选路径: {:?}",
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+    ));
+    let found = candidates.into_iter().find(|p| p.exists());
+    log_line(&format!(
+        "sidecar 选中: {}",
+        found
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(均不存在)".into())
+    ));
+    found
 }
 
 /// 记录 + 广播上下线状态。
@@ -52,10 +105,17 @@ fn spawn_and_watch(app: &tauri::AppHandle, state: &Arc<SidecarState>) {
         .stderr(Stdio::piped())
         .spawn()
     {
-        Ok(c) => c,
+        Ok(c) => {
+            log_line(&format!("sidecar 已启动 pid={}", c.id()));
+            c
+        }
         Err(e) => {
             // 带上实际查找路径：sidecar 曾落在 Resources/resources/autoflow-sidecar（双 resources
             // 错位），此时只给一句笼统提示会让排查成本极高。
+            log_line(&format!(
+                "sidecar 启动失败：{e}（查找路径 {}）",
+                exe.display()
+            ));
             set_status(
                 app,
                 state,
@@ -80,6 +140,7 @@ fn spawn_and_watch(app: &tauri::AppHandle, state: &Arc<SidecarState>) {
                         tail.remove(0);
                     }
                 }
+                log_line(&format!("sidecar_stderr: {line}"));
                 let _ = h.emit("sidecar_stderr", line);
             }
         });
@@ -101,6 +162,7 @@ fn spawn_and_watch(app: &tauri::AppHandle, state: &Arc<SidecarState>) {
         // stdout 关闭 = sidecar 退出。必须做两件事（此前都漏了）：
         //   ① 发 rpc_down——否则前端永远收不到断连提示，只会看到权限全 false 的横幅；
         //   ② 清掉失效的 stdin 句柄——否则 send_rpc 报含糊的 broken pipe，而非"未连接"。
+        log_line("sidecar stdout EOF（进程退出）");
         *st.stdin.lock().unwrap() = None;
         *st.child.lock().unwrap() = None;
         let tail = st.stderr_tail.lock().unwrap().clone();
@@ -121,13 +183,17 @@ fn send_rpc(app: tauri::AppHandle, line: String) -> Result<(), String> {
     let state = app.state::<Arc<SidecarState>>();
     let mut guard = state.stdin.lock().unwrap();
     match guard.as_mut() {
-        Some(stdin) => {
-            stdin
-                .write_all(format!("{line}\n").as_bytes())
-                .and_then(|_| stdin.flush())
-                .map_err(|e| e.to_string())
+        Some(stdin) => stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .and_then(|_| stdin.flush())
+            .map_err(|e| {
+                log_line(&format!("send_rpc 写入失败: {e}（请求: {line}）"));
+                e.to_string()
+            }),
+        None => {
+            log_line(&format!("send_rpc 失败: sidecar 未连接（请求: {line}）"));
+            Err("sidecar 未连接".into())
         }
-        None => Err("sidecar 未连接".into()),
     }
 }
 
@@ -148,6 +214,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            log_line("=== Auto Flow 外壳启动 ===");
             let handle = app.handle().clone();
             let state = Arc::new(SidecarState {
                 child: Mutex::new(None),
