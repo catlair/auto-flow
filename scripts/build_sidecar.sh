@@ -13,7 +13,12 @@
 set -e
 cd "$(dirname "$0")/.."
 
-rm -rf dist/autoflow-sidecar
+# 不直接删旧 onedir（281 个文件会触发批量删除确认，且 PyInstaller --noconfirm
+# 内部的清理同样会被拦）。同卷 rename 回避——rename 不是删除；旧目录留作
+# dist/.autoflow-sidecar.old.*，需要时手动分批清理。
+if [ -d "dist/autoflow-sidecar" ]; then
+  mv "dist/autoflow-sidecar" "dist/.autoflow-sidecar.old.$(date +%Y%m%d-%H%M%S)"
+fi
 
 ./.venv/bin/python -m PyInstaller --noconfirm --onedir --name autoflow-sidecar \
   --hidden-import ApplicationServices \

@@ -299,12 +299,19 @@ def main() -> int:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
     logger.info("Auto Flow sidecar v%s protocol v%d 启动", APP_VERSION, PROTOCOL_VERSION)
+    # 把启动时的权限快照写进日志：权限检查归属"责任进程"，同一 sidecar 由 shell 拉起
+    # 与由 App 拉起读到的值可能不同——排查「横幅全 ✗ 但 sidecar 明明活着」必须有这份记录
+    try:
+        logger.info("权限快照: %s", _snapshot_permissions())
+    except Exception:  # noqa: BLE001
+        logger.exception("startup permission snapshot failed")
 
     _CTRL.set_notifier(_send_notification)
 
     threading.Thread(target=_writer_loop, name="rpc-writer", daemon=True).start()
     threading.Thread(target=_perm_loop, name="perm-poll", daemon=True).start()
 
+    exit_reason = "stdin EOF（外壳关闭或管道断开）"
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:
@@ -318,6 +325,7 @@ def main() -> int:
         if method == "app.shutdown":
             _send_response(msg.get("id"), {})
             _request_shutdown()
+            exit_reason = "app.shutdown"
             break
         try:
             _handle(msg)
@@ -326,6 +334,7 @@ def main() -> int:
             if msg.get("id") is not None:
                 _send_error(msg["id"], -32000, "Internal error", {"detail": str(e)})
         if _shutdown.is_set():
+            exit_reason = "shutdown 请求（handler 内触发）"
             break
 
     # 停机清理：停定时计时器、松键监听线程（守护线程随之退出）
@@ -341,7 +350,7 @@ def main() -> int:
             _send(_notify_queue.get_nowait())
     except Exception:  # noqa: BLE001
         pass
-    logger.info("sidecar 退出")
+    logger.info("sidecar 退出（%s）", exit_reason)
     return 0
 
 

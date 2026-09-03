@@ -24,6 +24,17 @@ struct SidecarState {
     last_status: Mutex<(bool, String)>,
 }
 
+/// 日志用的帧预览：长帧（如 nodes.definitions 的 8KB JSON）只留前 max 个字符，
+/// 避免每次启动都往日志灌大段 JSON。按字符截取，避免 byte 切片劈开 UTF-8 panic。
+fn preview(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max).collect();
+        format!("{head}…(共{}字节)", s.len())
+    }
+}
+
 /// 把外壳侧的关键事件（sidecar 候选路径、spawn 结果、stderr、断连）落到文件。
 ///
 /// 为什么必须落盘：从 Finder 启动的 App，其 stdout/stderr 都不可见；headless 开发环境
@@ -156,8 +167,12 @@ fn spawn_and_watch(app: &tauri::AppHandle, state: &Arc<SidecarState>) {
     thread::spawn(move || {
         let reader = std::io::BufReader::new(stdout);
         for line in reader.lines().flatten() {
-            // 每条 stdout 行即一帧（后端 compact NDJSON，见 §13）；前端负责半包切分兜底。
-            let _ = h.emit("rpc_event", line);
+            // 每条 stdout 行即一帧（后端 compact NDJSON，见 §13）。
+            // 【关键】lines() 会剥掉换行符，而前端 onChunk 按 \n 切分缓冲——若 emit 的
+            // payload 不带 \n，帧会永远滞留在前端缓冲区，dispatch 一次都不执行，
+            // 表现为「所有请求挂起、权限横幅全 ✗」。必须把 \n 补回去。
+            log_line(&format!("rpc_event: {}", preview(&line, 160)));
+            let _ = h.emit("rpc_event", format!("{line}\n"));
         }
         // stdout 关闭 = sidecar 退出。必须做两件事（此前都漏了）：
         //   ① 发 rpc_down——否则前端永远收不到断连提示，只会看到权限全 false 的横幅；
@@ -182,6 +197,7 @@ fn spawn_and_watch(app: &tauri::AppHandle, state: &Arc<SidecarState>) {
 fn send_rpc(app: tauri::AppHandle, line: String) -> Result<(), String> {
     let state = app.state::<Arc<SidecarState>>();
     let mut guard = state.stdin.lock().unwrap();
+    log_line(&format!("send_rpc 请求: {}", preview(&line, 160)));
     match guard.as_mut() {
         Some(stdin) => stdin
             .write_all(format!("{line}\n").as_bytes())
@@ -202,6 +218,7 @@ fn send_rpc(app: tauri::AppHandle, line: String) -> Result<(), String> {
 /// 那次 rpc_down 会永久丢失；前端连上后主动查一次即可补齐。
 #[tauri::command]
 fn rpc_status(app: tauri::AppHandle) -> (bool, String) {
+    log_line("rpc_status 查询");
     let state = app.state::<Arc<SidecarState>>();
     // 先绑局部变量再返回：直接把 `.lock().unwrap().clone()` 作为尾表达式，
     // 临时 MutexGuard 会存活到块结束、晚于 `state` 被 drop，触发 E0597。
