@@ -65,7 +65,7 @@ class KeyboardInputTask(BaseTask):
             ParamDef("mode", "模式", "select", "text", ["text", "hotkey", "key"],
                      tooltip="text: 输入文本 | hotkey: 组合键(如 ctrl+c) | key: 单键按下再释放"),
             ParamDef("text", "文本", "text", ""),
-            ParamDef("keys", "按键", "text", "", tooltip="单键名或 + 连接的组合，如 ctrl+c / Space"),
+            ParamDef("keys", "按键", "keys", "", tooltip="单键名或 + 连接的组合，如 ctrl+c / Space"),
         ]
 
     def run(self, ctx) -> None:

@@ -39,6 +39,8 @@ export interface WorkflowNode {
   type: string;
   params: Record<string, any>;
   enabled: boolean;
+  /** 后端生成的稳定唯一 id：列表渲染/拖拽 key 不得用 type 或 index */
+  uid?: string;
 }
 
 export interface Workflow {

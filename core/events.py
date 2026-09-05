@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
@@ -41,6 +42,13 @@ class RecordResult:
     origin_x: int = 0
     origin_y: int = 0
     stopped_by_limit: bool = False
+    # 丢帧定位计量：系统投递数 / 被移动阈值过滤数 / 超上限丢弃数
+    n_captured: int = 0
+    n_filtered: int = 0
+    n_limit_dropped: int = 0
+    # 监听线程中途死亡检测（tap 回调抛异常 → 线程退出，此后事件全丢，表现为「中间断段」）
+    mouse_listener_died: bool = False
+    kb_listener_died: bool = False
 
 
 @dataclass
@@ -48,13 +56,16 @@ class Node:
     type: str
     params: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
+    uid: str = field(default_factory=lambda: uuid.uuid4().hex)  # 前端列表/拖拽 key，稳定唯一
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "params": self.params, "enabled": self.enabled}
+        return {"type": self.type, "params": self.params,
+                "enabled": self.enabled, "uid": self.uid}
 
     @staticmethod
     def from_dict(d: dict) -> "Node":
-        return Node(type=d.get("type", ""), params=d.get("params") or {}, enabled=d.get("enabled", True))
+        return Node(type=d.get("type", ""), params=d.get("params") or {},
+                    enabled=d.get("enabled", True), uid=d.get("uid") or uuid.uuid4().hex)
 
 
 @dataclass

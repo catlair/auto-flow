@@ -345,14 +345,14 @@ def test_modifier_edge():
 
 
 def test_maclistener_callback_logic(monkeypatch):
-    """不创建真实 tap，验证 _dispatch 对无名键码的过滤。"""
+    """不创建真实 tap，验证 _dispatch 对无名键码的过滤（含坐标透传）。"""
     from core import maclistener
     got = []
-    lis = maclistener.MacKeyboardListener(lambda n, p: got.append((n, p)))
-    lis._dispatch("a", True)
-    lis._dispatch(None, True)     # 未知键码应被丢弃
-    lis._dispatch("Return", False)
-    assert got == [("a", True), ("Return", False)]
+    lis = maclistener.MacKeyboardListener(lambda n, p, x=0, y=0: got.append((n, p, x, y)))
+    lis._dispatch("a", True, 10, 20)
+    lis._dispatch(None, True, 10, 20)   # 未知键码应被丢弃
+    lis._dispatch("Return", False, 30, 40)
+    assert got == [("a", True, 10, 20), ("Return", False, 30, 40)]
 
 
 

@@ -20,3 +20,10 @@ tests/__pycache__/
 .pytest_cache/
 # WorkBuddy 本地会话记忆（非源码，不入库）
 .workbuddy/
+
+# 迁移期垃圾
+.af-sidecar-old-*/
+.autoflow-sidecar.old.*/
+tauri/vite.config.ts.timestamp-*.mjs
+tauri/src-tauri/autoflow-sidecar/
+build/

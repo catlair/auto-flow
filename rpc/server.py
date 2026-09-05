@@ -37,6 +37,10 @@ logger = logging.getLogger("autoflow-sidecar")
 
 # 协议输出句柄（原始 fd，绝不经过 sys.stdout）
 OUT: Optional[object] = None
+# 帧写锁：响应（stdin 读线程）与通知（writer 线程）并发写同一 fd。
+# 管道对超长帧不保证原子性，无锁时两条帧会字节级交错，前端随机 JSON 解析失败——
+# 表现为「通知/响应偶发丢失」，实为传输层损坏。
+_WRITE_LOCK = threading.Lock()
 _notify_queue: "queue.Queue[dict]" = queue.Queue(maxsize=1024)
 _shutdown = threading.Event()
 
@@ -67,8 +71,9 @@ def _send(obj: dict) -> None:
     line = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     try:
         assert OUT is not None
-        OUT.write(line + b"\n")
-        OUT.flush()
+        with _WRITE_LOCK:
+            OUT.write(line + b"\n")
+            OUT.flush()
     except (BrokenPipeError, ValueError, OSError):
         # 对端（Tauri）已关闭管道，安静退出
         _request_shutdown()
@@ -244,6 +249,10 @@ _HANDLERS = {
     "record.stop": _ctl(lambda p: _CTRL.record_stop()),
     "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
     "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
+    # --- 模板截取（screencapture -i 框选，异步回填 template.snipped） ---
+    "template.snip": _ctl(lambda p: _CTRL.template_snip()),
+    # --- 输入监控实际可收性自检（F18 合成键回环） ---
+    "input.probe": _ctl(lambda p: _CTRL.input_probe()),
     # --- 热键 / 键盘捕获 / 取点 / 定时（P1-3，§3.2/§9.2） ---
     "hotkey.set": _ctl(lambda p: _CTRL.hotkey_set(p.get("actions"))),
     "hotkey.clear": _ctl(lambda p: _CTRL.hotkey_clear()),

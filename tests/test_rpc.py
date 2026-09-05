@@ -291,15 +291,22 @@ def test_hotkey_set_clear_and_key_capture() -> None:
 
 
 def test_base_pick_returns_coords() -> None:
-    p = _start()
-    try:
-        bp = _call(p, "base.pick", req_id=1)
-        assert bp["id"] == 1
-        r = bp["result"]
-        assert isinstance(r["x"], int) and isinstance(r["y"], int)
-    finally:
-        _rpc(p, "app.shutdown")
-        p.wait(timeout=5)
+    """取点为 arm 流程：base.pick 应答 armed，随后按键（直接驱动控制器回调）
+    经 base.picked 通知带回事件自带坐标。"""
+    from rpc.controller import AppController
+    ctrl = AppController()
+    collected = []
+    ctrl.set_notifier(lambda m, prm: collected.append((m, prm)))
+    r = ctrl.base_pick()
+    assert r == {"armed": True}
+    # 模拟一次按键（坐标来自键盘事件 location）
+    ctrl._on_key("F11", True, 640, 400)
+    methods = [m for m, _ in collected]
+    assert "base.picked" in methods
+    payload = dict(collected)["base.picked"]
+    assert payload["x"] == 640 and payload["y"] == 400
+    assert ctrl._picking_once is False  # 一次性
+    ctrl.shutdown()
 
 
 def test_schedule_configure_and_get() -> None:

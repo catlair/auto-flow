@@ -8,11 +8,11 @@ import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 
 // 本地镜像，避免 vuedraggable 直接改 store 真源；后端广播 workflow.changed 时再同步回来。
-const items = ref(store.workflow.nodes.map((n) => ({ ...n })));
+const items = ref(store.workflow.nodes.map((n) => ({ ...n, uid: n.uid })));
 watch(
   () => store.workflow.nodes,
   (n) => {
-    items.value = n.map((x) => ({ ...x }));
+    items.value = n.map((x) => ({ ...x, uid: x.uid }));
   },
   { deep: true }
 );
@@ -61,7 +61,7 @@ async function onRemove(index: number) {
       />
     </t-select>
 
-    <draggable v-model="items" item-key="type" @end="onEnd" handle=".af-node" ghost-class="af-ghost">
+    <draggable v-model="items" item-key="uid" @end="onEnd" handle=".af-node" ghost-class="af-ghost">
       <template #item="{ element, index }">
         <div
           class="af-node"

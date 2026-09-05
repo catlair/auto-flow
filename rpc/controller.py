@@ -74,6 +74,12 @@ class AppController:
         self._key_mode = "idle"        # idle | hotkey | capture
         self._hotkey_map: dict = {}    # 物理键名 -> 动作（record/run/pick）
         self._capturing = False
+        self._last_hotkey_key: Optional[str] = None   # key-repeat 去抖
+        self._last_hotkey_at = 0.0
+        self._snipping = False         # screencapture -i 框选中
+        self._probing = False          # 输入监控自检进行中
+        self._probe_hit = False
+        self._picking_once = False     # 「取点」armed：下一个按键即基点
 
         # ---- 取点（F11，base.pick）由 pynput 直接读全局光标位置 ----
 
@@ -88,13 +94,34 @@ class AppController:
     def set_notifier(self, fn: Callable[[str, Any], None]) -> None:
         self._notify = fn
 
+    @staticmethod
+    def _public_node(node: Node) -> dict:
+        """对外摘要：events 数组（可达数十 MB）替换为 {count}。
+
+        前端从不读写事件数组（录制结果只看条数，保存/回放都由后端完成），
+        全量数组会随 workflow.changed 广播，每次改参数都重传几十 MB——
+        既拖慢管道又挤占通知队列。真源仍是后端内存树，save 时完整落盘。
+        """
+        d = node.to_dict()
+        evs = d.get("params", {}).get("events")
+        if isinstance(evs, list):
+            d["params"]["events"] = {"count": len(evs)}
+        return d
+
+    def _public_workflow(self) -> dict:
+        with self._lock:
+            return {
+                **{k: v for k, v in self.workflow.to_dict().items() if k != "nodes"},
+                "nodes": [self._public_node(n) for n in self.workflow.nodes],
+            }
+
     def _broadcast_workflow(self) -> None:
-        self._notify("workflow.changed", self.workflow.to_dict())
+        self._notify("workflow.changed", self._public_workflow())
 
     # ---- workflow.* ----
     def workflow_current(self) -> dict:
         return {
-            "workflow": self.workflow.to_dict(),
+            "workflow": self._public_workflow(),
             "path": self.path,
             "running": self.running,
             "recording": self.recording,
@@ -166,7 +193,7 @@ class AppController:
                 inserted = max(0, index)
                 self.workflow.nodes.insert(inserted, node)
         self._broadcast_workflow()
-        return {"index": inserted, "node": node.to_dict()}
+        return {"index": inserted, "node": self._public_node(node)}
 
     def node_remove(self, index: int) -> dict:
         with self._lock:
@@ -262,7 +289,7 @@ class AppController:
                 raise ControllerError(-32001, "already_running")
             if self.running:
                 raise ControllerError(-32002, "busy_recording")
-            self.recorder = Recorder()
+            self.recorder = Recorder(skip_keys=set(self._hotkey_map.keys()))
             self.recorder.start()
             self.recording = True
             self._rec_poller_rec = self.recorder
@@ -300,14 +327,20 @@ class AppController:
             self.recording = False
         result = rec.stop()
         self._last_record = result
-        self._notify("record.stopped", {
+        # 丢帧定位计量一并上报：captured=系统投递数；count=captured-filtered-limit 后入库数。
+        # count << captured 且 filtered 也小 → 系统层（CGEventTap）丢事件，需要另查。
+        stats = {
             "count": len(result.events),
             "origin": [result.origin_x, result.origin_y],
             "stopped_by_limit": result.stopped_by_limit,
-        })
-        return {"count": len(result.events),
-                "origin": [result.origin_x, result.origin_y],
-                "stopped_by_limit": result.stopped_by_limit}
+            "captured": result.n_captured,
+            "filtered": result.n_filtered,
+            "limit_dropped": result.n_limit_dropped,
+            "mouse_died": result.mouse_listener_died,
+            "kb_died": result.kb_listener_died,
+        }
+        self._notify("record.stopped", stats)
+        return stats
 
     def record_to_node(self) -> dict:
         res = self._last_record
@@ -322,7 +355,7 @@ class AppController:
             self.workflow.nodes.append(node)
             inserted = len(self.workflow.nodes) - 1
         self._broadcast_workflow()
-        return {"index": inserted, "node": node.to_dict()}
+        return {"index": inserted, "node": self._public_node(node)}
 
     # ---- 热键 / 键盘捕获（P1-3，§3.2 + §9 说明） ----
     def _ensure_key_listener(self) -> None:
@@ -341,24 +374,43 @@ class AppController:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _on_key(self, name: str, pressed: bool) -> None:
-        """单一 listener 回调：按 _key_mode 在捕获 / 热键间分发。"""
+    def _on_key(self, name: str, pressed: bool, x: int = 0, y: int = 0) -> None:
+        """单一 listener 回调：按 _key_mode 在捕获 / 热键 / 取点间分发。
+
+        热键去抖：CGEventTap 会收到系统 key-repeat 的连续 KeyDown，长按 F9
+        会被当成多次按下反复 toggle，故同名键 400ms 内只触发一次。"""
         if not name:
             return
-        with self._lock:
-            mode = self._key_mode
-        if mode == "capture":
+        if self._probing:
+            self._probe_maybe_hit(name)
+        if self._picking_once and pressed:
+            # 一次性取点：用按键事件自带的光标坐标回填（CLI 进程读不到全局光标）
+            with self._lock:
+                self._picking_once = False
+            self._notify("base.picked", {"x": x, "y": y})
+            return
+        if self._key_mode == "hotkey" and pressed:
+            now = time.monotonic()
+            with self._lock:
+                if name == self._last_hotkey_key and now - self._last_hotkey_at < 0.4:
+                    return
+                action = self._hotkey_map.get(name)
+                if action:
+                    self._last_hotkey_key = name
+                    self._last_hotkey_at = now
+            if action:
+                payload = {"action": action}
+                if action == "pick":
+                    payload.update({"x": x, "y": y})
+                self._notify("hotkey.triggered", payload)
+            return
+        if self._key_mode == "capture":
             if pressed:
                 with self._lock:
                     self._capturing = False
                     self._key_mode = "hotkey" if self._hotkey_map else "idle"
-                self._notify("key.captured", {"name": name})
+                self._notify("key.captured", {"name": name, "x": x, "y": y})
             return
-        if mode == "hotkey" and pressed:
-            with self._lock:
-                action = self._hotkey_map.get(name)
-            if action:
-                self._notify("hotkey.triggered", {"action": action})
 
     def hotkey_set(self, actions: Any) -> dict:
         """绑定 F9/F10/F11 → record/run/pick。
@@ -408,10 +460,79 @@ class AppController:
         return {"capturing": False}
 
     def base_pick(self) -> dict:
-        """F11 取点：读全局光标位置（与现状 pynput 坐标空间一致，供相对回放对齐）。"""
-        from pynput.mouse import Controller as MouseController
-        pos = MouseController().position
-        return {"x": int(round(pos[0])), "y": int(round(pos[1]))}
+        """「取点」：arm 一次性取点，下一个按键事件（自带光标坐标）经
+        `base.picked` 通知回填。
+
+        CLI sidecar 进程里读不到全局光标（CGEventGetLocation 恒 (0,0)），
+        而键盘事件自带 location，事件即坐标，天然精准。"""
+        self._ensure_key_listener()
+        with self._lock:
+            self._picking_once = True
+        return {"armed": True}
+
+    def template_snip(self) -> dict:
+        """「截取模板」：系统框选截图（screencapture -i），完成后 `template.snipped` 回填。
+
+        screencapture 会阻塞到用户框选完成，故放后台线程，RPC 立即返回。"""
+        import subprocess
+        from core.paths import templates_dir
+        if self._snipping:
+            raise ControllerError(-32001, "already_snipping")
+        path = os.path.join(templates_dir(), f"tpl_{int(time.time())}.png")
+
+        def work():
+            self._snipping = True
+            try:
+                subprocess.run(["screencapture", "-i", "-o", path], timeout=120)
+                if os.path.exists(path) and os.path.getsize(path) > 0:
+                    self._notify("template.snipped", {"path": path, "ok": True})
+                else:
+                    self._notify("template.snipped", {"path": "", "ok": False})
+            except Exception as e:  # noqa: BLE001
+                self._notify("template.snipped", {"path": "", "ok": False, "error": str(e)})
+            finally:
+                self._snipping = False
+
+        threading.Thread(target=work, name="template-snip", daemon=True).start()
+        return {"started": True}
+
+    def input_probe(self) -> dict:
+        """输入监控「实际可收性」自检。
+
+        CGEventTapCreate 对未授权进程也可能成功（事件静默不投递），预检 API 不可靠，
+        权限快照全是 true 但热键/录制无效正是这种状态。做法：确保 tap 后由本进程
+        post 一对 F18 合成键（几乎无应用响应、无副作用），300ms 内 tap 收到即链路通。
+        """
+        self._ensure_key_listener()
+        with self._lock:
+            self._probe_hit = False
+            self._probing = True
+        try:
+            from pynput.keyboard import Controller as Kb, Key
+            kb = Kb()
+            kb.press(Key.f18)
+            kb.release(Key.f18)
+        except Exception as e:  # noqa: BLE001
+            with self._lock:
+                self._probing = False
+            return {"alive": False, "error": str(e)}
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._probe_hit:
+                    break
+            time.sleep(0.03)
+        with self._lock:
+            alive = self._probe_hit
+            self._probing = False
+        self._notify("permission.probe", {"inputAlive": bool(alive)})
+        return {"alive": bool(alive)}
+
+    def _probe_maybe_hit(self, name: str) -> None:
+        """_on_key 早期调用：F18 自检键命中标记（仅在探测进行中生效）。"""
+        with self._lock:
+            if self._probing and name == "F18":
+                self._probe_hit = True
 
     # ---- 定时运行（P1-3，§9.2） ----
     def _schedule_path(self) -> str:
@@ -507,7 +628,8 @@ class AppController:
         return {"schedule": cfg, "nextFire": nxt.strftime("%Y-%m-%d %H:%M") if nxt else ""}
 
     def _schedule_fire(self) -> None:
-        """定时触发：从磁盘重载工作流并广播 workflow.changed + schedule.fired，再装定下一次。"""
+        """定时触发：从磁盘重载工作流并广播，然后**真正运行**（此前只发通知不运行，
+        定时功能形同虚设）。正在运行/录制时跳过本轮并提示。"""
         with self._lock:
             cfg = dict(self._schedule)
         path = cfg.get("workflowPath")
@@ -521,7 +643,12 @@ class AppController:
                     self.workflow = wf
                     self.path = path
                 self._broadcast_workflow()
-        self._notify("schedule.fired", {"path": path})
+        try:
+            self.run_start()
+        except ControllerError as e:
+            self._notify("schedule.fired", {"path": path, "ran": False, "reason": e.message})
+        else:
+            self._notify("schedule.fired", {"path": path, "ran": True})
         self._schedule_arm(cfg)
 
     # ---- 停机清理（app.shutdown 时调用） ----

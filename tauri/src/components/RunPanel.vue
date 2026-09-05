@@ -28,6 +28,12 @@ async function onPick() {
   await store.pickBase();
   MessagePlugin.success(`基点：${store.base.x}, ${store.base.y}`);
 }
+async function onBaseX(v: number) {
+  store.base = { ...store.base, x: Math.floor(v) };
+}
+async function onBaseY(v: number) {
+  store.base = { ...store.base, y: Math.floor(v) };
+}
 async function onToggleRun() {
   try {
     await store.toggleRun();
@@ -51,8 +57,8 @@ async function onToggleRun() {
     <div class="af-field">
       <label class="af-label">基点 (F11 取点)</label>
       <div style="display: flex; gap: 6px; align-items: center">
-        <t-input-number :value="store.base.x" :step="1" size="small" theme="column" disabled />
-        <t-input-number :value="store.base.y" :step="1" size="small" theme="column" disabled />
+        <t-input-number :value="store.base.x" :step="1" size="small" theme="column" @change="onBaseX" />
+        <t-input-number :value="store.base.y" :step="1" size="small" theme="column" @change="onBaseY" />
         <t-button size="small" variant="outline" @click="onPick">取点</t-button>
       </div>
     </div>

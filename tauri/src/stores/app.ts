@@ -23,6 +23,7 @@ export const useAppStore = defineStore("app", {
     running: false,
     recording: false,
     lastRecordCount: 0,
+    lastRecordInfo: null as any,
     permissions: { accessibility: false, inputMonitoring: false, screenRecording: false } as Permissions,
     workflow: { name: "未命名", speed: 1.0, repeat: 1, nodes: [] } as Workflow,
     definitions: [] as NodeDefinition[],
@@ -122,6 +123,13 @@ export const useAppStore = defineStore("app", {
       } catch {
         /* ignore */
       }
+      // 默认热键：F9=录制开/停、F10=运行开/停、F11=取点。此前前端从未调用 hotkey.set，
+      // 后端热键监听从未装定，表现为「没有录制/结束运行快捷键」。启动时统一装定默认绑定。
+      try {
+        await rpc.request("hotkey.set", { actions: ["record", "run", "pick"] });
+      } catch {
+        /* ignore */
+      }
     },
 
     applyWorkflow(wf: Workflow, running?: boolean, recording?: boolean) {
@@ -145,9 +153,19 @@ export const useAppStore = defineStore("app", {
           const a = n.params.action;
           if (a === "record") this.toggleRecord();
           else if (a === "run") this.toggleRun();
-          else if (a === "pick") this.pickBase();
+          else if (a === "pick") {
+            // 后端事件自带光标坐标（CLI 进程读不到全局光标），直接回填
+            if (typeof n.params.x === "number") {
+              this.base = { x: n.params.x, y: n.params.y };
+            }
+          }
           break;
         }
+        case "base.picked":
+          // 「取点」按钮 armed 后的回填：下一个按键事件自带坐标
+          this.base = { x: n.params.x, y: n.params.y };
+          this.setBanner(`基点已取：${n.params.x}, ${n.params.y}`, "ok");
+          break;
         case "key.captured":
           this._captured.forEach((h) => h(n.params.name));
           break;
@@ -160,6 +178,7 @@ export const useAppStore = defineStore("app", {
         case "record.stopped":
           this.recording = false;
           this.lastRecordCount = n.params.count ?? 0;
+          this.lastRecordInfo = n.params;
           break;
         case "run.node":
           break;
@@ -175,7 +194,14 @@ export const useAppStore = defineStore("app", {
           this.setBanner("运行出错：" + (n.params.message ?? ""), "error");
           break;
         case "schedule.fired":
-          this.setBanner("定时触发：" + (n.params.path ?? ""), "ok");
+          if (n.params?.ran) {
+            this.running = true;
+            this.setBanner("定时触发：" + (n.params.path ?? ""), "ok");
+          } else {
+            this.setBanner(
+              "定时触发跳过：" + (n.params?.reason ?? "忙"), "warn"
+            );
+          }
           break;
         // 注：sidecar 上下线走 Tauri 事件（见 init() 里的 rpc.onStatus），
         // 不再作为 NDJSON 通知处理——Rust 从未在 stdout 上发过这两个 method。
@@ -185,6 +211,16 @@ export const useAppStore = defineStore("app", {
     onCapturedKey(h: CapturedKeyHandler): () => void {
       this._captured.add(h);
       return () => this._captured.delete(h);
+    },
+    /** 组件级原始通知订阅（如 template.snipped 回填）。 */
+    onNotifyRaw(h: (n: JsonRpcNotification) => void): () => void {
+      return rpc.onNotify(h);
+    },
+    async snipTemplate() {
+      await rpc.request("template.snip");
+    },
+    async probeInput() {
+      return (await rpc.request("input.probe")) as { alive: boolean };
     },
 
     // ---- 节点 CRUD（均调后端，结构变更经 workflow.changed 回写） ----
@@ -242,11 +278,17 @@ export const useAppStore = defineStore("app", {
     },
     async toggleRecord() {
       if (this.recording) {
-        await rpc.request("record.stop");
+        // 统计直接取响应回填：record.stopped 通知在大帧/高频事件流下可能被
+        // WebView 丢弃，若只依赖通知，写入节点按钮会因 lastRecordCount=0 永远禁用。
+        const r = await rpc.request("record.stop");
+        this.recording = false;
+        this.lastRecordInfo = r;
+        this.lastRecordCount = r.count ?? 0;
         await this.recordSubscribe(false);
       } else {
         this.recordBuffer = [];
         await rpc.request("record.start");
+        this.recording = true;
         await this.recordSubscribe(true);
       }
     },
@@ -256,10 +298,15 @@ export const useAppStore = defineStore("app", {
     },
     async recordToNode() {
       await rpc.request("record.toNode");
+      // 主动拉一次真源：写入录制回放节点时 workflow.changed 是含全部事件的大帧
+      // （实测 40KB+），WebView 在录制事件流刚结束的高负载下可能丢掉这条通知，
+      // 表现为「节点写入了但列表不出现，刷新页面才恢复」。此处以响应为准刷新状态。
+      const cur = await rpc.request("workflow.current");
+      this.applyWorkflow(cur.workflow, cur.running, cur.recording);
     },
     async pickBase() {
-      const r = await rpc.request("base.pick");
-      this.base = { x: r.x, y: r.y };
+      // arm 一次性取点：用户按任意键（通常 F11）后经 base.picked 通知回填
+      await rpc.request("base.pick");
     },
 
     // ---- 热键 / 捕获 / 权限 / 定时 ----

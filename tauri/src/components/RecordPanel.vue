@@ -8,6 +8,17 @@ const store = useAppStore();
 async function onToggleRecord() {
   try {
     await store.toggleRecord();
+    const s = store.lastRecordInfo;
+    if (s?.mouse_died || s?.kb_died) {
+      MessagePlugin.warning(
+        (s.mouse_died ? "鼠标" : "") + (s.mouse_died && s.kb_died ? "、" : "") +
+        (s.kb_died ? "键盘" : "") + "监听中途停止，死亡时刻后的事件未记录"
+      );
+    } else if (s?.stopped_by_limit) {
+      MessagePlugin.warning(`事件数达到上限，超限丢弃 ${s.limit_dropped ?? 0} 条`);
+    } else if (s && (s.captured ?? 0) - (s.filtered ?? 0) - (s.limit_dropped ?? 0) !== (s.count ?? 0)) {
+      MessagePlugin.warning("检测到系统层丢事件，请反馈（captured≠count+filtered）");
+    }
   } catch (e) {
     MessagePlugin.error("录制失败：" + errMessage(e));
   }
@@ -41,7 +52,16 @@ async function onToNode() {
     >
       写入节点{{ store.lastRecordCount ? `（${store.lastRecordCount} 事件）` : "" }}
     </t-button>
+    <div v-if="store.lastRecordInfo" class="af-rec-stats">
+      已录 {{ store.lastRecordInfo.count }} 条事件<template v-if="store.lastRecordInfo.filtered">
+        · 阈值过滤微移动 {{ store.lastRecordInfo.filtered }} 条</template><template v-if="store.lastRecordInfo.limit_dropped">
+        · 超限丢弃 {{ store.lastRecordInfo.limit_dropped }} 条</template><template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
+        · <span style="color:#e34d59">监听中断</span></template>
+    </div>
     <div class="af-stream">
+      <div v-if="store.recordBuffer.length > 200" class="af-more">
+        共 {{ store.recordBuffer.length }} 条，仅显示最近 200 条（回放以完整数据为准）
+      </div>
       <div v-for="(ev, i) in store.recordBuffer.slice(-200)" :key="i" class="af-ev">
         {{ ev.kind }} @ {{ ev.x ?? "-" }},{{ ev.y ?? "-" }} {{ ev.button ? ev.button : "" }}
         {{ ev.ts_ms }}ms
@@ -70,5 +90,17 @@ async function onToNode() {
 }
 .af-empty {
   color: #999;
+}
+.af-rec-stats {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #666;
+}
+.af-more {
+  color: #999;
+  font-size: 10px;
+  padding-bottom: 2px;
+  border-bottom: 1px dashed #e7e7e7;
+  margin-bottom: 2px;
 }
 </style>

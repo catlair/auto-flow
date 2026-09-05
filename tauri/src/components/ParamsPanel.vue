@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onBeforeUnmount } from "vue";
+import { computed, ref, onBeforeUnmount, onMounted } from "vue";
 import { useAppStore } from "@/stores/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { ParamDef } from "@/rpc/types";
@@ -37,6 +37,41 @@ async function setVal(p: ParamDef, v: any) {
 async function pickFile(p: ParamDef) {
   const path = await open({ title: "选择文件" });
   if (typeof path === "string") await setVal(p, path);
+}
+
+function eventsLabel(v: any): string {
+  if (Array.isArray(v)) return `${v.length} 个事件`;
+  if (v && typeof v === "object" && typeof v.count === "number")
+    return `${v.count} 个事件`;
+  return "0 个事件";
+}
+
+// 「截取」：后端起系统框选截图，完成经 template.snipped 通知回填本字段
+const snipping = ref(false);
+let snipTarget: ParamDef | null = null;
+onMounted(() => {
+  store.onNotifyRaw((n) => {
+    if (n.method !== "template.snipped") return;
+    snipping.value = false;
+    if (n.params?.ok && snipTarget) {
+      setVal(snipTarget, n.params.path);
+      MessagePlugin.success("模板已截取");
+    } else if (!n.params?.ok) {
+      MessagePlugin.warning("已取消截取");
+    }
+    snipTarget = null;
+  });
+});
+async function snipTemplate(p: ParamDef) {
+  try {
+    snipTarget = p;
+    snipping.value = true;
+    await store.snipTemplate();
+  } catch (e) {
+    snipping.value = false;
+    snipTarget = null;
+    MessagePlugin.error("截取失败：" + errMessage(e));
+  }
 }
 
 async function startCapture(p: ParamDef) {
@@ -91,9 +126,23 @@ onBeforeUnmount(() => unsub?.());
           <t-option v-for="o in p.options || []" :key="o" :value="o" :label="o" />
         </t-select>
 
+        <t-input
+          v-else-if="p.ptype === 'events'"
+          :value="eventsLabel(curValue(p))"
+          size="small"
+          readonly
+        />
+
         <div v-else-if="p.ptype === 'file'" style="display: flex; gap: 6px">
           <t-input :value="curValue(p)" size="small" readonly placeholder="未选择" />
           <t-button size="small" variant="outline" @click="pickFile(p)">选择</t-button>
+          <t-button
+            size="small"
+            variant="outline"
+            :disabled="snipping"
+            @click="snipTemplate(p)"
+            >{{ snipping ? "框选中…" : "截取" }}</t-button
+          >
         </div>
 
         <div v-else-if="p.ptype === 'keys'" style="display: flex; gap: 6px">

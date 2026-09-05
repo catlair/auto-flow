@@ -17,7 +17,7 @@ from core.keymap import key_to_name
 from core.maclistener import MacKeyboardListener
 
 MOVE_THRESHOLD_PX = 4
-MAX_RECORD_EVENTS = 20000
+MAX_RECORD_EVENTS = 100000
 
 ButtonName = {"left": "left", "right": "right", "middle": "middle"}
 
@@ -25,7 +25,7 @@ ButtonName = {"left": "left", "right": "right", "middle": "middle"}
 class Recorder:
     """调用 start() 后台监听；poll() 取增量事件；stop() 结束并返回 RecordResult。"""
 
-    def __init__(self) -> None:
+    def __init__(self, skip_keys: Optional[set] = None) -> None:
         self._q: queue.Queue[Optional[MacroEvent]] = queue.Queue()
         self._events: list[MacroEvent] = []
         self._start_ms = 0
@@ -35,6 +35,14 @@ class Recorder:
         self._stopping = False
         self._mouse_listener: Optional[mouse.Listener] = None
         self._kb_listener: Optional[MacKeyboardListener] = None
+        # 热键物理键不进录制结果（否则停止录制的 F9 按键会被录成脏事件）
+        self._skip_keys: set = set(skip_keys or ())
+        # 丢帧定位计量：系统投递（入队）/ 阈值过滤 / 超限丢弃 / 监听线程死亡
+        self._n_captured = 0
+        self._n_filtered = 0
+        self._n_limit_dropped = 0
+        self._mouse_died = False
+        self._kb_died = False
         self._lock = threading.Lock()
 
     # ---- 监听回调（监听线程里执行，只入队） ----
@@ -52,14 +60,18 @@ class Recorder:
             ts_ms=now_ms() - self._start_ms, kind="wheel",
             wheel_dx=0, wheel_dy=int(dy), x=int(x), y=int(y)))
 
-    def _on_key_event(self, name: str, pressed: bool) -> None:
+    def _on_key_event(self, name: str, pressed: bool, _x: int = 0, _y: int = 0) -> None:
+        if name in self._skip_keys:
+            return
         self._push(MacroEvent(
             ts_ms=now_ms() - self._start_ms, kind="key",
             key=name, pressed=pressed))
 
     def _push(self, ev: MacroEvent) -> None:
-        if not self._stopping:
-            self._q.put(ev)
+        with self._lock:
+            self._n_captured += 1
+            if not self._stopping:
+                self._q.put(ev)
 
     # ---- 生命周期 ----
     def start(self) -> None:
@@ -73,10 +85,16 @@ class Recorder:
         self._kb_listener.start()
 
     def stop(self) -> RecordResult:
-        self._stopping = True
+        # 先停监听再关闸：先置 _stopping 会把「最后一次 poll 与 stop 之间」
+        # 仍在入队路上的事件判为丢弃，表现为录制尾部丢帧。
         for lis in (self._mouse_listener, self._kb_listener):
             if lis:
                 lis.stop()
+        # 记录监听线程健康状态：线程中途死亡（回调异常）会让「死亡时刻之后」的事件
+        # 全部丢失，正是「中间某段没录到」的元凶之一，必须在结果里显式暴露。
+        self._mouse_died = bool(self._mouse_listener and not self._mouse_listener.is_alive())
+        self._kb_died = bool(self._kb_listener and not self._kb_listener.is_alive())
+        self._stopping = True
         # 排空队列里残留事件
         while True:
             try:
@@ -101,10 +119,12 @@ class Recorder:
         with self._lock:
             if len(self._events) >= MAX_RECORD_EVENTS:
                 self._stopped_by_limit = True
+                self._n_limit_dropped += 1
                 return
             if ev.kind == "move":
                 if self._last_pos is not None and abs(ev.x - self._last_pos[0]) < MOVE_THRESHOLD_PX \
                         and abs(ev.y - self._last_pos[1]) < MOVE_THRESHOLD_PX:
+                    self._n_filtered += 1
                     return
                 self._last_pos = (ev.x, ev.y)
             else:
@@ -117,4 +137,8 @@ class Recorder:
         with self._lock:
             ox, oy = self._origin or (0, 0)
             return RecordResult(events=list(self._events), origin_x=ox, origin_y=oy,
-                                stopped_by_limit=self._stopped_by_limit)
+                                stopped_by_limit=self._stopped_by_limit,
+                                n_captured=self._n_captured, n_filtered=self._n_filtered,
+                                n_limit_dropped=self._n_limit_dropped,
+                                mouse_listener_died=self._mouse_died,
+                                kb_listener_died=self._kb_died)
