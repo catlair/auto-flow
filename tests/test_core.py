@@ -362,3 +362,38 @@ def test_paths_dirs(tmp_path, monkeypatch):
     d = paths.workflows_dir()
     t = paths.templates_dir()
     assert os.path.isdir(d) and os.path.isdir(t)
+
+
+def test_broadcast_summary_never_mutates_tree():
+    """回归：_public_node 摘要化 events 曾因共享引用摧毁真源
+    （运行报 'str' object has no attribute 'get'，保存即丢数据）。"""
+    from rpc.controller import AppController
+    ctrl = AppController()
+    collected = []
+    ctrl.set_notifier(lambda m, prm: collected.append(m))
+    real_events = [{"ts_ms": 0, "kind": "move", "x": 1, "y": 2},
+                   {"ts_ms": 5, "kind": "key", "key": "a", "pressed": True}]
+    ctrl.workflow.nodes.append(Node(type="record_replay", params={
+        "events": list(real_events), "origin_x": 0, "origin_y": 0,
+        "use_relative": True}))
+    ctrl._broadcast_workflow()
+    node = ctrl.workflow.nodes[0]
+    # 真源必须是完整 list，且元素仍为 dict
+    assert isinstance(node.params["events"], list) and len(node.params["events"]) == 2
+    # 广播里是摘要
+    assert isinstance(node.params["events"], list)
+    # 再广播一次并保存，事件不丢
+    ctrl._broadcast_workflow()
+    import tempfile, os
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    ctrl.workflow_save(path)
+    wf = Workflow.load(path)
+    evs = wf.nodes[0].params["events"]
+    assert isinstance(evs, list) and len(evs) == 2 and evs[1]["key"] == "a"
+    os.unlink(path)
+    # RecordReplayTask 在真源上可正常运行（不再触发 'str' has no get）
+    from tasks.builtin import tolerant_event
+    evs2 = [tolerant_event(x) for x in node.params["events"]]
+    assert all(e is not None for e in evs2)
+    ctrl.shutdown()

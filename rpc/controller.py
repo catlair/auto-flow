@@ -102,11 +102,15 @@ class AppController:
         全量数组会随 workflow.changed 广播，每次改参数都重传几十 MB——
         既拖慢管道又挤占通知队列。真源仍是后端内存树，save 时完整落盘。
         """
-        d = node.to_dict()
-        evs = d.get("params", {}).get("events")
+        params = node.params
+        evs = params.get("events")
         if isinstance(evs, list):
-            d["params"]["events"] = {"count": len(evs)}
-        return d
+            # 【不可变更原树】node.to_dict() 的 params 是原引用，直接改会摧毁
+            # 真源里的 events（运行报 'str' object has no attribute 'get'，
+            # 且保存即数据丢失）——必须另建浅拷贝视图。
+            params = {**params, "events": {"count": len(evs)}}
+        return {"type": node.type, "params": params,
+                "enabled": node.enabled, "uid": node.uid}
 
     def _public_workflow(self) -> dict:
         with self._lock:

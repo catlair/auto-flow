@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pynput.mouse import Button
 
+from typing import Optional
+
 from tasks.base import BaseTask, ParamDef, register
 from core.player import PlayOptions
 from core.events import MacroEvent
@@ -12,8 +14,11 @@ from core.keymap import name_to_key
 HOTKEY_NAMES = {"F9", "F10", "F11"}
 
 
-def tolerant_event(d: dict) -> MacroEvent:
-    """容忍缺字段/多字段的 MacroEvent 构造。"""
+def tolerant_event(d: dict) -> Optional[MacroEvent]:
+    """容忍缺字段/多字段的 MacroEvent 构造；非 dict（如损坏文件的字符串/摘要
+    {"count":N}）返回 None，由调用方跳过——绝不抛 'str' has no 'get'。"""
+    if not isinstance(d, dict):
+        return None
     keys = {"ts_ms", "kind", "key", "button", "pressed", "x", "y", "wheel_dx", "wheel_dy"}
     defaults = {"ts_ms": 0, "kind": "move", "key": None, "button": None, "pressed": None,
                 "x": 0, "y": 0, "wheel_dx": 0, "wheel_dy": 0}
@@ -119,7 +124,7 @@ class RecordReplayTask(BaseTask):
 
     def run(self, ctx) -> None:
         p = ctx.params
-        events = [tolerant_event(e) for e in (p.get("events") or [])]
+        events = [e for e in (tolerant_event(x) for x in (p.get("events") or [])) if e]
         repeat = max(int(p.get("repeat", 1)), 1)
         for _ in range(repeat):
             if ctx.stopping:
