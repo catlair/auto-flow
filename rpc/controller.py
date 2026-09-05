@@ -197,7 +197,7 @@ class AppController:
                 inserted = max(0, index)
                 self.workflow.nodes.insert(inserted, node)
         self._broadcast_workflow()
-        return {"index": inserted, "node": self._public_node(node)}
+        return {**self.workflow_current(), "index": inserted, "node": self._public_node(node)}
 
     def node_remove(self, index: int) -> dict:
         with self._lock:
@@ -359,7 +359,7 @@ class AppController:
             self.workflow.nodes.append(node)
             inserted = len(self.workflow.nodes) - 1
         self._broadcast_workflow()
-        return {"index": inserted, "node": self._public_node(node)}
+        return {**self.workflow_current(), "index": inserted, "node": self._public_node(node)}
 
     # ---- 热键 / 键盘捕获（P1-3，§3.2 + §9 说明） ----
     def _ensure_key_listener(self) -> None:

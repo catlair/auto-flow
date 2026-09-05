@@ -140,6 +140,14 @@ export const useAppStore = defineStore("app", {
     },
 
     handleNotification(n: JsonRpcNotification) {
+      // 单条通知处理异常不能打死后续通知
+      try {
+        this._handleNotification(n);
+      } catch (e) {
+        console.error("[rpc] 通知处理失败:", n.method, e);
+      }
+    },
+    _handleNotification(n: JsonRpcNotification) {
       switch (n.method) {
         case "workflow.changed":
           this.applyWorkflow(n.params.workflow);
@@ -224,21 +232,40 @@ export const useAppStore = defineStore("app", {
     },
 
     // ---- 节点 CRUD（均调后端，结构变更经 workflow.changed 回写） ----
+    // 结构操作一律以 RPC 响应为准刷新（workflow.current）：
+    // workflow.changed 通知经 Tauri 事件转发偶发丢失，会让页面停在旧状态
+    // （「删除节点后页面不刷新」的根因）；通知仅作广播冗余。
+    applyCurrent(cur: { workflow: Workflow; running?: boolean; recording?: boolean }) {
+      this.applyWorkflow(cur.workflow, cur.running, cur.recording);
+      if (this.selectedIndex >= this.workflow.nodes.length)
+        this.selectedIndex = this.workflow.nodes.length - 1;
+    },
     async addNode(type: string, index?: number) {
       const r = await rpc.request("node.add", { type, index });
+      this.applyCurrent(r);
       return r.index as number;
     },
     async removeNode(index: number) {
-      await rpc.request("node.remove", { index });
+      const cur = await rpc.request("node.remove", { index });
+      this.applyCurrent(cur);
+      if (this.selectedIndex === index) this.selectNode(-1);
     },
     async moveNode(index: number, to: number) {
-      await rpc.request("node.move", { index, to });
+      const cur = await rpc.request("node.move", { index, to });
+      this.applyCurrent(cur);
     },
     async toggleNode(index: number, enabled: boolean) {
-      await rpc.request("node.toggle", { index, enabled });
+      const cur = await rpc.request("node.toggle", { index, enabled });
+      this.applyCurrent(cur);
     },
     async setParam(index: number, key: string, value: any) {
-      await rpc.request("node.params.set", { index, key, value });
+      const cur = await rpc.request("node.params.set", { index, key, value });
+      this.applyCurrent(cur);
+    },
+    clearRecord() {
+      this.recordBuffer = [];
+      this.lastRecordCount = 0;
+      this.lastRecordInfo = null;
     },
     selectNode(index: number) {
       this.selectedIndex = index;
@@ -246,11 +273,13 @@ export const useAppStore = defineStore("app", {
 
     // ---- 工作流 ----
     async newWorkflow() {
-      await rpc.request("workflow.new");
+      const cur = await rpc.request("workflow.new");
+      this.applyCurrent(cur);
       this.selectedIndex = -1;
     },
     async updateWorkflow(patch: Partial<Workflow>) {
-      await rpc.request("workflow.update", { patch });
+      const cur = await rpc.request("workflow.update", { patch });
+      this.applyCurrent(cur);
     },
     async loadWorkflow() {
       const p = await open({ title: "打开工作流", filters: [{ name: "工作流", extensions: ["json"] }] });

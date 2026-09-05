@@ -12,6 +12,20 @@ from typing import Callable
 
 import Quartz
 
+# 预热懒加载符号（见 recorder.py 头注释：与 pynput 鼠标 tap 并发首访会 KeyError）
+from Quartz import (  # noqa: F401
+    CGEventGetLocation,
+    CGEventGetIntegerValueField,
+    CGEventGetFlags,
+    CGEventTapCreate,
+    CGEventTapEnable,
+    CFMachPortCreateRunLoopSource,
+    CFRunLoopAddSource,
+    CFRunLoopRun,
+    CFRunLoopStop,
+    CFRunLoopGetCurrent,
+)
+
 from core.mackeys import modifier_edge, vk_to_name
 
 logger = logging.getLogger("autoflow.keyboard")

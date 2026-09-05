@@ -16,6 +16,26 @@ from core.events import MacroEvent, RecordResult, now_ms
 from core.keymap import key_to_name
 from core.maclistener import MacKeyboardListener
 
+# pyobjc 的框架懒加载符号表非线程安全：keyboard tap 线程（maclistener）与
+# pynput 鼠标 tap 线程并发首次访问 Quartz 符号会 KeyError('CGEventGetLocation')，
+# 异常被 pynput 吞掉后【每条鼠标点击都丢失】（move 分支不访问该符号故幸存）。
+# 导入期（单线程）主动解析全部后续会用到的符号，之后进程内命中缓存。
+from Quartz import (  # noqa: F401
+    CGEventGetLocation,
+    CGEventGetIntegerValueField,
+    CGEventGetFlags,
+    CGEventPost,
+    CGEventCreateKeyboardEvent,
+    CGEventSetIntegerValueField,
+    CGEventTapCreate,
+    CGEventTapEnable,
+    CFMachPortCreateRunLoopSource,
+    CFRunLoopAddSource,
+    CFRunLoopRun,
+    CFRunLoopStop,
+    CFRunLoopGetCurrent,
+)
+
 MOVE_THRESHOLD_PX = 4
 MAX_RECORD_EVENTS = 100000
 

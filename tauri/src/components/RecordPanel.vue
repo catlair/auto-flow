@@ -52,6 +52,13 @@ async function onToNode() {
     >
       写入节点{{ store.lastRecordCount ? `（${store.lastRecordCount} 事件）` : "" }}
     </t-button>
+    <t-button
+      size="small"
+      variant="outline"
+      :disabled="store.recording"
+      @click="store.clearRecord()"
+      >清空</t-button
+    >
     <div v-if="store.lastRecordInfo" class="af-rec-stats">
       已录 {{ store.lastRecordInfo.count }} 条事件<template v-if="store.lastRecordInfo.filtered">
         · 阈值过滤微移动 {{ store.lastRecordInfo.filtered }} 条</template><template v-if="store.lastRecordInfo.limit_dropped">

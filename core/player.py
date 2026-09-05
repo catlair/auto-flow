@@ -90,6 +90,11 @@ class Player:
                     self._play_key(ev, opt, pressed_keys)
                 elif ev.kind in ("mouse", "move", "wheel"):
                     target = (ev.x + dx, ev.y + dy)
+                    # 滑行消耗时间预算；已到位（点击/原地事件）也必须等到计划
+                    # 时间点再执行——否则 press/release 挤在上一事件后立刻发出，
+                    # 与录制时序脱节，表现为「点击录到了但回放无效果」。
+                    if math.hypot(target[0] - pos[0], target[1] - pos[1]) < 1:
+                        self._wait(max(budget_s, 0.0))
                     pos = self._glide(pos, target, max(budget_s, 0.0))
                     if ev.kind == "mouse":
                         btn = self._button(ev.button)
