@@ -109,8 +109,8 @@ class AppController:
             # 真源里的 events（运行报 'str' object has no attribute 'get'，
             # 且保存即数据丢失）——必须另建浅拷贝视图。
             params = {**params, "events": {"count": len(evs)}}
-        return {"type": node.type, "params": params,
-                "enabled": node.enabled, "uid": node.uid}
+        return {"type": node.type, "params": params, "enabled": node.enabled,
+                "uid": node.uid, "name": node.name}
 
     def _public_workflow(self) -> dict:
         with self._lock:
@@ -213,6 +213,13 @@ class AppController:
                 raise ControllerError(-32602, "目标索引越界", {"to": to})
             self.workflow.nodes.pop(index)
             self.workflow.nodes.insert(to, node)
+        self._broadcast_workflow()
+        return self.workflow_current()
+
+    def node_rename(self, index: int, name: str) -> dict:
+        name = str(name or "").strip()[:50]
+        with self._lock:
+            self._node_at(index).name = name
         self._broadcast_workflow()
         return self.workflow_current()
 

@@ -17,8 +17,23 @@ watch(
   { deep: true }
 );
 
-function defName(type: string): string {
-  return store.nodeDefsByName[type]?.name ?? type;
+function displayName(n: any): string {
+  return (n.name && n.name.trim()) || store.nodeDefsByName[n.type]?.name || n.type;
+}
+
+const renaming = ref(-1);
+const renameText = ref("");
+function startRename(i: number) {
+  renaming.value = i;
+  renameText.value = store.workflow.nodes[i]?.name || "";
+  const el = document.getElementById(`af-rename-${i}`) as HTMLInputElement | null;
+  if (el) { el.focus(); el.select(); }
+}
+async function commitRename(i: number) {
+  const name = renameText.value.trim();
+  renaming.value = -1;
+  if ((store.workflow.nodes[i]?.name || "") !== name)
+    await store.renameNode(i, name);
 }
 
 function onEnd(e: { oldIndex?: number; newIndex?: number }) {
@@ -45,7 +60,6 @@ async function onRemove(index: number) {
 
 <template>
   <div>
-    <div class="af-panel-title">节点列表</div>
     <t-select
       placeholder="添加节点…"
       :value="null"
@@ -68,13 +82,30 @@ async function onRemove(index: number) {
           :class="{ sel: index === store.selectedIndex }"
           @click="store.selectNode(index)"
         >
+          <span class="af-node-idx">{{ index + 1 }}</span>
           <t-switch
             :value="element.enabled"
             size="small"
             @change="(v: boolean) => onToggle(index, v)"
             @click.stop
           />
-          <span class="af-node-name">{{ defName(element.type) }}</span>
+          <span
+            v-if="renaming !== index"
+            class="af-node-name"
+            :title="displayName(element) + '（双击改名）'"
+            @dblclick.stop="startRename(index)"
+            >{{ displayName(element) }}</span
+          >
+          <input
+            v-else
+            :id="`af-rename-${index}`"
+            v-model="renameText"
+            class="af-rename-input"
+            @click.stop
+            @keydown.enter.prevent="commitRename(index)"
+            @keydown.esc="renaming = -1"
+            @blur="commitRename(index)"
+          />
           <t-button
             size="small"
             variant="text"
@@ -106,9 +137,32 @@ async function onRemove(index: number) {
   border-color: #0052d9;
   background: #f2f7ff;
 }
+.af-node-idx {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #eef2f8;
+  color: #666;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  flex: none;
+}
 .af-node-name {
   flex: 1;
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.af-rename-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #0052d9;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  outline: none;
 }
 .af-empty {
   color: #999;

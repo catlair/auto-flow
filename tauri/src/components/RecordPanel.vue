@@ -35,37 +35,35 @@ async function onToNode() {
 
 <template>
   <div>
-    <div class="af-panel-title">录制</div>
-    <t-button
-      block
-      :theme="store.recording ? 'warning' : 'primary'"
-      @click="onToggleRecord"
-    >
-      {{ store.recording ? "停止录制" : "开始录制" }}
+    <t-button block :theme="store.recording ? 'danger' : 'primary'" @click="onToggleRecord">
+      {{ store.recording ? "■ 停止录制 (F9)" : "● 开始录制 (F9)" }}
     </t-button>
-    <t-button
-      block
-      variant="outline"
-      style="margin-top: 8px"
-      :disabled="store.recording || store.lastRecordCount === 0"
-      @click="onToNode"
-    >
-      写入节点{{ store.lastRecordCount ? `（${store.lastRecordCount} 事件）` : "" }}
-    </t-button>
-    <t-button
-      size="small"
-      variant="outline"
-      :disabled="store.recording"
-      @click="store.clearRecord()"
-      >清空</t-button
-    >
+    <div v-if="store.recording" class="af-rec-live">
+      <span class="af-dot pulse" /> 录制中…（快捷键 F9 停止）
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 8px">
+      <t-button
+        style="flex: 1"
+        variant="outline"
+        :disabled="store.recording || store.lastRecordCount === 0"
+        @click="onToNode"
+      >
+        写入节点{{ store.lastRecordCount ? `（${store.lastRecordCount}）` : "" }}
+      </t-button>
+      <t-button
+        variant="outline"
+        :disabled="store.recording"
+        @click="store.clearRecord()"
+        >清空</t-button
+      >
+    </div>
     <div v-if="store.lastRecordInfo" class="af-rec-stats">
       已录 {{ store.lastRecordInfo.count }} 条事件<template v-if="store.lastRecordInfo.filtered">
         · 阈值过滤微移动 {{ store.lastRecordInfo.filtered }} 条</template><template v-if="store.lastRecordInfo.limit_dropped">
         · 超限丢弃 {{ store.lastRecordInfo.limit_dropped }} 条</template><template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
         · <span style="color:#e34d59">监听中断</span></template>
     </div>
-    <div class="af-stream">
+    <div class="af-stream" :class="{ live: store.recording }">
       <div v-if="store.recordBuffer.length > 200" class="af-more">
         共 {{ store.recordBuffer.length }} 条，仅显示最近 200 条（回放以完整数据为准）
       </div>
@@ -79,6 +77,29 @@ async function onToNode() {
 </template>
 
 <style scoped>
+.af-rec-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #e34d59;
+}
+.af-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e34d59;
+  animation: af-pulse 1s infinite;
+}
+@keyframes af-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.af-stream.live {
+  border-color: #ffb3b3;
+}
 .af-stream {
   margin-top: 8px;
   max-height: 200px;

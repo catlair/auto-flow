@@ -41,6 +41,8 @@ export interface WorkflowNode {
   enabled: boolean;
   /** 后端生成的稳定唯一 id：列表渲染/拖拽 key 不得用 type 或 index */
   uid?: string;
+  /** 自定义名（空则 UI 显示类型名） */
+  name?: string;
 }
 
 export interface Workflow {

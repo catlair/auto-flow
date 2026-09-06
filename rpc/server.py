@@ -240,6 +240,7 @@ _HANDLERS = {
     "node.remove": _ctl(lambda p: _CTRL.node_remove(p.get("index", -1))),
     "node.move": _ctl(lambda p: _CTRL.node_move(p.get("index", -1), p.get("to", -1))),
     "node.toggle": _ctl(lambda p: _CTRL.node_toggle(p.get("index", -1), p.get("enabled", True))),
+    "node.rename": _ctl(lambda p: _CTRL.node_rename(p.get("index", -1), p.get("name", ""))),
     "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"), p.get("value"))),
     "nodes.definitions": _ctl(lambda p: _CTRL.nodes_definitions()),
     # --- 运行 / 录制（§5/§9.5，P1-2） ---

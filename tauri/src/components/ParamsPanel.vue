@@ -96,7 +96,6 @@ onBeforeUnmount(() => unsub?.());
 
 <template>
   <div>
-    <div class="af-panel-title">参数</div>
     <div v-if="!selected" class="af-empty">未选择节点。</div>
     <div v-else class="af-form">
       <div v-for="p in allParams" :key="p.key" class="af-field">

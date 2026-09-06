@@ -33,6 +33,7 @@ export const useAppStore = defineStore("app", {
     nextFire: "",
     recordBuffer: [] as any[],
     runProgress: { done: 0, total: 0 } as { done: number; total: number },
+    runNodeType: "" as string,
     banner: "" as string,
     bannerKind: "ok" as "ok" | "warn" | "error",
     // key.captured 订阅（ParamsPanel 捕获键时接收回填）
@@ -189,12 +190,14 @@ export const useAppStore = defineStore("app", {
           this.lastRecordInfo = n.params;
           break;
         case "run.node":
+          this.runNodeType = n.params.type ?? "";
           break;
         case "run.progress":
           this.runProgress = { done: n.params.done, total: n.params.total };
           break;
         case "run.finished":
           this.running = false;
+          this.runNodeType = "";
           this.runProgress = { done: 0, total: 0 };
           break;
         case "run.error":
@@ -252,6 +255,10 @@ export const useAppStore = defineStore("app", {
     },
     async moveNode(index: number, to: number) {
       const cur = await rpc.request("node.move", { index, to });
+      this.applyCurrent(cur);
+    },
+    async renameNode(index: number, name: string) {
+      const cur = await rpc.request("node.rename", { index, name });
       this.applyCurrent(cur);
     },
     async toggleNode(index: number, enabled: boolean) {

@@ -57,15 +57,17 @@ class Node:
     params: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     uid: str = field(default_factory=lambda: uuid.uuid4().hex)  # 前端列表/拖拽 key，稳定唯一
+    name: str = ""                              # 自定义名（空则显示类型名）
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "params": self.params,
-                "enabled": self.enabled, "uid": self.uid}
+        return {"type": self.type, "params": self.params, "enabled": self.enabled,
+                "uid": self.uid, "name": self.name}
 
     @staticmethod
     def from_dict(d: dict) -> "Node":
         return Node(type=d.get("type", ""), params=d.get("params") or {},
-                    enabled=d.get("enabled", True), uid=d.get("uid") or uuid.uuid4().hex)
+                    enabled=d.get("enabled", True), uid=d.get("uid") or uuid.uuid4().hex,
+                    name=str(d.get("name") or ""))
 
 
 @dataclass
