@@ -75,3 +75,27 @@ def isolate_desktop_and_schedule(monkeypatch, tmp_path):
     # 不读取、也不写回用户真实 config.json（定时配置）
     monkeypatch.setattr(AppController, "_schedule_load", lambda self: {})
     monkeypatch.setattr(AppController, "_schedule_save", lambda self, cfg: None)
+
+
+@pytest.fixture(autouse=True)
+def block_real_screen_capture(monkeypatch):
+    """默认禁止真实截屏。
+
+    截屏本身是只读的，但在**别人的机器上跑测试**时它会：① 触发「屏幕录制」
+    TCC 授权弹窗；② 在 headless 会话里阻塞或抛底层错误；③ 把测试结果绑定到
+    当时的桌面内容上（不可复现）。
+
+    需要截图的用例请显式替换 `vision._raw_screens`（见 `tests/test_vision.py`
+    的假显示器写法），它会覆盖这里的默认桩。
+    """
+    from core import vision
+
+    def blocked(*_args, **_kwargs):
+        raise RuntimeError(
+            "测试环境禁止真实截屏：请 monkeypatch core.vision._raw_screens "
+            "返回假显示器（参考 tests/test_vision.py）")
+
+    monkeypatch.setattr(vision, "_raw_screens", blocked)
+    monkeypatch.setattr(vision, "_quartz_capture", blocked)
+
+

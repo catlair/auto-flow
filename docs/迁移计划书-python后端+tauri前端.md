@@ -430,7 +430,7 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 | `ui/scheduler.py` 第 79 行 | 用 `QTime(hh, mm)`，但 `QtCore` 只导入了 `Qt, QTimer, Signal, QObject` | 「定时运行」对话框点确定即 `NameError`，定时功能实际不可用 | ✅ 已修 |
 | `ui/scheduler.py::_apply` | 未选工作流时 `path_edit.text()` 是占位文本「（未选择）」，为 truthy 会绕过 `bool(workflow_path)` 校验 | 定时器被启用但路径非法，到点触发必然 `Workflow.load` 失败 | ✅ 已修 |
 | `tasks/builtin.py` | 5 个节点同时用 `@register` 类装饰器与末尾 `register(实例)`，注册两次 | 无害但冗余，且决定菜单顺序（见 §9.4） | ⬜ 待办 |
-| `core/vision.py::grab_screen_bgr` | 只取 `sct.monitors[1]`（主屏），scale 也只按主屏算 | 多屏环境下图像/OCR/YOLO 只在主屏生效（已知限制，迁移后保持，写进帮助） |
+| `core/vision.py::grab_screen_bgr` | 只取 `sct.monitors[1]`（主屏），scale 也只按主屏算 | 多屏环境下图像/OCR/YOLO 只在主屏生效，副屏坐标还会点歪 | ✅ 已修（多屏，2026-09-11，见 §15.5） |
 | `tasks/builtin.py::KeyboardInputTask` | `pynput` 的 `kb.type()` 只支持 ASCII | 「键盘输入-文本」填中文会失败；改进方案：走 `CGEventKeyboardSetUnicodeString` 或剪贴板粘贴 |
 | `ui/main_window.py` | `self.use_rel_check = None`、`EventsEditMixin` 空类 | 死代码，清理 |
 
@@ -451,8 +451,8 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 取消时不覆盖原值；定时对话框断言构造成功、`_apply` 在空路径时拒绝启用、正常路径下
 `nextFire` 计算正确。10 项断言全部通过；`pytest tests/` 24 例全通过（未回归）。
 
-**未做**：多屏支持（`vision` 只取 `monitors[1]`）、`pynput kb.type()` 中文输入、
-节点双注册与菜单顺序（§9.4）——这三项属行为变更，放在 P0.5/P4 与迁移一并处理。
+**未做**：`pynput kb.type()` 中文输入、节点双注册与菜单顺序（§9.4）——这两项属行为变更，
+放在 P0.5/P4 与迁移一并处理。**多屏支持已于 2026-09-11 完成，见 §15.5。**
 
 ### 15.2 授权持久性 spike（P0-S）构建与状态（2026-09-01）
 
@@ -607,6 +607,49 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
   窗体启动 + 前端↔Rust↔sidecar 三方联调需在用户的 Aqua 会话里 `npm run tauri dev` 或双击 `.app`。
 `tauri/README.md` 已更正前置步骤（Rust 已在、sidecar 复制目标目录）与运行命令。
 
+### 15.5 多屏支持（原 §15.1 划入 P4 的项，2026-09-11 完成）
+
+§15.1 把「多屏支持」归入 P0.5/P4 一并处理；P0.5 已收口，本次按 P4 项完成。
+
+**问题**（§15 表内那一行，实际是三个独立缺陷）
+
+1. 只截 `sct.monitors[1]`：副屏上的目标永远「找不到」。
+2. `_scale_factor()` 拿 `NSScreen.mainScreen()` 的逻辑宽度当分母。**混合
+   Retina 双屏下每块屏比例不同**——副屏 1440 逻辑点 / 2880 物理像素，却按
+   主屏 1280 算，得到 1.125 而非 2.0，匹配出的坐标整体缩放错。
+3. 返回的是「截图内像素 / scale」，**不含该屏的全局偏移**。副屏不在 (0,0)
+   时点击落到主屏上——比「找不到」更糟：点错地方且不报错。
+
+**改法**：`core/vision.py` 引入 `ScreenCapture(image, scale, left, top)`；
+`captures()` 枚举全部显示器（跳过 mss 的合成屏 `monitors[0]`）；
+`find_template()` 逐屏匹配取最高分，坐标经 `to_global()` 换算成全局逻辑坐标。
+
+- `scale = 图宽 / monitor["width"]`，用**被截那块屏自己**的宽度算：天然兼容
+  mss 返回物理像素或名义分辨率两种情形（mss 10.2 的 `IMAGE_OPTIONS` 含
+  `kCGWindowImageNominalResolution`，常态即逻辑尺寸、scale=1）。
+- 主屏按「Quartz 全局坐标里原点恒为 (0,0)」识别，不依赖 mss 枚举顺序。
+- `grab_region_bgr()` 改为返回 `ScreenCapture`（带实际截到那块的原点），
+  跨屏区域取重叠面积最大的一块屏；负坐标区域（副屏在主屏左侧）不再裁错位。
+- `core/ocr.py` 的框换算走 `_center_from_box()`；`tasks/builtin.py` 新增
+  `detect_on_all_screens()`，YOLO 结果加上所在屏偏移后**跨屏统一按置信度排序**
+  ——否则「命中序号」在双屏下会选错目标。
+- `grab_screen_bgr()` 保留（§11 的权限文档引用此符号），语义仍是主屏。
+
+**验证**（`tests/test_vision.py`，20 例，全部用假显示器，不碰真实屏幕）
+
+- 假双屏刻意做成混合 Retina（1280x832@1x + 1440x900@2x）：旧实现在这组数据上
+  算出的 scale 是 1.125，正确值 2.0。
+- 反向验证：把 `captures()` 退回「只取第一块屏」、`scale` 退回「按主屏宽度」，
+  **9 例失败**；恢复后全绿。
+- 真机冒烟（真实 `mss` + AppKit，只读）：`captures()` 得 1 块屏
+  `left=0 top=0 scale=1.0 图=1280x832`；取高方差区域当模板自匹配，
+  `found=True score=1.0000`，坐标 `(810,240)` 与期望一致；区域裁剪
+  `left/top=(100,100)`、尺寸 200x120 与 scale 吻合。
+- 全量：Python **71 passed**、前端 20 passed、`vue-tsc` 通过。
+
+**遗留**：Quartz 兜底路径（mss 枚举不到显示器时）拿到的是所有屏的并集位图，
+只能有一个全局 scale，混合 Retina 下该路径存在已知近似；正常路径不受影响。
+
 ---
 
 ## 16. 持久化与配置分工
@@ -670,6 +713,9 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
+
+> **2026-09-11 补充**：§15.1 划入 P4 的「多屏支持」已完成（见 §15.5）。P4 余下项
+> （拖拽排序、事件流虚拟滚动、中文输入改进、诊断面板、崩溃重连提示、节点顺序、死代码清理）未动。
 
 **进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
 P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。P3 签名基础设施已落地并提交 `8caf38b`：`scripts/sign_tauri_app.sh` 对 `.app` 做 MacDev 双签 + 强化运行时（`--options runtime`）+ 安全时间戳，自底向上先签 sidecar 再签 `.app` 外壳（已实跑验证主二进制与 sidecar 均 `flags=0x10000(runtime)`、`Authority=MacDev`、整体 `valid on disk`）；`scripts/sync_app.sh` 改指 Tauri 产物、签名自检后 `cp -R` 到 `/Applications` 并去 quarantine、`open`；`docs/权限引导.md` 写就三项隐私权限作用与授予方式。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview，前端↔Rust↔sidecar 三方需双击 `.app` 或 `npm run tauri dev` 验证）；② 可选 notarization——提供 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` 后 `bash scripts/sign_tauri_app.sh` 实跑 `notarytool submit --wait` + `stapler staple`，即可免手动授权弹窗直接分发。

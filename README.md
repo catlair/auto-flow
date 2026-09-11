@@ -17,6 +17,7 @@
 - **录制回放**：全局监听键鼠 → 轨迹插值回放（10px 步长平滑移动，不瞬移）
 - **图像匹配**：截屏找图 → 点击/双击/移动到目标，可设置信度、超时重试、找不到时跳过或停止；参数面板里可直接「截取模板」框选屏幕取图（Retina 坐标自动换算）
 - **相对坐标**：以录制时首个鼠标位置为原点，回放时设定新基点，整条轨迹平移
+- **多显示器**：图像匹配 / OCR / YOLO 遍历**所有**屏幕，坐标按所在屏换算成全局逻辑坐标；混合 Retina（一块 2x 一块 1x）也正确
 - **循环与调速**：整体循环次数、全局速度倍率，录制回放节点还可单独设速度/重复
 - **全局热键**：F9 录制开关 / F10 运行与停止 / F11 取基点
 - **定时运行**：菜单「工具→定时运行」，支持每天固定时刻或固定间隔自动运行指定工作流
@@ -85,7 +86,7 @@ workflows/       # 工作流 JSON 存放处
 ## 开发
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q   # Python 测试（50 例，已隔离键鼠/配置副作用）
+./.venv/bin/python -m pytest tests/ -q   # Python 测试（71 例，已隔离键鼠/屏幕/配置副作用）
 npm --prefix tauri test                  # 前端测试（node --test，20 例：store + RPC 客户端）
 npm --prefix tauri run build             # vue-tsc 类型检查 + 前端构建
 QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 旧 Qt 入口无界面冒烟（迁移期保留）

@@ -26,6 +26,25 @@ def tolerant_event(d: dict) -> Optional[MacroEvent]:
     return MacroEvent(**data)
 
 
+def detect_on_all_screens(engine, conf: float) -> list:
+    """在所有显示器上跑检测，坐标统一换算成**全局逻辑坐标**。
+
+    单屏时等价于原来的「主屏检测」；多屏时目标在哪块屏上都能找到，
+    且 `d.x/d.y` 已加上该屏的 `left/top` 偏移，可直接用于点击。
+    """
+    from core import vision
+    dets: list = []
+    for cap in vision.captures():
+        if cap.image.size == 0:
+            continue
+        for d in engine.detect_bgr(cap.image, cap.scale, conf):
+            d.x += cap.left
+            d.y += cap.top
+            dets.append(d)
+    dets.sort(key=lambda d: -d.confidence)
+    return dets
+
+
 class MouseActionTask(BaseTask):
     type = "mouse"
     name = "鼠标操作"
@@ -246,7 +265,7 @@ class YoloClickTask(BaseTask):
 
     def run(self, ctx) -> None:
         import time as _time
-        from core import yolo, vision
+        from core import yolo
         from core.paths import default_model
         p = ctx.params
         model = str(p.get("model_path") or "") or default_model()
@@ -259,8 +278,7 @@ class YoloClickTask(BaseTask):
         while True:
             if ctx.player.stopping:
                 return
-            screen, scale = vision.grab_screen_bgr()
-            dets = [d for d in engine.detect_bgr(screen, scale, float(p.get("confidence", 0.5)))
+            dets = [d for d in detect_on_all_screens(engine, float(p.get("confidence", 0.5)))
                     if not label or d.label == label]
             if len(dets) >= want_idx:
                 d = dets[want_idx - 1]
@@ -315,11 +333,10 @@ class ConditionTask(BaseTask):
                 model = str(p.get("model_path") or "") or default_model()
                 if not model:
                     return False
-                screen, scale = vision.grab_screen_bgr()
                 engine = yolo.get_engine(model)
                 label = str(p.get("label", "")).strip()
                 conf = min(float(p.get("confidence", 0.8)), 0.99)
-                dets = engine.detect_bgr(screen, scale, conf)
+                dets = detect_on_all_screens(engine, conf)
                 return any(not label or d.label == label for d in dets)
             m = vision.find_template(float(p.get("confidence", 0.8)),
                                      template_path=str(p.get("image_path", "")))
