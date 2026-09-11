@@ -16,6 +16,7 @@ Retina/非 Retina 的双屏下两块屏比例不同，用错就整体点偏。
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import cv2
@@ -24,6 +25,8 @@ import mss
 
 # mss 10.2 起 `mss.mss` 弃用并改名 `mss.MSS`；两者并存期取新的，老版本回退旧名。
 _MSS = getattr(mss, "MSS", None) or mss.mss
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,6 +85,39 @@ def _captures_from(raw: list[tuple[dict, np.ndarray]]) -> list[ScreenCapture]:
             top=int(mon["top"]),
         ))
     return caps
+
+
+# 「几乎是纯色」的判定阈值（0~255 尺度）。正常界面截图的 std 远大于 1，
+# 而纯色图的 std 恰为 0，留 1 的余量只为挡压缩噪声。
+_FLAT_STD = 1.0
+_flat_warned = False
+
+
+def _is_flat(img: np.ndarray) -> bool:
+    """图像是否近似纯色。
+
+    纯色图会让 `TM_CCOEFF_NORMED` 变成退化输入（方差为 0 → 0/0），结果是
+    **未定义的**：实测同一张纯色屏上，40x60 的纯色模板得到 `max=1.0 @ (0,0)`，
+    40x20 的得到 `0.0`（差异来自 OpenCV 的 SIMD 尾块处理）。也就是说
+    「纯色模板」会**随机地**在左上角报出满分命中——比报「找不到」危险得多：
+    工作流会点向屏幕左上角，而且不报错。
+
+    所以不能依赖 OpenCV 的退化结果，必须自己拦。
+
+    实测触发场景：没授予「屏幕录制」权限时 mss 会返回一张全均匀的图
+    （此时 scale 往往还是 2.0）；用户若在这种状态下「截取模板」，存下的
+    就是纯色模板。
+    """
+    return img.size == 0 or float(img.std()) < _FLAT_STD
+
+
+def _warn_flat_once() -> None:
+    global _flat_warned
+    if not _flat_warned:
+        _flat_warned = True
+        logger.warning(
+            "屏幕截图近似纯色，已跳过匹配。最常见原因是没有授予「屏幕录制」权限"
+            "（系统设置 → 隐私与安全性 → 屏幕录制），也可能是屏幕处于全黑/锁屏状态。")
 
 
 def captures() -> list[ScreenCapture]:
@@ -223,12 +259,18 @@ def find_template(threshold: float = 0.8,
             return MatchResult(found=False)
     else:
         tpl = template_bgr
+    if _is_flat(tpl):
+        # 纯色模板：匹配结果无意义，明确报「找不到」而不是返回 (0,0) 的假命中
+        return MatchResult(found=False)
     th, tw = tpl.shape[:2]
     best = MatchResult(found=False)
     for cap in captures():
         screen = cap.image
         # 模板不小于屏幕时 matchTemplate 会直接抛错，跳过这块屏
         if th >= screen.shape[0] or tw >= screen.shape[1]:
+            continue
+        if _is_flat(screen):
+            _warn_flat_once()
             continue
         res = cv2.matchTemplate(screen, tpl, cv2.TM_CCOEFF_NORMED)
         _min, max_val, _loc, max_loc = cv2.minMaxLoc(res)

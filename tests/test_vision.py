@@ -152,13 +152,80 @@ def test_find_template_skips_template_larger_than_screen(monkeypatch):
     """模板比屏幕还大时 matchTemplate 会抛错，必须跳过而不是崩掉。"""
     monkeypatch.setattr(vision, "_raw_screens",
                         lambda: [({"left": 0, "top": 0, "width": 1280, "height": 832},
-                                  _blank(1280, 832))])
-    m = vision.find_template(0.8, template_bgr=_blank(2000, 2000))
+                                  _pattern(1280, 832, seed=5))])
+    m = vision.find_template(0.8, template_bgr=_pattern(2000, 2000, seed=6))
     assert not m.found
 
 
 def test_find_template_missing_file_returns_not_found():
     assert not vision.find_template(0.8, template_path="/nonexistent/tpl.png").found
+
+
+# --------------------------------------------------------------------------- #
+# 纯色（退化输入）防护
+#
+# 背景：纯色图让 TM_CCOEFF_NORMED 变成 0/0 的退化输入，而 OpenCV 的结果
+# **不确定**——实测同一个「纯色屏 + 纯色 40x60 模板」，有的进程跑出
+# max=1.0 @ (0,0)（满分的假命中），有的跑出 0.0。真机上就复现过一次
+# found=True score=1.0000 落在 (0,0)，即工作流会点向屏幕左上角且不报错。
+#
+# 正因为不确定，用「行为」断言去反向验证这条路不可靠（删掉防护后可能碰巧
+# 还是 0.0）。所以：谓词与诊断各有一个确定性用例，行为用例只作兜底。
+# --------------------------------------------------------------------------- #
+def test_is_flat_detects_uniform_images():
+    """谓词本身：纯色/空图为真，有纹理为假（确定性用例，可反向验证）。"""
+    assert vision._is_flat(_blank(60, 40, (200, 200, 200)))
+    assert vision._is_flat(np.zeros((0, 0, 3), np.uint8))
+    assert not vision._is_flat(_pattern(60, 40, seed=5))
+
+
+def test_find_template_rejects_flat_template(monkeypatch):
+    """纯色模板必须报「找不到」。
+
+    兜底用例：OpenCV 的退化输出不确定，这个断言在某些进程里不加防护也能过；
+    真正保证行为的是上面的谓词用例。
+    """
+    monkeypatch.setattr(vision, "_raw_screens",
+                        lambda: [({"left": 0, "top": 0, "width": 1280, "height": 832},
+                                  _pattern(1280, 832, seed=5))])
+    flat_tpl = np.full((40, 60, 3), 200, np.uint8)
+    m = vision.find_template(0.8, template_bgr=flat_tpl)
+    assert not m.found
+    assert m.score == 0.0
+
+
+def test_flat_screen_is_skipped_and_warned_once(monkeypatch, caplog):
+    """全均匀的截图（典型成因：没给屏幕录制权限）跳过并留一次诊断。
+
+    返回值上与「匹配不到」无法区分，所以这里断言**诊断行为**：权限缺失此前
+    只表现为「节点找不到目标」，用户无从判断是权限问题。这个用例是确定性的，
+    删掉防护后不会有任何日志 → 必然失败。
+    """
+    monkeypatch.setattr(vision, "_raw_screens",
+                        lambda: [({"left": 0, "top": 0, "width": 1280, "height": 832},
+                                  _blank(1280, 832, (30, 30, 30)))])
+    monkeypatch.setattr(vision, "_flat_warned", False, raising=False)
+    tpl = _pattern(40, 20, seed=9)
+    with caplog.at_level("WARNING", logger="core.vision"):
+        assert not vision.find_template(0.8, template_bgr=tpl).found
+        assert not vision.find_template(0.8, template_bgr=tpl).found
+    warnings = [r for r in caplog.records if "屏幕录制" in r.getMessage()]
+    assert len(warnings) == 1, "纯色屏幕的诊断只应记一次，否则重试循环会刷屏"
+
+
+def test_broken_flat_display_does_not_block_the_working_one(monkeypatch):
+    """一块屏纯色（比如没权限的那块）、另一块正常时，仍要在正常那块上找到。"""
+    tpl = _pattern(40, 20, seed=13)
+    good = _blank(1280, 832)
+    good[300:320, 500:540] = tpl
+    raws = [
+        ({"left": 0, "top": 0, "width": 1280, "height": 832}, _blank(1280, 832, (0, 0, 0))),
+        ({"left": 1280, "top": 0, "width": 1280, "height": 832}, good),
+    ]
+    monkeypatch.setattr(vision, "_raw_screens", lambda: raws)
+    m = vision.find_template(0.9, template_bgr=tpl)
+    assert m.found
+    assert (m.x, m.y) == (1280 + 520, 310)
 
 
 # --------------------------------------------------------------------------- #

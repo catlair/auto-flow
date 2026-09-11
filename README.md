@@ -86,7 +86,7 @@ workflows/       # 工作流 JSON 存放处
 ## 开发
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q   # Python 测试（71 例，已隔离键鼠/屏幕/配置副作用）
+./.venv/bin/python -m pytest tests/ -q   # Python 测试（75 例，已隔离键鼠/屏幕/配置副作用）
 npm --prefix tauri test                  # 前端测试（node --test，20 例：store + RPC 客户端）
 npm --prefix tauri run build             # vue-tsc 类型检查 + 前端构建
 QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 旧 Qt 入口无界面冒烟（迁移期保留）
