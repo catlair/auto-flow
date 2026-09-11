@@ -123,20 +123,18 @@ class RecordReplayTask(BaseTask):
         ]
 
     def run(self, ctx) -> None:
+        # 「重复次数」不在此处循环：执行器已按 ctx.params["repeat"] 重复调用本任务，
+        # 两层循环会把 N 次放大成 N² 次（再乘工作流整体循环）。
         p = ctx.params
         events = [e for e in (tolerant_event(x) for x in (p.get("events") or [])) if e]
-        repeat = max(int(p.get("repeat", 1)), 1)
-        for _ in range(repeat):
-            if ctx.stopping:
-                break
-            opt = PlayOptions(
-                speed=float(p.get("speed", 1.0)) * ctx.speed,
-                use_relative=bool(p.get("use_relative", False)),
-                base_x=ctx.base_x, base_y=ctx.base_y,
-                origin_x=int(p.get("origin_x", 0)), origin_y=int(p.get("origin_y", 0)),
-                suppress_keys=set(HOTKEY_NAMES),
-            )
-            ctx.player.play(events, opt, on_progress=ctx.on_progress)
+        opt = PlayOptions(
+            speed=float(p.get("speed", 1.0)) * ctx.speed,
+            use_relative=bool(p.get("use_relative", False)),
+            base_x=ctx.base_x, base_y=ctx.base_y,
+            origin_x=int(p.get("origin_x", 0)), origin_y=int(p.get("origin_y", 0)),
+            suppress_keys=set(HOTKEY_NAMES),
+        )
+        ctx.player.play(events, opt, on_progress=ctx.on_progress)
 
 
 @register

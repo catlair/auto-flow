@@ -82,6 +82,50 @@ def test_executor_order_and_repeat():
     assert ex.running is False
 
 
+@pytest.mark.parametrize("node_repeat,workflow_repeat", [(1, 1), (3, 1), (3, 2), (0, 2)])
+def test_record_replay_repeats_once_per_executor_iteration(monkeypatch, node_repeat, workflow_repeat):
+    """repeat 统一由执行器处理：总回放次数为节点次数 × 工作流次数。"""
+    ex = Executor()
+    plays, errors = [], []
+    monkeypatch.setattr(ex.player, "play", lambda evs, opt, on_progress=None: plays.append((evs, opt)))
+    wf = Workflow(speed=2, repeat=workflow_repeat, nodes=[
+        Node(type="record_replay", params={
+            "repeat": node_repeat, "speed": 1.5,
+            "events": [{"ts_ms": 0, "kind": "move", "x": 10, "y": 20}],
+            "use_relative": True, "origin_x": 10, "origin_y": 20,
+        }),
+    ])
+    ex.run_workflow(wf, base_x=100, base_y=200, on_error=lambda *args: errors.append(args))
+    assert not errors
+    assert len(plays) == max(node_repeat, 1) * workflow_repeat
+    assert all(opt.speed == 3 and opt.base_x == 100 and opt.base_y == 200 for _, opt in plays)
+    assert all(opt.origin_x == 10 and opt.origin_y == 20 and opt.use_relative for _, opt in plays)
+
+
+def test_record_replay_stop_prevents_remaining_repeats(monkeypatch):
+    ex = Executor()
+    plays, done = [], []
+
+    def play(evs, opt, on_progress=None):
+        plays.append(evs)
+        ex.stop_run()
+
+    monkeypatch.setattr(ex.player, "play", play)
+    wf = Workflow(repeat=2, nodes=[Node(type="record_replay", params={"repeat": 3})])
+    ex.run_workflow(wf, on_done=done.append)
+    assert len(plays) == 1
+    assert done == [True]
+
+
+def test_generic_node_repeat_remains_supported(monkeypatch):
+    ex = Executor()
+    waits = []
+    monkeypatch.setattr(ex.player, "wait", waits.append)
+    wf = Workflow(repeat=2, nodes=[Node(type="delay", params={"ms": 10, "repeat": 3})])
+    ex.run_workflow(wf)
+    assert waits == [0.01] * 6
+
+
 def test_executor_condition_gating(monkeypatch):
     """run_workflow 每次重置条件；由条件节点写入后门控后续节点。"""
     ran = []
@@ -364,13 +408,13 @@ def test_paths_dirs(tmp_path, monkeypatch):
     assert os.path.isdir(d) and os.path.isdir(t)
 
 
-def test_broadcast_summary_never_mutates_tree():
+def test_broadcast_summary_never_mutates_tree(tmp_path):
     """回归：_public_node 摘要化 events 曾因共享引用摧毁真源
     （运行报 'str' object has no attribute 'get'，保存即丢数据）。"""
     from rpc.controller import AppController
     ctrl = AppController()
     collected = []
-    ctrl.set_notifier(lambda m, prm: collected.append(m))
+    ctrl.set_notifier(lambda m, prm: collected.append((m, prm)))
     real_events = [{"ts_ms": 0, "kind": "move", "x": 1, "y": 2},
                    {"ts_ms": 5, "kind": "key", "key": "a", "pressed": True}]
     ctrl.workflow.nodes.append(Node(type="record_replay", params={
@@ -380,18 +424,19 @@ def test_broadcast_summary_never_mutates_tree():
     node = ctrl.workflow.nodes[0]
     # 真源必须是完整 list，且元素仍为 dict
     assert isinstance(node.params["events"], list) and len(node.params["events"]) == 2
-    # 广播里是摘要
-    assert isinstance(node.params["events"], list)
-    # 再广播一次并保存，事件不丢
+    # 通知 params 直接是工作流（不是 {workflow: ...}），事件仅发送摘要。
+    method, payload = collected[-1]
+    assert method == "workflow.changed"
+    assert "workflow" not in payload
+    assert payload["nodes"][0]["params"]["events"] == {"count": 2}
+    assert payload == ctrl.workflow_current()["workflow"]
+    # 再广播一次并保存，事件不丢；文件仅写入 pytest 临时目录。
     ctrl._broadcast_workflow()
-    import tempfile, os
-    fd, path = tempfile.mkstemp(suffix=".json")
-    os.close(fd)
+    path = str(tmp_path / "broadcast-roundtrip.json")
     ctrl.workflow_save(path)
     wf = Workflow.load(path)
     evs = wf.nodes[0].params["events"]
     assert isinstance(evs, list) and len(evs) == 2 and evs[1]["key"] == "a"
-    os.unlink(path)
     # RecordReplayTask 在真源上可正常运行（不再触发 'str' has no get）
     from tasks.builtin import tolerant_event
     evs2 = [tolerant_event(x) for x in node.params["events"]]

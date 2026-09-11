@@ -22,6 +22,18 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SIDE = [sys.executable, "-m", "rpc.server"]
 
 
+def _cfg_file() -> str:
+    """定时配置文件路径。
+
+    必须走 core.paths.app_dir()（受 conftest 的 AUTOFLOW_DATA_DIR 控制）：
+    此前硬编码 REPO/config.json，而开发态 config.json 就落在仓库根目录，
+    测试开头会把它删掉——一旦用户配过定时运行，跑一次测试就丢配置。
+    """
+    from core import paths
+
+    return os.path.join(paths.app_dir(), "config.json")
+
+
 def _start() -> subprocess.Popen:
     return subprocess.Popen(
         _SIDE,
@@ -311,7 +323,7 @@ def test_base_pick_returns_coords() -> None:
 
 def test_schedule_configure_and_get() -> None:
     """schedule.configure/get 闭环 + 持久化到 config.json（§9.2）。"""
-    cfg_file = os.path.join(REPO, "config.json")
+    cfg_file = _cfg_file()
     if os.path.exists(cfg_file):
         os.remove(cfg_file)
     p = _start()
@@ -341,7 +353,7 @@ def test_schedule_configure_and_get() -> None:
 def test_schedule_fire_reloads_workflow(tmp_path) -> None:
     """直接驱动控制器：定时触发从磁盘重载工作流并广播 changed/fired（无真实计时等待）。"""
     from rpc.controller import AppController
-    cfg_file = os.path.join(REPO, "config.json")
+    cfg_file = _cfg_file()
     if os.path.exists(cfg_file):
         os.remove(cfg_file)  # 避免启动时装定残留配置
     ctrl = AppController()
@@ -366,6 +378,121 @@ def test_schedule_fire_reloads_workflow(tmp_path) -> None:
         os.remove(cfg_file)
 
 
+def test_schedule_fire_skips_without_touching_current_workflow(tmp_path) -> None:
+    """定时触发的前置校验：不满足条件时既不运行、也不覆盖用户正在编辑的工作流。
+
+    回归：此前是「先替换 self.workflow，再 run_start」——忙时虽然跳过了运行，
+    但编辑态已被定时脚本覆盖；文件缺失/损坏时更糟：会直接跑内存里那个
+    完全不相干的工作流。
+    """
+    from rpc.controller import AppController
+    from core.events import Node
+
+    ctrl = AppController()
+    collected = []
+    ctrl.set_notifier(lambda m, p: collected.append((m, p)))
+    ctrl.workflow.name = "用户正在编辑"
+    ctrl.path = "/tmp/user-editing.json"
+    ctrl.workflow.nodes.append(Node(type="delay", params={"ms": 1}))
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"name": "定时脚本", "nodes": [{"type": "delay", "params": {}}]}))
+    broken = tmp_path / "broken.json"
+    broken.write_text("{ 这不是合法 JSON")
+
+    def fired_reason() -> str:
+        return [p["reason"] for m, p in collected if m == "schedule.fired"][-1]
+
+    # 1) 运行中：不覆盖、不运行
+    ctrl.schedule_configure({"mode": "固定间隔", "intervalMin": 1,
+                             "workflowPath": str(good), "enabled": True})
+    ctrl._schedule_cancel_timer()
+    ctrl.running = True
+    ctrl._schedule_fire()
+    assert fired_reason() == "already_running"
+    assert ctrl.workflow.name == "用户正在编辑"
+    assert ctrl.path == "/tmp/user-editing.json"
+    ctrl.running = False
+
+    # 2) 文件缺失：不运行内存里的旧工作流，也不清空编辑态
+    ctrl.schedule_configure({"mode": "固定间隔", "intervalMin": 1,
+                             "workflowPath": str(tmp_path / "nope.json"), "enabled": True})
+    ctrl._schedule_cancel_timer()
+    ctrl._schedule_fire()
+    assert fired_reason() == "workflow_missing"
+    assert ctrl.workflow.name == "用户正在编辑"
+    assert ctrl.path == "/tmp/user-editing.json"
+
+    # 3) 文件损坏：同上
+    ctrl.schedule_configure({"mode": "固定间隔", "intervalMin": 1,
+                             "workflowPath": str(broken), "enabled": True})
+    ctrl._schedule_cancel_timer()
+    ctrl._schedule_fire()
+    assert fired_reason() == "workflow_load_failed"
+    assert ctrl.workflow.name == "用户正在编辑"
+
+    # 4) 正常路径才替换并运行
+    ctrl.schedule_configure({"mode": "固定间隔", "intervalMin": 1,
+                             "workflowPath": str(good), "enabled": True})
+    ctrl._schedule_cancel_timer()
+    ctrl._schedule_fire()
+    assert ctrl.workflow.name == "定时脚本"
+    assert ctrl.path == str(good)
+    assert [p for m, p in collected if m == "schedule.fired"][-1]["ran"] is True
+    ctrl.shutdown(timeout=2.0)
+
+
+def test_shutdown_stops_running_workflow() -> None:
+    """退出时必须停执行器并等运行线程收尾，否则会残留未释放的按键/鼠标键。"""
+    import tasks.base as tb
+    from rpc.controller import AppController
+    from core.events import Node
+
+    class _SlowShutdown(tb.BaseTask):
+        type = "_test_slow_shutdown"
+        name = "slow"
+        def run(self, ctx):
+            for _ in range(500):
+                if ctx.stopping:
+                    return
+                time.sleep(0.01)
+
+    tb.register(_SlowShutdown())
+    ctrl = AppController()
+    ctrl.workflow.nodes.append(Node(type="_test_slow_shutdown"))
+    ctrl.run_start()
+    assert ctrl.running is True
+    time.sleep(0.05)  # 让运行线程真正进入任务
+    ctrl.shutdown(timeout=2.0)
+    assert ctrl.running is False
+    assert ctrl.executor.running is False
+    assert ctrl._run_thread is None
+
+
+def test_shutdown_stops_recorder() -> None:
+    """退出时录制器必须被停掉（释放 CGEventTap），不能留在监听状态。"""
+    from rpc.controller import AppController
+
+    class _FakeRec:
+        def __init__(self):
+            self.stopped = 0
+        def start(self):
+            pass
+        def poll(self):
+            return []
+        def stop(self):
+            self.stopped += 1
+
+    ctrl = AppController()
+    rec = _FakeRec()
+    ctrl.recorder = rec
+    ctrl.recording = True
+    ctrl._rec_poller_rec = rec
+    ctrl.shutdown(timeout=1.0)
+    assert rec.stopped == 1
+    assert ctrl.recording is False
+    assert ctrl.recorder is None
+
+
 def test_record_subscribe_gates_event_stream() -> None:
     """§3.2：record.subscribe 切换订阅态；未订阅时 _record_poll 不推送 record.event。
 
@@ -374,7 +501,7 @@ def test_record_subscribe_gates_event_stream() -> None:
     from rpc.controller import AppController
     from core.events import MacroEvent
 
-    cfg_file = os.path.join(REPO, "config.json")
+    cfg_file = _cfg_file()
     if os.path.exists(cfg_file):
         os.remove(cfg_file)  # 避免启动装定残留定时配置
 

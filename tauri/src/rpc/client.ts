@@ -13,11 +13,14 @@ import type {
   RpcStatusHandler,
 } from "./types";
 
+/** 默认请求超时（毫秒），见 RpcClient.requestTimeoutMs。 */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+
 class RpcClient {
   private nextId = 1;
   private pending = new Map<
     number,
-    { resolve: (v: any) => void; reject: (e: any) => void }
+    { resolve: (v: any) => void; reject: (e: any) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private buffer = "";
   private listeners = new Set<RpcNotificationHandler>();
@@ -26,6 +29,13 @@ class RpcClient {
   private unlisten: UnlistenFn | null = null;
   private unlistenLifecycle: UnlistenFn[] = [];
   private connected = false;
+
+  /**
+   * 单个请求的超时上限。后端若因死锁、方法未实现或管道卡住而不回帧，
+   * 没有超时的话 Promise 会永久挂起——界面表现为「点了没反应」且无任何提示。
+   * 可在测试或特殊场景下调小。
+   */
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
 
   async connect(): Promise<void> {
     if (this.unlisten) return;
@@ -64,7 +74,19 @@ class RpcClient {
 
   private setStatus(up: boolean, detail: string): void {
     this.connected = up;
+    // 断线时把所有在途请求一并 reject：否则调用方要一直等到超时，
+    // 界面表现为「点了没反应」。这里给出明确原因，便于直接显示。
+    if (!up) this.rejectAllPending(detail || "后端 sidecar 已断开");
     this.statusListeners.forEach((h) => h(up, detail));
+  }
+
+  private rejectAllPending(reason: string): void {
+    const entries = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of entries) {
+      clearTimeout(p.timer);
+      p.reject(new Error(reason));
+    }
   }
 
   onNotify(h: RpcNotificationHandler): () => void {
@@ -118,6 +140,7 @@ class RpcClient {
     const p = this.pending.get(resp.id);
     if (!p) return;
     this.pending.delete(resp.id);
+    clearTimeout(p.timer);
     if (resp.error) {
       const err = new Error(resp.error.message);
       (err as any).code = resp.error.code;
@@ -132,9 +155,17 @@ class RpcClient {
     const id = this.nextId++;
     const req: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          reject(new Error(`RPC 请求超时（${method}，${this.requestTimeoutMs}ms）`));
+        }
+      }, this.requestTimeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
       invoke("send_rpc", { line: JSON.stringify(req) }).catch((e: unknown) => {
+        const p = this.pending.get(id);
+        if (!p) return; // 已超时或被断线 reject，避免二次结算
         this.pending.delete(id);
+        clearTimeout(p.timer);
         reject(e);
       });
     });

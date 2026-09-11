@@ -38,6 +38,8 @@ export const useAppStore = defineStore("app", {
     bannerKind: "ok" as "ok" | "warn" | "error",
     // key.captured 订阅（ParamsPanel 捕获键时接收回填）
     _captured: new Set<CapturedKeyHandler>(),
+    // 合并并发握手（首连与 rpc_up 事件可能同时触发）
+    _handshaking: false,
   }),
   getters: {
     selectedNode(state) {
@@ -73,10 +75,14 @@ export const useAppStore = defineStore("app", {
       // sidecar 上下线由 Rust 以 Tauri 事件广播（rpc_up / rpc_down），与 stdout 上的
       // NDJSON 通知是两条通道——此前只监听 rpc_event，故断连时前端毫无感知。
       rpc.onStatus((up, detail) => {
+        const wasConnected = this.connected;
         this.connected = up;
         if (up) {
           this.rpcDownDetail = "";
           this.clearBanner();
+          // Rust 会在 sidecar 崩溃后重启它，而新进程的工作流是空的。
+          // 不重新握手的话界面会继续显示旧数据——看起来一切正常，实际后端已换人。
+          if (!wasConnected) void this.handshake();
         } else {
           this.rpcDownDetail = detail || "";
           // detail 可能含查找路径 + sidecar 最近 stderr：横幅只显示首行，全文进 console。
@@ -86,54 +92,74 @@ export const useAppStore = defineStore("app", {
           if (detail) console.error("[rpc_down]", detail);
         }
       });
+      await this.handshake();
+    },
+
+    /**
+     * 与后端对齐全部状态（首次连接与重连后共用）。
+     *
+     * 每一步独立 try/catch：后端某个方法失败不应拖垮其余状态同步。
+     * 并发调用会被合并，避免首连与 rpc_up 事件同时触发两次握手。
+     */
+    async handshake() {
+      if (this._handshaking) return;
+      this._handshaking = true;
       try {
-        const info = await rpc.request("app.info");
-        this.appVersion = info.appVersion ?? "";
-        this.protocolOk = info.protocolVersion === PROTOCOL_VERSION;
-        if (info.permissions) this.permissions = info.permissions;
-        this.connected = true;
-        if (!this.protocolOk) {
+        try {
+          const info = await rpc.request("app.info");
+          this.appVersion = info.appVersion ?? "";
+          this.protocolOk = info.protocolVersion === PROTOCOL_VERSION;
+          if (info.permissions) this.permissions = info.permissions;
+          this.connected = true;
+          if (!this.protocolOk) {
+            this.setBanner(
+              `协议版本不匹配（前端期望 ${PROTOCOL_VERSION}，后端 ${info.protocolVersion}）`,
+              "warn"
+            );
+          }
+        } catch (e) {
+          this.connected = false;
+          // 优先用 Rust 侧带查找路径/stderr 的详情，比 send_rpc 的裸错误（"sidecar 未连接"）可读。
           this.setBanner(
-            `协议版本不匹配（前端期望 ${PROTOCOL_VERSION}，后端 ${info.protocolVersion}）`,
-            "warn"
+            "无法连接后端 sidecar：" + (this.rpcDownDetail || errMessage(e))
           );
         }
-      } catch (e) {
-        this.connected = false;
-        // 优先用 Rust 侧带查找路径/stderr 的详情，比 send_rpc 的裸错误（"sidecar 未连接"）可读。
-        this.setBanner(
-          "无法连接后端 sidecar：" + (this.rpcDownDetail || errMessage(e))
-        );
-      }
-      // 拉取定义 + 当前工作流 + 定时配置（三者均来自后端真源）
-      try {
-        this.definitions = (await rpc.request("nodes.definitions")) ?? [];
-      } catch {
-        /* ignore */
-      }
-      try {
-        const cur = await rpc.request("workflow.current");
-        this.applyWorkflow(cur.workflow, cur.running, cur.recording);
-      } catch {
-        /* ignore */
-      }
-      try {
-        const sc = await rpc.request("schedule.get");
-        this.schedule = sc.schedule ?? null;
-        this.nextFire = sc.nextFire ?? "";
-      } catch {
-        /* ignore */
-      }
-      // 默认热键：F9=录制开/停、F10=运行开/停、F11=取点。此前前端从未调用 hotkey.set，
-      // 后端热键监听从未装定，表现为「没有录制/结束运行快捷键」。启动时统一装定默认绑定。
-      try {
-        await rpc.request("hotkey.set", { actions: ["record", "run", "pick"] });
-      } catch {
-        /* ignore */
+        // 拉取定义 + 当前工作流 + 定时配置（三者均来自后端真源）
+        try {
+          this.definitions = (await rpc.request("nodes.definitions")) ?? [];
+        } catch {
+          /* ignore */
+        }
+        try {
+          const cur = await rpc.request("workflow.current");
+          this.applyWorkflow(cur.workflow, cur.running, cur.recording);
+        } catch {
+          /* ignore */
+        }
+        try {
+          const sc = await rpc.request("schedule.get");
+          this.schedule = sc.schedule ?? null;
+          this.nextFire = sc.nextFire ?? "";
+        } catch {
+          /* ignore */
+        }
+        // 默认热键：F9=录制开/停、F10=运行开/停、F11=取点。此前前端从未调用 hotkey.set，
+        // 后端热键监听从未装定，表现为「没有录制/结束运行快捷键」。启动与重连都要装定。
+        try {
+          await rpc.request("hotkey.set", { actions: ["record", "run", "pick"] });
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        this._handshaking = false;
       }
     },
 
     applyWorkflow(wf: Workflow, running?: boolean, recording?: boolean) {
+      // 校验必须在写状态之前；损坏通知不能把工作流置为 undefined。
+      if (!wf || !Array.isArray(wf.nodes)) {
+        throw new Error("工作流数据无效：缺少 nodes 数组");
+      }
       this.workflow = wf;
       if (typeof running === "boolean") this.running = running;
       if (typeof recording === "boolean") this.recording = recording;
@@ -151,7 +177,8 @@ export const useAppStore = defineStore("app", {
     _handleNotification(n: JsonRpcNotification) {
       switch (n.method) {
         case "workflow.changed":
-          this.applyWorkflow(n.params.workflow);
+          // 与 workflow.current 响应不同：通知 params 直接是工作流摘要。
+          this.applyWorkflow(n.params);
           break;
         case "permission.changed":
           this.permissions = n.params;
@@ -190,6 +217,7 @@ export const useAppStore = defineStore("app", {
           this.lastRecordInfo = n.params;
           break;
         case "run.node":
+          this.running = true;
           this.runNodeType = n.params.type ?? "";
           break;
         case "run.progress":
@@ -206,7 +234,7 @@ export const useAppStore = defineStore("app", {
           break;
         case "schedule.fired":
           if (n.params?.ran) {
-            this.running = true;
+            // 仅表示触发成功，可能晚于 run.finished；运行态以 run.* 为准。
             this.setBanner("定时触发：" + (n.params.path ?? ""), "ok");
           } else {
             this.setBanner(
@@ -307,9 +335,22 @@ export const useAppStore = defineStore("app", {
     // ---- 运行 / 录制 ----
     async toggleRun() {
       if (this.running) {
-        await rpc.request("run.stop");
+        // 停止是异步请求；正常等 run.finished 再退出运行态。
+        const r = await rpc.request("run.stop");
+        // 兜底：后端已结束（通知可能已丢）时不会有 run.finished，用响应直接收敛。
+        if (r && r.running === false) this.running = false;
       } else {
-        await rpc.request("run.start", { base_x: this.base.x, base_y: this.base.y });
+        // 发请求前置位，连续点击/F10 会走停止；失败时回滚。
+        // 不在 await 后写 true：快速工作流可能已先发 run.finished。
+        this.running = true;
+        this.runNodeType = "";
+        this.runProgress = { done: 0, total: 0 };
+        try {
+          await rpc.request("run.start", { base_x: this.base.x, base_y: this.base.y });
+        } catch (e) {
+          this.running = false;
+          throw e;
+        }
       }
     },
     async toggleRecord() {

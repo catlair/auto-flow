@@ -61,6 +61,7 @@ class AppController:
         self._last_record = None
         self._rec_poller = None
         self._rec_poller_rec = None
+        self._run_thread = None  # 运行线程引用：shutdown 需要等它收尾
         self.running = False
         self.recording = False
         self._record_subscribed = False  # §3.2：仅订阅后推送 record.event
@@ -279,13 +280,15 @@ class AppController:
         def on_error(idx, ntype, exc):
             self._notify("run.error", {"index": idx, "type": ntype, "message": str(exc)})
 
-        threading.Thread(
+        t = threading.Thread(
             target=self.executor.run_workflow,
             args=(wf, base_x, base_y),
             kwargs={"on_node": on_node, "on_progress": on_progress,
                     "on_done": on_done, "on_error": on_error},
             name="run-workflow", daemon=True,
-        ).start()
+        )
+        self._run_thread = t
+        t.start()
         return {"running": True}
 
     def run_stop(self) -> dict:
@@ -639,30 +642,80 @@ class AppController:
         return {"schedule": cfg, "nextFire": nxt.strftime("%Y-%m-%d %H:%M") if nxt else ""}
 
     def _schedule_fire(self) -> None:
-        """定时触发：从磁盘重载工作流并广播，然后**真正运行**（此前只发通知不运行，
-        定时功能形同虚设）。正在运行/录制时跳过本轮并提示。"""
+        """定时触发：从磁盘重载工作流并真正运行。
+
+        顺序很关键：**先做忙检查与加载校验，再替换 self.workflow**。
+        此前是「先替换、再 run_start」——忙时虽然跳过了运行，但用户正在编辑的
+        工作流已被定时脚本覆盖；文件缺失/损坏时更糟：直接 run_start 跑的是内存里
+        那个完全不相干的工作流。现在任一前置校验不过就只上报原因、不运行、不覆盖。
+        """
         with self._lock:
             cfg = dict(self._schedule)
+            # 忙检查放在最前：运行中/录制中不改动当前工作流，也不触发运行
+            busy = self.running or self.recording
         path = cfg.get("workflowPath")
-        if path and os.path.exists(path):
+        reason: Optional[str] = None
+        wf: Optional[Workflow] = None
+
+        if busy:
+            reason = "already_running" if self.running else "busy_recording"
+        elif not path or not os.path.exists(path):
+            reason = "workflow_missing"
+        else:
             try:
                 wf = Workflow.load(path)
             except Exception:  # noqa: BLE001
                 wf = None
-            if wf is not None:
-                with self._lock:
-                    self.workflow = wf
-                    self.path = path
-                self._broadcast_workflow()
-        try:
-            self.run_start()
-        except ControllerError as e:
-            self._notify("schedule.fired", {"path": path, "ran": False, "reason": e.message})
+            if wf is None:
+                reason = "workflow_load_failed"
+
+        if reason is None and wf is not None:
+            with self._lock:
+                self.workflow = wf
+                self.path = path
+            self._broadcast_workflow()
+            try:
+                self.run_start()
+            except ControllerError as e:
+                reason = e.message
+
+        if reason:
+            self._notify("schedule.fired", {"path": path, "ran": False, "reason": reason})
         else:
             self._notify("schedule.fired", {"path": path, "ran": True})
         self._schedule_arm(cfg)
 
     # ---- 停机清理（app.shutdown 时调用） ----
-    def shutdown(self) -> None:
+    def shutdown(self, timeout: float = 3.0) -> None:
+        """进程退出前的收尾：定时器、热键、**执行器与录制器**。
+
+        此前只停定时器与热键监听，于是退出时可能出现：回放线程还在跑、
+        按下的键/鼠标键没有被 finally 释放（残留「卡键」），
+        录制中的 CGEventTap 也没释放。这里按「先让线程自己收尾、再兜底」的顺序处理。
+        """
         self._schedule_cancel_timer()
         self._stop_key_listener()
+
+        # 1) 运行中：置停标志并等运行线程走完 finally（播放器会补发 release）
+        run_thread = self._run_thread
+        if run_thread is not None and run_thread.is_alive():
+            self.executor.stop_run()
+            run_thread.join(timeout)
+
+        # 2) 录制中：停监听器（释放 CGEventTap），再等轮询线程退出
+        with self._lock:
+            rec = self.recorder
+            self.recorder = None
+            was_recording = self.recording
+            self.recording = False
+        if was_recording and rec is not None:
+            try:
+                rec.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        poller = self._rec_poller
+        if poller is not None and poller.is_alive():
+            poller.join(timeout)
+        self._rec_poller = None
+        self._rec_poller_rec = None
+        self._run_thread = None

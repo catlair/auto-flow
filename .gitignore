@@ -18,8 +18,10 @@ dist/
 *.spec
 tests/__pycache__/
 .pytest_cache/
+.pytest-tmp/
 # WorkBuddy 本地会话记忆（非源码，不入库）
 .workbuddy/
+.workbuddy-ai/
 
 # 迁移期垃圾
 .af-sidecar-old-*/

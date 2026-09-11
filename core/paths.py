@@ -1,12 +1,20 @@
-"""应用数据目录：开发时=项目目录；打包后=~/Library/Application Support/AutoFlow。"""
+"""应用数据目录：开发时=项目目录；打包后=~/Library/Application Support/AutoFlow。
+
+可用环境变量 AUTOFLOW_DATA_DIR 覆盖（测试隔离、多实例并行、把数据放到自定义盘）。
+"""
 from __future__ import annotations
 
 import os
 import sys
 
+_ENV_DATA_DIR = "AUTOFLOW_DATA_DIR"
+
 
 def app_dir() -> str:
-    if getattr(sys, "frozen", False):
+    override = os.environ.get(_ENV_DATA_DIR)
+    if override:
+        d = os.path.abspath(override)
+    elif getattr(sys, "frozen", False):
         d = os.path.expanduser("~/Library/Application Support/AutoFlow")
     else:
         d = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +35,7 @@ def templates_dir() -> str:
 
 
 _BUNDLED_MODEL = "yolo11n.onnx"
+_SRC_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def models_dir() -> str:
@@ -35,7 +44,8 @@ def models_dir() -> str:
     os.makedirs(d, exist_ok=True)
     target = os.path.join(d, _BUNDLED_MODEL)
     if not os.path.exists(target):
-        for base in (getattr(sys, "_MEIPASS", ""), os.path.dirname(app_dir())):
+        # 依次尝试：打包资源、源码树（数据目录被 AUTOFLOW_DATA_DIR 覆盖时仍可用）、旧版回退
+        for base in (getattr(sys, "_MEIPASS", ""), _SRC_ROOT, os.path.dirname(app_dir())):
             src = os.path.join(base, "models", _BUNDLED_MODEL) if base else ""
             if src and os.path.exists(src):
                 try:

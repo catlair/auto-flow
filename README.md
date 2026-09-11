@@ -39,7 +39,7 @@ Python + PySide6 实现的本地键鼠录制 / 回放 / 工作流工具（macOS 
 ```
 core/
   events.py      # MacroEvent / Node / Workflow 数据模型与 JSON 序列化
-  recorder.py    # pynput 监听录制（移动阈值过滤、原点记录、2 万事件上限自停）
+  recorder.py    # pynput 监听录制（移动阈值过滤、原点记录、10 万事件上限自停）
   player.py      # 插值回放引擎（速度倍率、相对偏移、停止标志）
   executor.py    # 工作流执行器（整体循环、单节点重复、热停）
   vision.py      # mss 截屏 + OpenCV 模板匹配（Retina 坐标换算）
@@ -57,9 +57,14 @@ workflows/       # 工作流 JSON 存放处
 ## 开发
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q   # 核心逻辑测试（24 例）
+./.venv/bin/python -m pytest tests/ -q   # Python 测试（46 例，已隔离键鼠/配置副作用）
+npm --prefix tauri test                  # 前端测试（node --test，20 例：store + RPC 客户端）
+npm --prefix tauri run build             # vue-tsc 类型检查 + 前端构建
 QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 无界面冒烟
 ```
+
+> 测试会通过 `AUTOFLOW_DATA_DIR` 指向临时目录，并在进程内替换真实键鼠控制器，
+> 因此不会移动光标，也不会读写你仓库根目录下的 `config.json`。
 
 ## YOLO 模型
 
