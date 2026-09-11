@@ -65,15 +65,23 @@ _CTRL = AppController()
 # --------------------------------------------------------------------------- #
 def _init_output() -> None:
     global OUT
-    # 关键：把 Python 默认 stdout 重定向到 stderr，任何 print/logging 都不会进帧流
+    # 1) Python 层的 stdout 指向 stderr：print / logging 都不会进帧流
     sys.stdout = sys.stderr
     try:
         sys.stdin.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    # 协议走原始 fd 1，二进制、无缓冲
-    OUT = os.fdopen(1, "wb", buffering=0)
+    # 2) 协议通道：先把 fd 1 复制到一个新 fd，再把 fd 1 本身指向 stderr。
+    #
+    #    只改 sys.stdout 拦不住**绕过 Python 的写入**——第三方库的 C++ 层告警、
+    #    printf、直接用 fd 1 的代码，字节会原样混进 NDJSON 帧流，前端随机
+    #    JSON 解析失败（表现为「通知/响应偶发丢失」）。dup 之后：
+    #      proto_fd → 协议管道（Rust 的 rpc_event）
+    #      fd 1     → stderr 管道（Rust 的 sidecar_stderr，可见可查）
+    proto_fd = os.dup(1)
+    os.dup2(2, 1)
+    OUT = os.fdopen(proto_fd, "wb", buffering=0)
 
 
 def _send(obj: dict) -> None:

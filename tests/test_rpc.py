@@ -68,6 +68,34 @@ def _read_json(p: subprocess.Popen, timeout: float = 5.0) -> dict:
     raise TimeoutError("sidecar 未在超时内返回帧")
 
 
+def test_init_output_keeps_protocol_channel_clean_of_c_level_stdout() -> None:
+    """绕过 Python 直接写 fd 1 的字节必须落到 stderr，不能混进协议帧流。
+
+    回归：`_init_output` 原先只把 `sys.stdout` 指向 stderr，fd 1 仍指向协议管道。
+    第三方库的 C++ 层告警 / printf 会原样插进 NDJSON 流，前端随机 JSON 解析失败，
+    表现为「通知/响应偶发丢失」——排查方向完全跑偏。
+    """
+    code = "\n".join([
+        "import os, sys",
+        f"sys.path.insert(0, {REPO!r})",
+        "from rpc import server",
+        "server._init_output()",
+        # 模拟 C 层直接写 fd 1（不经 Python 的 sys.stdout）
+        "os.write(1, b'C_LEVEL_NOISE\\n')",
+        'server.OUT.write(b\'{"jsonrpc":"2.0","id":1,"result":{}}\\n\')',
+    ])
+    p = subprocess.run(
+        [sys.executable, "-c", code], cwd=REPO,
+        capture_output=True, text=True, timeout=15,
+    )
+    assert p.returncode == 0, p.stderr
+    # 协议帧独占 stdout，且是干净可解析的一行
+    assert "C_LEVEL_NOISE" not in p.stdout
+    assert json.loads(p.stdout.strip()) == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    # C 层噪音被赶到 stderr（Rust 侧作为 sidecar_stderr 记录，可见可查）
+    assert "C_LEVEL_NOISE" in p.stderr
+
+
 def test_app_info_and_protocol() -> None:
     p = _start()
     try:
