@@ -44,6 +44,15 @@ _WRITE_LOCK = threading.Lock()
 _notify_queue: "queue.Queue[dict]" = queue.Queue(maxsize=1024)
 _shutdown = threading.Event()
 
+# 队列满时**可以丢弃**的通知（§13 背压）。
+#
+# 只有这两个是「高频且状态可被后一条覆盖」的：record.event 每 100ms 推一批事件，
+# run.progress 随回放进度频繁推送，丢一条不影响最终状态。
+# 其余通知（run.finished / run.error / record.stopped / workflow.changed /
+# permission.changed / hotkey.triggered / schedule.fired …）都是**状态跃迁**，
+# 丢一条前端就可能永久停在旧状态——绝不能被高频洪水挤掉。
+_DROPPABLE_NOTIFICATIONS = frozenset({"record.event", "run.progress"})
+
 # 权限状态缓存，用于检测变化后推送
 _last_perm: Optional[dict] = None
 
@@ -91,15 +100,36 @@ def _send_error(req_id: Any, code: int, message: str, data: Any = None) -> None:
 
 
 def _send_notification(method: str, params: Any) -> None:
-    """入队通知；队列满时丢弃最旧（§13 背压：log 类可丢，run/record 类保留）。"""
+    """入队通知；队列满时按 _DROPPABLE_NOTIFICATIONS 分流。
+
+    此前是无差别 `get_nowait()` 丢最旧一条，与注释声称的「run/record 类保留」
+    不符：一次 record.event 洪水就能把 run.finished / workflow.changed 挤掉，
+    前端随后永久停在旧状态（看起来像「通知偶发丢失」，实为策略写错）。
+    """
+    item = {"jsonrpc": "2.0", "method": method, "params": params}
     try:
-        _notify_queue.put_nowait({"jsonrpc": "2.0", "method": method, "params": params})
+        _notify_queue.put_nowait(item)
+        return
     except queue.Full:
-        try:
-            _notify_queue.get_nowait()
-            _notify_queue.put_nowait({"jsonrpc": "2.0", "method": method, "params": params})
-        except queue.Empty:
-            pass
+        pass
+
+    if method in _DROPPABLE_NOTIFICATIONS:
+        # 自身可丢：直接放弃这条，队列里已有的（尤其状态类）一条都不动
+        return
+
+    # 状态类通知必须送达：挤掉最旧的一条，并留痕便于定位背压
+    try:
+        dropped = _notify_queue.get_nowait()
+        _notify_queue.task_done()  # 与 put 配对，否则 unfinished_tasks 只增不减
+        _notify_queue.put_nowait(item)
+        logger.warning(
+            "通知队列已满，丢弃最旧通知以送达 %s（被丢：%s）",
+            method, dropped.get("method"),
+        )
+    except queue.Empty:
+        pass
+    except queue.Full:
+        logger.warning("通知队列已满，%s 未能入队", method)
 
 
 def _writer_loop() -> None:

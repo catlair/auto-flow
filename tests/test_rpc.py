@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 import sys
 import time
@@ -491,6 +492,52 @@ def test_shutdown_stops_recorder() -> None:
     assert rec.stopped == 1
     assert ctrl.recording is False
     assert ctrl.recorder is None
+
+
+def _drain(q: "queue.Queue[dict]") -> list:
+    out = []
+    while True:
+        try:
+            item = q.get_nowait()
+            q.task_done()
+            out.append(item)
+        except queue.Empty:
+            return out
+
+
+def test_notify_queue_backpressure_drops_only_droppable() -> None:
+    """队列满时只丢「可丢类」，状态类通知必须送达。
+
+    回归：此前无差别 `get_nowait()` 丢最旧，与注释声称的「run/record 类保留」不符——
+    一次 record.event 洪水就能把 run.finished / workflow.changed 挤掉，
+    前端随后永久停在旧状态（看起来像「通知偶发丢失」，实为策略写错）。
+    """
+    from rpc import server
+
+    q = server._notify_queue
+    _drain(q)  # 清掉可能残留的队列内容
+
+    # 1) 可丢类：队列满时放弃新来的，已入队的一条都不动
+    for i in range(q.maxsize):
+        server._send_notification("run.progress", {"done": i, "total": 1})
+    assert q.full()
+    server._send_notification("record.event", {"events": []})
+    items = _drain(q)
+    assert len(items) == q.maxsize
+    assert items[0]["params"]["done"] == 0          # 最旧的仍在
+    assert all(it["method"] == "run.progress" for it in items)  # 洪水没挤掉任何一条
+
+    # 2) 状态类：必须送达，代价是挤掉最旧一条
+    for i in range(q.maxsize):
+        server._send_notification("run.progress", {"done": i, "total": 1})
+    server._send_notification("run.finished", {"stopped": False})
+    items = _drain(q)
+    assert len(items) == q.maxsize
+    assert items[-1]["method"] == "run.finished"
+    assert items[0]["params"]["done"] == 1          # 只有最旧那条被挤掉
+
+    # 3) 计数器配对：丢弃路径也要 task_done，否则 unfinished_tasks 只增不减
+    assert q.unfinished_tasks == 0
 
 
 def test_record_subscribe_gates_event_stream() -> None:

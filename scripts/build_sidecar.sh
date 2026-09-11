@@ -16,11 +16,32 @@ cd "$(dirname "$0")/.."
 # 不直接删旧 onedir（281 个文件会触发批量删除确认，且 PyInstaller --noconfirm
 # 内部的清理同样会被拦）。同卷 rename 回避——rename 不是删除；旧目录留作
 # dist/.autoflow-sidecar.old.*，需要时手动分批清理。
-if [ -d "dist/autoflow-sidecar" ]; then
-  mv "dist/autoflow-sidecar" "dist/.autoflow-sidecar.old.$(date +%Y%m%d-%H%M%S)"
+#
+# 中间产物目录 build/ 同样要处理：PyInstaller 在 Analysis 阶段会清掉
+# build/<name>/ 里的旧文件（约 50+ 个），那一步也会被拦下，表现为
+# 「[safe-delete] SAFE_DELETE_BULK_CONFIRM_REQUIRED」后构建中止。
+for d in "dist/autoflow-sidecar" "build/autoflow-sidecar"; do
+  if [ -d "$d" ]; then
+    parent="$(dirname "$d")"
+    base="$(basename "$d")"
+    mv "$d" "$parent/.$base.old.$(date +%Y%m%d-%H%M%S)"
+  fi
+done
+
+# 自带 YOLO 模型必须打进包：frozen 时 models_dir() 从 sys._MEIPASS/models 播种到
+# 用户数据目录（~/Library/Application Support/AutoFlow/models）。不打进去的话，
+# 干净用户目录下 YOLO 节点找不到默认模型——开发机上看不出来，因为源码树里就有。
+# 目标名 'models' 与 core/paths.py 的 _BUNDLED_MODEL 查找路径一致。
+MODEL="models/yolo11n.onnx"
+ADD_DATA=()
+if [ -f "$MODEL" ]; then
+  ADD_DATA=(--add-data "$MODEL:models")
+else
+  echo "警告：未找到 $MODEL，本次打包不含默认模型（YOLO 节点需手动指定模型）"
 fi
 
 ./.venv/bin/python -m PyInstaller --noconfirm --onedir --name autoflow-sidecar \
+  "${ADD_DATA[@]}" \
   --hidden-import ApplicationServices \
   --hidden-import AppKit \
   --hidden-import Foundation \

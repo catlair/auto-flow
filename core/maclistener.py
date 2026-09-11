@@ -53,6 +53,7 @@ class MacKeyboardListener(threading.Thread):
         self._runloop = None
         self._tap = None
         self._stopping = threading.Event()
+        self._callback_error_logged = False
 
     # ---- tap 回调（tap 线程）----
     def _callback(self, _proxy, evtype, event, _refcon):
@@ -79,7 +80,11 @@ class MacKeyboardListener(threading.Thread):
             elif evtype == _KEY_UP:
                 self._dispatch(vk_to_name(int(keycode)), False, x, y)
         except Exception:
-            pass
+            # 回调异常必须留痕：此前静默 pass，消费方签名不匹配时表现为
+            # 「热键/按键捕获完全无效，日志毫无线索」。只记首次，避免刷屏。
+            if not self._callback_error_logged:
+                self._callback_error_logged = True
+                logger.exception("键盘 tap 回调异常（同类异常后续不再记录）")
         return event
 
     def _dispatch(self, name, pressed, x, y):

@@ -1,0 +1,28 @@
+# Auto Flow 运行时依赖（macOS）
+#
+# 此前只散落在 run.sh 的三项检查里，视觉 / OCR / 推理依赖全靠开发机手动装过，
+# 新环境跑不起来也无从判断缺什么。这份清单对应代码里真实出现的导入：
+#   core/vision.py      → cv2 / numpy / mss
+#   core/ocr.py         → Vision（macOS Vision 框架，离线 OCR）
+#   core/yolo.py        → onnxruntime
+#   core/player.py 等   → pynput
+#   core/maclistener.py → Quartz
+#   core/permissions.py → ApplicationServices
+#   ui/ + main.py       → PySide6（旧版 Qt 界面）
+#
+# 注意：PyInstaller 打包 Python 后端还需要额外工具，见 requirements-dev.txt。
+
+PySide6>=6.11,<7
+pynput>=1.8,<2
+
+# pyobjc：Cocoa 提供 AppKit/Foundation，其余为具体框架
+# （Vision 会自带 CoreML、ApplicationServices 会自带 CoreText，无需显式声明）
+pyobjc-framework-Cocoa>=12.2
+pyobjc-framework-Quartz>=12.2
+pyobjc-framework-ApplicationServices>=12.2
+pyobjc-framework-Vision>=12.2
+
+numpy>=2.0
+opencv-python>=4.10
+mss>=10.0
+onnxruntime>=1.20

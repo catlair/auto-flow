@@ -181,7 +181,10 @@ class MainWindow(QMainWindow):
         self.hotkey_listener.start()
         self.signals.hotkey.connect(self._dispatch_hotkey)
 
-    def _on_global_key(self, name: str, pressed: bool) -> None:
+    def _on_global_key(self, name: str, pressed: bool, x: int = 0, y: int = 0) -> None:
+        # 必须收满 MacKeyboardListener 的 4 个参数（name, pressed, x, y）：
+        # 只声明 2 个会抛 TypeError，而监听器回调里是静默 except，
+        # 表现为「热键完全无效但日志毫无线索」。坐标为按键时刻光标位置，热键用不到。
         if pressed:
             self.signals.hotkey.emit({"F9": "record", "F10": "run", "F11": "pick"}.get(name, ""))
 
@@ -350,7 +353,8 @@ class MainWindow(QMainWindow):
         self._capture_listener = MacKeyboardListener(self._on_capture_key)
         self._capture_listener.start()
 
-    def _on_capture_key(self, name: str, pressed: bool) -> None:
+    def _on_capture_key(self, name: str, pressed: bool, x: int = 0, y: int = 0) -> None:
+        # 同 _on_global_key：必须收满 4 个参数，否则按键捕获永远不生效。
         if not pressed:
             return
         w = self._capturing_widget

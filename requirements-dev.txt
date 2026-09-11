@@ -1,0 +1,12 @@
+# Auto Flow 开发/构建依赖（在 requirements.txt 之上安装）
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# 运行测试：./.venv/bin/python -m pytest tests/ -q
+# 打包后端：./scripts/build_sidecar.sh
+# 打包旧版：./scripts/build_app.sh
+
+-r requirements.txt
+
+pytest>=8
+pyinstaller>=6.10

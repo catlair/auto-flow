@@ -19,7 +19,14 @@ Python + PySide6 实现的本地键鼠录制 / 回放 / 工作流工具（macOS 
 ## 运行
 
 ```bash
-./run.sh          # 首次会自动创建 venv 并安装依赖
+./run.sh          # 首次会自动创建 venv 并按 requirements.txt 安装依赖
+```
+
+依赖清单见 `requirements.txt`（运行）与 `requirements-dev.txt`（测试 / 打包）。
+手动装：
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 ## macOS 权限（首次必读）
@@ -57,7 +64,7 @@ workflows/       # 工作流 JSON 存放处
 ## 开发
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q   # Python 测试（46 例，已隔离键鼠/配置副作用）
+./.venv/bin/python -m pytest tests/ -q   # Python 测试（49 例，已隔离键鼠/配置副作用）
 npm --prefix tauri test                  # 前端测试（node --test，20 例：store + RPC 客户端）
 npm --prefix tauri run build             # vue-tsc 类型检查 + 前端构建
 QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 无界面冒烟
