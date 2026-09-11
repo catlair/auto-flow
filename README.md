@@ -1,7 +1,13 @@
 # Auto Flow — macOS 工作流自动化
 
-Python + PySide6 实现的本地键鼠录制 / 回放 / 工作流工具（macOS 优先）。
+本地键鼠录制 / 回放 / 工作流工具（macOS 优先）。
 架构参考 [LCA](https://github.com/wuzhijing88/LCA)（Windows 版），砍掉 Windows 专属能力后的精简核心版。
+
+> **界面：现行是 Tauri 版**（`tauri/`）——Vue 3 + Pinia + TDesign 前端 + Rust 外壳，
+> 经 stdio（NDJSON JSON-RPC 2.0）调用 Python 后端 `rpc/`。
+> `main.py` + `ui/`（PySide6）是迁移前的旧入口，按
+> `docs/迁移计划书-python后端+tauri前端.md` §8「迁移期保留作对照、P2 完成后删除」。
+> **新功能不要往 `ui/` 加**；两套共用同一份 `core/` 与 `tasks/`。
 
 ## 功能
 
@@ -17,6 +23,15 @@ Python + PySide6 实现的本地键鼠录制 / 回放 / 工作流工具（macOS 
 - **脚本管理**：工作流保存为 JSON（兼容 Tauri 版 macro-recorder 的裸事件脚本，自动导入为录制回放节点）
 
 ## 运行
+
+**Tauri 版（现行）**：
+
+```bash
+npm --prefix tauri run tauri dev   # 开发；跑的是已打包 sidecar，改 Python 后需先重新打包
+./scripts/build_sidecar.sh         # 改过 rpc/ 或 core/ 后重新打包 Python 后端
+```
+
+**旧 PySide6 入口**（对照用，迁移期保留）：
 
 ```bash
 ./run.sh          # 首次会自动创建 venv 并按 requirements.txt 安装依赖
@@ -44,7 +59,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 ## 项目结构
 
 ```
-core/
+core/            # 全部界面共用
   events.py      # MacroEvent / Node / Workflow 数据模型与 JSON 序列化
   recorder.py    # pynput 监听录制（移动阈值过滤、原点记录、10 万事件上限自停）
   player.py      # 插值回放引擎（速度倍率、相对偏移、停止标志）
@@ -52,10 +67,16 @@ core/
   vision.py      # mss 截屏 + OpenCV 模板匹配（Retina 坐标换算）
   permissions.py # 辅助功能权限检测与系统设置跳转
   keymap.py      # 键名映射
-tasks/
+tasks/           # 全部界面共用
   base.py        # 节点基类 + 注册表（节点自描述参数，UI 通用渲染）
   builtin.py     # 内置节点：mouse / keyboard / delay / record_replay / note
-ui/
+rpc/             # Tauri 版后端：协议层 + 控制器（工作流真源）
+  server.py      # NDJSON JSON-RPC 2.0 帧解析/分发/通知队列
+  controller.py  # AppController：工作流树、运行/录制状态、调度器
+tauri/           # Tauri 版前端（现行界面）
+  src/           # Vue 3：rpc/ 客户端 + Pinia store + 7 个组件
+  src-tauri/     # Rust 外壳：拉起 sidecar、逐行转发 stdout、守护重启
+ui/              # ⚠️ 旧 PySide6 界面（迁移期保留作对照，P2 后删除）
   main_window.py # 主窗口（节点列表 / 参数面板 / 运行控制 / 录制面板 / 热键）
   params_panel.py# 依据节点定义通用渲染的参数表单
 workflows/       # 工作流 JSON 存放处
@@ -64,10 +85,10 @@ workflows/       # 工作流 JSON 存放处
 ## 开发
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q   # Python 测试（49 例，已隔离键鼠/配置副作用）
+./.venv/bin/python -m pytest tests/ -q   # Python 测试（50 例，已隔离键鼠/配置副作用）
 npm --prefix tauri test                  # 前端测试（node --test，20 例：store + RPC 客户端）
 npm --prefix tauri run build             # vue-tsc 类型检查 + 前端构建
-QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 无界面冒烟
+QT_QPA_PLATFORM=offscreen ./.venv/bin/python main.py  # 旧 Qt 入口无界面冒烟（迁移期保留）
 ```
 
 > 测试会通过 `AUTOFLOW_DATA_DIR` 指向临时目录，并在进程内替换真实键鼠控制器，
@@ -84,14 +105,19 @@ yolo export model=yolov8n.pt format=onnx imgsz=640   # 或 yolo11n.pt / 自己�
 
 把 `.onnx` 放进 `models/`，节点参数里选它即可；自定义类别在模型旁放同名 `.txt`（每行一个类别名）。
 
-## 打包
+## 打包（Tauri 版）
 
 ```bash
-./scripts/build_app.sh          # 产出 dist/Auto Flow.app（MacDev 自签，授权跨构建保持）
-./scripts/build_app.sh --dmg    # 额外产出 dist/Auto Flow.dmg
+./scripts/build_sidecar.sh            # 1) 打包 Python 后端 onedir（含 models/）
+npm --prefix tauri run tauri build    # 2) 打包 .app / .dmg
+./scripts/sign_tauri_app.sh           # 3) MacDev 双签 + 强化运行时（先 sidecar 再外壳）
+./scripts/sync_app.sh                 # 4) 签名自检后装到 /Applications 并打开
 ```
 
-> ⚠️ `scripts/build_app.sh` 默认 `--osx-bundle-identifier com.example.autoflow`，发布前请改为你自己的 bundle id。
+> 授权持久性的前提是「sidecar 固定路径 + MacDev 自签」，详见
+> `docs/迁移计划书-python后端+tauri前端.md` §12 与 `docs/权限引导.md`。
+
+旧 Qt 版打包脚本 `scripts/build_app.sh`（产出 `dist/Auto Flow.app`）仍在，随 `ui/` 一并迁移期保留。
 
 ## 后续规划
 
