@@ -140,6 +140,7 @@
 | `PermissionBanner.vue` | 权限横幅 | 订阅 permission.changed |
 | `ScheduleDialog.vue` | 定时运行 | 配置存后端 |
 | `WorkflowMenu.vue` | 文件菜单 | 打开/保存/另存（Tauri 对话框） |
+| `DiagnosticsPanel.vue` | 现状无对应 | **P4 新增**（§15.7）：版本/协议/权限/断连详情汇总，可复制；不依赖后端，后端挂了也能开 |
 
 - 状态管理：Pinia 一个 `useAppStore`（连接状态、运行态、当前工作流）。
 - RPC 客户端：`src/rpc/client.ts`，id 映射 Promise，通知进事件总线。
@@ -717,6 +718,62 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 但**没有**在真实聚焦的输入框里跑过——那需要往用户当前窗口打字。人工验证：
 新建「键盘输入-文本」节点填中文，对着一个文本框运行。
 
+### 15.7 P4 前端打磨（拖拽/虚拟滚动/诊断面板/崩溃重连，2026-09-12 完成）
+
+四项一起做，因为诊断面板与重连提示共用同一批状态。
+
+**拖拽排序**（原已实现，本次加固）
+
+- 手柄从整行 `.af-node` 换成独立的 `.af-grip`：整行当手柄时，在开关/删除按钮上
+  **按下**也会启动拖拽——`@click.stop` 只拦 `click`，拦不住 `mousedown`。
+- `onEnd` 补 try/catch 与回滚。vuedraggable 会**乐观地**先改本地镜像，RPC 失败
+  不回滚的话，界面会停在后端并不认可的顺序上，直到下一次 store 变更才纠正。
+- 索引语义已核实一致，**不需要 ±1**：vuedraggable 的 `newIndex` 是「拖完后该项的
+  下标」，后端 `node.move(index,to)` 是 `pop(index)` 再 `insert(to)`，两者同为最终位置。
+- `item-key` 用后端 `uuid4` 生成的 `uid`（`core/events.py::Node`），可靠。
+
+**事件流虚拟滚动**
+
+- 原来是 `recordBuffer.slice(-200)` 直接 `v-for`：只显示最近 200 条（更早的看不到），
+  且 DOM 节点数随事件数增长。改为定高窗口虚拟列表：`tauri/src/utils/vlist.ts`
+  只算 `[start, end)` 与占位高度，缓冲上限 `RECORD_BUFFER_LIMIT = 5000` 条可完整滚动。
+- 贴底时自动跟随最新；用户往上翻则**不再把他拽回底部**，并给出「↓ 回到最新」。
+- 两个退化分支必须留：行高非法或视口未测量（`ResizeObserver` 还没报尺寸）时
+  **全量渲染**——宁可慢也不能白屏。
+- `.af-ev` 的 `line-height` 必须等于脚本里的 `ITEM_H`，否则虚拟窗口与实际渲染错位、滚动会跳。
+
+**诊断面板**（`DiagnosticsPanel.vue` + `utils/diagnostics.ts`）
+
+- 硬约束：**后端挂掉时必须照样能打开**。数据全部来自 `store.diagnostics`
+  （纯数据 getter，可单测），面板内**不发任何 RPC**；否则「后端连不上」时打开面板
+  会卡在请求上，等于没有面板。
+- 内容：版本/协议匹配/三项权限/工作流与节点数/基点/定时/运行录制态/事件缓冲，
+  以及最近错误与断连详情全文（含查找路径与 sidecar stderr）。
+- 「复制全部」输出格式化文本；剪贴板被拒时退化为全选（WKWebView 可能拒绝）。
+
+**崩溃重连提示**
+
+- 断连横幅：`后端 sidecar 断开，正在重连…（原因首行）`；**详情全文不进横幅**
+  （换行会撑坏布局），留在 console 与诊断面板。
+- 恢复时给独立提示条（含「查看诊断」），**刻意不塞进 `banner`**：`banner` 只放
+  「待处理的问题」，否则「已恢复」会把真正需要用户处理的错误顶掉。
+- **`lastRpcDownDetail` 不被重连清空**——用户往往在「已经恢复」之后才去看诊断，
+  清掉就正好看不到最需要的那份线索（`rpcDownDetail` 仍表示「当前断连详情」）。
+- `setBanner(kind="error")` 记入 `lastError`，后续 ok/warn 不覆盖它。
+
+**测试与验证**
+
+- 前端 **20 → 42**：新增 `tests/vlist.test.mjs`（14 例，虚拟窗口边界 + 诊断文本）
+  与 `tests/app-store.test.mjs` 的 8 例（拖拽索引/失败、重连提示、诊断汇总、
+  「诊断不触发 RPC」、缓冲上限同源、`lastError` 保留、恢复后详情仍可查）。
+- **真实浏览器冒烟**（本环境唯一可行的渲染验证）：把 Tauri IPC
+  （`transformCallback` / `invoke` 的 `plugin:event|listen`、`rpc_status`、`send_rpc`）
+  打成桩，用 `AGENT_BROWSER_INIT_SCRIPTS` 注入，跑 `vite build` 产物：
+  600 条事件只渲染 **22 行** DOM、`.af-vlist` 高 9000px、`translateY` 与窗口起始行一致；
+  上翻后新事件不再把用户拽回底部；`rpc_down` → 横幅 + 未连接，`rpc_up` → 绿条提示 + 重新握手。
+- **该冒烟抓到一处单测漏掉的缺陷**：`rpc_up` 清空 `rpcDownDetail` 导致「恢复后查不到
+  断连原因」，已修（`9ba92ed`）。单测覆盖不到它，是因为用例只在「断开中」断言详情。
+
 ---
 
 ## 16. 持久化与配置分工
@@ -776,15 +833,19 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 | P1 | 后端服务化：§9 全部方法 + 工作流真源迁后端（§10）+ 三项权限（§11）+ 调度器 + 按键/模板捕获 | 1.5 天 |
 | P2 | 前端 7 组件 + RPC client + Pinia + 动态表单（含 `common_params`） | 1 天 |
 | ~~P3~~ | ~~打包：resources 方案 + deep 签名 + notary 流程 + sync_app.sh 更新 + 权限引导页~~ | ✅ 已完成（resources 方案 P1-5 已落地；MacDev 双签 + 强化运行时 + `sync_app.sh` + `docs/权限引导.md` 已提交 `8caf38b`）；notary 需用户提供 Apple 凭证后实跑 |
-| P4 | 打磨：拖拽排序、事件流虚拟滚动、诊断面板、崩溃重连提示（~~中文输入改进~~ ✅ §15.6、~~节点顺序修正 §9.4~~ ✅、~~死代码清理~~ 随 `ui/` 删除消失） | 0.5~1 天（可裁剪） |
+| ~~P4~~ | ~~打磨：拖拽排序、事件流虚拟滚动、诊断面板、崩溃重连提示~~ | ✅ 已完成（§15.7，2026-09-12）。同批完成：中文输入改进（§15.6）、节点顺序修正（§9.4）；死代码清理随 `ui/` 删除消失 |
 
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
 
-> **2026-09-11 补充**：§15.1 划入 P4 的「多屏支持」已完成（见 §15.5）；**2026-09-12：
-> 「中文输入改进」（§15.6）与「节点顺序修正」（§9.4）均已完成**。P4 余下项（拖拽排序、
-> 事件流虚拟滚动、诊断面板、崩溃重连提示）未动；「死代码清理」因目标都在待删的 `ui/` 里，
-> 随 `ui/` 删除自然消失，不再单列。
+> **2026-09-11 补充**：§15.1 划入 P4 的「多屏支持」已完成（见 §15.5）。
+> **2026-09-12：P4 全部收口** ——「中文输入改进」（§15.6）、「节点顺序修正」（§9.4）、
+> 「拖拽排序 / 事件流虚拟滚动 / 诊断面板 / 崩溃重连提示」（§15.7）均已完成。
+> 「死代码清理」因目标都在待删的 `ui/` 里，随 `ui/` 删除自然消失，不再单列。
+>
+> **排期剩余的唯一阻塞项**：P3 的「Aqua 会话真机窗体联调」——headless 环境无法渲染
+> webview，前端↔Rust↔sidecar 三方需在真实桌面会话里双击 `.app` 或 `npm run tauri dev` 验证。
+> 它也是删除 `ui/` 的前置条件（§17.2）。
 
 **进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
 P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。P3 签名基础设施已落地并提交 `8caf38b`：`scripts/sign_tauri_app.sh` 对 `.app` 做 MacDev 双签 + 强化运行时（`--options runtime`）+ 安全时间戳，自底向上先签 sidecar 再签 `.app` 外壳（已实跑验证主二进制与 sidecar 均 `flags=0x10000(runtime)`、`Authority=MacDev`、整体 `valid on disk`）；`scripts/sync_app.sh` 改指 Tauri 产物、签名自检后 `cp -R` 到 `/Applications` 并去 quarantine、`open`；`docs/权限引导.md` 写就三项隐私权限作用与授予方式。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview，前端↔Rust↔sidecar 三方需双击 `.app` 或 `npm run tauri dev` 验证）；② 可选 notarization——提供 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` 后 `bash scripts/sign_tauri_app.sh` 实跑 `notarytool submit --wait` + `stapler staple`，即可免手动授权弹窗直接分发。

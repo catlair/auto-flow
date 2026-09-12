@@ -293,6 +293,9 @@ class AppController:
 
     def run_stop(self) -> dict:
         self.executor.stop_run()
+        t = self._run_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=5.0)   # 等运行线程真正退出，响应里给出最终状态
         return {"running": self.running}
 
     # ---- record.*（Recorder 包装，100ms 批量推 record.event，§5 节流） ----

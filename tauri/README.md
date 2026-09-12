@@ -11,7 +11,9 @@ tauri/
   src/                 # Vue 前端
     rpc/{types,client}.ts   # NDJSON 客户端（§13 半包/粘包切分 + id→Promise）
     stores/app.ts           # Pinia（连接态/运行态/当前工作流）
-    components/*.vue        # 7 个组件 + App 三栏布局
+    components/*.vue        # 8 个组件 + App 三栏布局（DiagnosticsPanel 为 P4 新增）
+    utils/vlist.ts          # 事件流虚拟列表的窗口计算（纯函数）
+    utils/diagnostics.ts    # 诊断信息格式化（纯函数）
   src-tauri/           # Rust 外壳
     src/lib.rs              # 拉起 sidecar、stdout 逐行 emit rpc_event、send_rpc 写 stdin、守护重启
     tauri.conf.json         # Resources 固定路径放 sidecar onedir（§12）；bundle.resources = autoflow-sidecar/**/*

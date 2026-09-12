@@ -75,7 +75,7 @@ rpc/             # Tauri 版后端：协议层 + 控制器（工作流真源）
   server.py      # NDJSON JSON-RPC 2.0 帧解析/分发/通知队列
   controller.py  # AppController：工作流树、运行/录制状态、调度器
 tauri/           # Tauri 版前端（现行界面）
-  src/           # Vue 3：rpc/ 客户端 + Pinia store + 7 个组件
+  src/           # Vue 3：rpc/ 客户端 + Pinia store + 8 个组件 + utils/
   src-tauri/     # Rust 外壳：拉起 sidecar、逐行转发 stdout、守护重启
 ui/              # ⚠️ 旧 PySide6 界面（迁移期保留作对照，P2 后删除）
   main_window.py # 主窗口（节点列表 / 参数面板 / 运行控制 / 录制面板 / 热键）
