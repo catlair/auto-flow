@@ -125,13 +125,18 @@
     回放才从正确的时刻开始；停顿超过窗口另起一条，保留打字节奏。
 14. **`poll()` 负责把停顿的文本落盘**：没有这一步，最后一段输入要等到
     "下一个别的事件"或"停止录制"才出现，录制面板看着像卡住了。
-11. **键盘事件自带坐标**：`CGEventGetLocation(event)` 可用于取点；但 CLI 进程
+15. **键盘事件自带坐标**：`CGEventGetLocation(event)` 可用于取点；但 CLI 进程
     `CGEventGetLocation(CGEventCreate(None))` 恒 (0,0)，不能用来读全局光标。
-12. **事件编辑改的是权威序列本身**（`rpc/controller.py` 的 `record.remove` /
+16. **事件编辑改的是权威序列本身**（`rpc/controller.py` 的 `record.remove` /
     `removeMovesBefore` / `setOrigin` / `undo`）：面板删掉一条，写入节点的就是
     删后的序列，不存在"面板一份、实际写入另一份"的空间。编辑前存快照进撤销栈
     （上限 20），因为编辑是破坏性的。越界下标**忽略而非报错**——UI 可能因并发
     刷新拿到过期下标，为此中断用户操作不值得。
+17. **新增"有意移除"类别时必须同步丢帧判据**：`captured` 与入库 `count` 之间
+    隔着 decimate / 窗口过滤 / 上限 / 文本聚合 / 尾部裁剪五类有意丢弃。判据
+    `unaccounted`（见 rpc-protocol.md 设计要点 4）在后端按这五类求和，
+    **在前端重拼会漏扣**——`trimmed` 与 `text_merged` 各制造过一次假警报。
+    加第六类丢弃时，改 `rpc/controller.py` 的 `record_stop` 一处即可。
 
 ## 已知问题
 

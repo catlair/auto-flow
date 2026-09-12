@@ -1109,6 +1109,51 @@ def test_input_probe_keeps_key_listener_wired_to_text():
     ctrl.shutdown()
 
 
+def test_record_stop_unaccounted_is_zero_after_trim():
+    """按钮停止（trim 为真）裁掉尾部交互后，一致性等式仍必须配平。
+
+    回归：4b16c52 曾把 trimmed 并进 filtered 修过一次；v3 重写把 filtered 与
+    trimmed 拆成两个字段，等式又被打破——于是**每次用按钮停止录制**（且尾部有
+    可识别的停止点击）都会误报「检测到系统层丢事件，请反馈」。
+    按老口径：captured(6) − filtered(0) − limit(0) − text_merged(0) = 6 ≠ count(3)。
+    """
+    from rpc.controller import AppController
+    from core.events import RecordResult
+
+    class _FakeRec:
+        def __init__(self, result):
+            self._result = result
+            self._win_bounds = (900, 300, 400, 300)
+
+        def stop(self):
+            return self._result
+
+        def set_window_bounds(self, b):
+            self._win_bounds = b
+
+        def elapsed_ms(self):
+            return 0
+
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    result = RecordResult(events=[
+        ev(ts_ms=0, kind="move", x=300, y=300),
+        ev(ts_ms=10, kind="mouse", x=300, y=300, button="left", pressed=True),
+        ev(ts_ms=20, kind="mouse", x=300, y=300, button="left", pressed=False),
+        ev(ts_ms=30, kind="move", x=1000, y=400),                               # 移向窗口
+        ev(ts_ms=40, kind="mouse", x=1000, y=400, button="left", pressed=True),  # 点停止
+        ev(ts_ms=45, kind="mouse", x=1000, y=400, button="left", pressed=False),
+    ], n_captured=6)
+
+    ctrl = AppController()
+    ctrl.recording = True
+    ctrl.recorder = _FakeRec(result)
+    stats = ctrl.record_stop(trim=True, window_bounds=(900, 300, 400, 300))
+    assert stats["trimmed"] == 3
+    assert stats["count"] == 3
+    assert stats["unaccounted"] == 0
+    ctrl.shutdown()
+
+
 def test_record_to_node_keeps_text_events():
     """文本事件必须原样写进节点（含 text 字段），否则回放时中文整段消失。"""
     from rpc.controller import AppController

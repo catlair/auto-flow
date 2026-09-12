@@ -249,14 +249,13 @@ async function onToggleRecord() {
       MessagePlugin.warning(`事件数达到上限，超限丢弃 ${s.limit_dropped ?? 0} 条`);
     } else if ((s.window_dropped ?? 0) > 0) {
       MessagePlugin.warning(`窗口过滤丢弃了 ${s.window_dropped} 条事件（不应发生，请反馈）`);
-    } else if (
-      (s.captured ?? 0) - (s.filtered ?? 0) - (s.limit_dropped ?? 0) -
-        (s.text_merged ?? 0) !==
-      (s.count ?? 0)
-    ) {
-      // text_merged 必须扣掉：输入法一次上屏被聚合进同一条 text 事件，
-      // 同样让 count 小于 captured，但那不是丢帧。
-      MessagePlugin.warning("检测到系统层丢事件，请反馈（captured≠count+filtered）");
+    } else if ((s.unaccounted ?? 0) !== 0) {
+      // 一致性等式只在后端算（captured − 各类有意移除 == count），前端只判是否为 0。
+      // 以前前端自己拼公式，每新增一类"有意移除"就漏扣一次——trimmed 与
+      // text_merged 都各自制造过一次这里弹出来的假警报。
+      MessagePlugin.warning(
+        `检测到系统层丢事件（${s.unaccounted} 条），请反馈（captured≠count+filtered）`
+      );
     }
   } catch (e) {
     MessagePlugin.error("录制失败：" + errMessage(e));

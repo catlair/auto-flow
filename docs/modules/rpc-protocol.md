@@ -35,7 +35,7 @@
 | node.params.set | index,key,value | workflow_current |
 | nodes.definitions | — | 节点定义（含 common_params，驱动动态表单） |
 | run.start / run.stop | base_x/base_y | {running}；stop 已 join 运行线程 |
-| record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/监听器存活） |
+| record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/text_merged/trimmed/**unaccounted**/监听器存活） |
 | template.snip | — | {started}，完成走通知 |
 | input.probe | — | {alive, text_alive}（F18 + 零宽空格两段回环） |
 | hotkey.set / clear | actions | 绑定快照 |
@@ -75,6 +75,13 @@
    保存/回放不经过前端。（首版摘要曾共享引用摧毁真源，见 controller._public_node 注释）
 3. **错误归一**：ControllerError 带业务码（-32001…-32004 等）；前端 errMessage
    兼容 string/Error/对象（Tauri invoke 的 Err 是裸字符串）。
+4. **丢帧判据只在后端算**：`record.stop` 返回的 `unaccounted` =
+   `captured − (count + filtered + limit_dropped + text_merged + trimmed)`，
+   前端只判 `!= 0`。**等式绝不在前端重拼**——每新增一类「有意移除」就要多扣一项，
+   前端重拼必然漏扣：`trimmed`（v3 重写时丢失）与 `text_merged`（新增文本聚合时）
+   各制造过一次「检测到系统层丢事件，请反馈」的假警报。判据收敛到一处，
+   新增丢弃类别时只改 `record_stop` 一处。
+   （回归测试：`test_record_stop_unaccounted_is_zero_after_trim`）
 
 ## 已知问题
 
@@ -84,3 +91,4 @@
 ## 变更记录
 
 - 2026-09-12 写锁、events 摘要、node.rename、template.snip、input.probe
+- 2026-09-12 `record.stop` 增加 `unaccounted`，一致性等式从前端收回后端（假警报修复）

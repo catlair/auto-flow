@@ -398,13 +398,20 @@ class AppController:
             if elapsed > result.events[-1].ts_ms:
                 result.events[-1].ts_ms = elapsed
         self._last_record = result
-        # 丢帧定位计量一并上报：captured=系统投递数；
-        # count = captured − decimated − window − limit − text_merged 后入库数。
-        # count << captured 且各项丢弃都小 → 系统层（CGEventTap）丢事件，需要另查。
-        # 注意 text_merged：一次输入法上屏被聚合进同一条 text 事件，它同样会让
-        # count 小于 captured，但**不是丢帧**——前端的一致性校验必须扣掉它。
+        # 丢帧定位计量一并上报：captured = 系统投递数，count = 实际入库数。
+        #
+        # `unaccounted` 是**唯一**的一致性判据：captured 减去所有"有意移除"的类别
+        # 之后必须正好剩 count，不为 0 才是真的系统层（CGEventTap）丢事件。
+        #
+        # 这个等式以前由前端自己拼（captured − filtered − limit_dropped），于是每
+        # 新增一类"有意移除"就会漏扣一次：`trimmed`（4b16c52 修过，v3 重写时把
+        # filtered+trimmed 拆开又丢了）和 `text_merged`（新增文本聚合时）都各自
+        # 制造过一次"检测到系统层丢事件，请反馈"的假警报。现在只在后端算一次。
+        count = len(result.events)
+        accounted = (count + result.n_filtered + result.n_limit_dropped
+                     + result.n_text_merged + n_trimmed)
         stats = {
-            "count": len(result.events),
+            "count": count,
             "origin": [result.origin_x, result.origin_y],
             "stopped_by_limit": result.stopped_by_limit,
             "captured": result.n_captured,
@@ -414,6 +421,7 @@ class AppController:
             "limit_dropped": result.n_limit_dropped,
             "text_merged": result.n_text_merged,
             "trimmed": n_trimmed,
+            "unaccounted": result.n_captured - accounted,
             "mouse_died": result.mouse_listener_died,
             "kb_died": result.kb_listener_died,
         }
