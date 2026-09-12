@@ -68,7 +68,9 @@
   `test_trim_keeps_the_whole_recording_when_it_is_pure_movement` /
   `test_trim_refuses_click_that_is_not_recent` /
   `test_trim_never_destroys_real_work_without_window_hit` /
-  `test_record_stop_without_trim_keeps_everything`（快捷键停止一条不丢）。
+  `test_record_stop_without_trim_keeps_everything`（快捷键停止一条不丢）/
+  `test_record_undo_after_trim_restores_monotonic_timestamps`（撤销拿回的是
+  **未被改动**的原序列：浅拷贝会让终点补全改到快照，撤销后时间戳倒退）。
 - **F-REC-02/04**（2026-09-12）：连续 5 轮 venv 录制（移动+点击），每轮均捕获
   `mouse left down/up`；修复前 5 轮中点击全丢（pyobjc 符号竞争）。
 - **F-REC-05**（2026-08-31）：崩溃报告确认 pynput 键盘监听 TSMGetInputSourceProperty
@@ -117,7 +119,11 @@
      可裁。`toggleRecord` 因此要求调用方显式给出 `by: "button" | "hotkey"`——
      曾经两个入口共用默认 `trim: true`，导致快捷键停止也去裁（见事故）。
    - 裁剪是破坏性的且发生在用户看到统计之前，故**押一份裁剪前快照进撤销栈**，
-     `record.undo` 可整段还原。
+     `record.undo` 可整段还原。快照必须是**元素级**副本（`replace(e)`），不能只
+     `list(...)`：紧随裁剪之后的"轨迹终点补全"是**原地**改 `events[-1].ts_ms`，
+     而裁剪后最后那条移动在裁剪前也在序列里（同一个对象）。浅拷贝会让补全一并
+     改到快照，撤销回来变成 `[0,10,20,45,40,45]`——第 3 条的时间戳超过了它后面
+     的停止点击，**序列倒退**、回放时序错乱（2026-09-12 修）。
    - 识别不到（边界缺失 / 边界内无按下）时一律不裁：宁可让一次停止点击被回放
      （顶多多点一下），也不做静默的数据损坏。
 7. **stop 顺序**：先停监听器、后置 `_stopping` 闸、再排空队列——顺序反了会把
@@ -230,6 +236,8 @@
 - 2026-09-12 **裁剪事故修复**：停止裁剪从"截断+无上界弹尾部移动"改为
   "只丢最后一次窗口内按下及其之后"，加"停止点击必须刚刚发生"护栏；
   快捷键停止不再裁剪（`toggleRecord({by})` 强制调用方表态）；裁剪可撤销
+- 2026-09-12 **撤销快照改元素级复制**：裁剪快照原是浅拷贝，"轨迹终点补全"
+  原地改最后一条移动的时间戳会一并改到快照，撤销后序列时间戳倒退（见要点 6）
 - 2026-09-12 **输入法通道定性**：实测定论系统拼音走 `insertText:`（通道②），
   事件通道覆盖不到中文；同次实测确认**拼音按键回放仍能上屏中文**（往返成立但
   不确定）。自检补 `input_source`，避免"自检通过 ⇒ 中文没问题"的错误推论

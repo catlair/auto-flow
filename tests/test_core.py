@@ -1311,6 +1311,59 @@ def test_record_stop_unaccounted_is_zero_after_trim():
     ctrl.shutdown()
 
 
+def test_record_undo_after_trim_restores_monotonic_timestamps():
+    """裁剪后撤销，必须拿回**未被改动**的原序列（含时间戳）。
+
+    回归 2026-09-12：撤销快照曾是 `list(events)` 浅拷贝，而紧随裁剪之后的
+    "轨迹终点补全"是**原地**改 `events[-1].ts_ms`。裁剪后最后那条移动在裁剪前
+    也在序列里（同一个对象），于是补全把快照里的它一起改了。撤销回来得到
+    `[0, 10, 20, 45, 40, 45]`——第 3 条的 45 超过了它后面的停止点击 40，
+    **序列时间戳倒退**，回放时序错乱。撤消承诺的是"整段还原"，就不该留改动。
+    """
+    from rpc.controller import AppController
+    from core.events import RecordResult
+
+    class _FakeRec:
+        def __init__(self, result):
+            self._result = result
+            self._win_bounds = (900, 300, 400, 300)
+
+        def stop(self):
+            return self._result
+
+        def set_window_bounds(self, b):
+            self._win_bounds = b
+
+        def elapsed_ms(self):
+            return 45          # 终点补全会把最后那条移动的时间戳推到 45
+
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    original_ts = [0, 10, 20, 30, 40, 45]
+    result = RecordResult(events=[
+        ev(ts_ms=0, kind="move", x=300, y=300),
+        ev(ts_ms=10, kind="mouse", x=300, y=300, button="left", pressed=True),
+        ev(ts_ms=20, kind="mouse", x=300, y=300, button="left", pressed=False),
+        ev(ts_ms=30, kind="move", x=1000, y=400),                              # 用户内容
+        ev(ts_ms=40, kind="mouse", x=1000, y=400, button="left", pressed=True),
+        ev(ts_ms=45, kind="mouse", x=1000, y=400, button="left", pressed=False),
+    ], n_captured=6)
+
+    ctrl = AppController()
+    ctrl.recording = True
+    ctrl.recorder = _FakeRec(result)
+    ctrl.record_stop(trim=True, window_bounds=(900, 300, 400, 300))
+
+    # 裁剪后的序列：终点补全把最后那条移动推到 45 → [0, 10, 20, 45]，单调
+    kept_ts = [e.ts_ms for e in ctrl._last_record.events]
+    assert kept_ts == [0, 10, 20, 45]
+    assert all(a <= b for a, b in zip(kept_ts, kept_ts[1:]))
+
+    back = [e["ts_ms"] for e in ctrl.record_undo()["events"]]
+    assert back == original_ts, f"撤销应原样还原，实际 {back}"
+    assert all(a <= b for a, b in zip(back, back[1:])), f"时间戳倒退: {back}"
+    ctrl.shutdown()
+
+
 def test_record_stop_without_trim_keeps_everything():
     """快捷键停止（trim=False）一条都不能丢：F9 已在 skip_keys 里，没有停止点击。"""
     from rpc.controller import AppController

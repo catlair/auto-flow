@@ -391,13 +391,21 @@ class AppController:
         result = rec.stop()
         n_trimmed = 0
         if trim:
-            before = list(result.events)
-            result.events = trim_stop_interaction(
+            kept = trim_stop_interaction(
                 result.events, rec._win_bounds, rec.elapsed_ms())
-            n_trimmed = len(before) - len(result.events)
+            n_trimmed = len(result.events) - len(kept)
+            if n_trimmed:
+                # 裁剪是**破坏性**的（还发生在用户看到统计之前），押一份裁剪前的快照，
+                # 让 record.undo 能把它整段还原。拿不回数据的静默裁剪不接受。
+                #
+                # 快照必须是**元素级**副本，不能只 `list(...)`：紧随其后的"轨迹终点
+                # 补全"是**原地**改 `events[-1].ts_ms`，而裁剪后最后那条移动在裁剪前
+                # 也在序列里（同一个对象）。浅拷贝会让补全同时改到快照，撤销回来就是
+                # `[0,10,20,45,40,45]`——被改过的那条时间戳超过了它后面的停止点击，
+                # 序列倒退，回放时序出错。只在真裁时才复制，避免给超大序列常态买单。
+                before = [replace(e) for e in result.events]
+            result.events = kept
         if n_trimmed:
-            # 裁剪是**破坏性**的（还发生在用户看到统计之前），押一份裁剪前的快照，
-            # 让 record.undo 能把它整段还原。拿不回数据的静默裁剪不接受。
             self._record_undo.append(before)
             if len(self._record_undo) > self._UNDO_LIMIT:
                 self._record_undo.pop(0)
@@ -463,7 +471,14 @@ class AppController:
         return res
 
     def _record_snapshot(self) -> None:
-        """编辑前存一份快照，供 record.undo 回滚（编辑是破坏性的）。"""
+        """编辑前存一份快照，供 record.undo 回滚（编辑是破坏性的）。
+
+        ⚠️ 这是**浅拷贝**：快照与真源共享同一批事件对象，所以编辑**不许原地改
+        元素**（`ev.text = ...`），必须替换元素（`replace(ev, ...)`）或重建列表，
+        否则快照会被一起改掉、撤销永远回不去。
+        `record_stop` 的"轨迹终点补全"是唯一会原地改元素的地方，它为此单独做了
+        元素级复制（见那里的注释）。新增会原地改事件的代码时，同样要自己复制。
+        """
         res = self._last_record
         if res is None:
             return
