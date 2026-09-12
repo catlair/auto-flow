@@ -36,6 +36,7 @@
 | nodes.definitions | — | 节点定义（含 common_params，驱动动态表单） |
 | run.start / run.stop | base_x/base_y | {running}；stop 已 join 运行线程 |
 | record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/text_merged/trimmed/**unaccounted**/监听器存活） |
+| record.current / remove / removeMovesBefore / setOrigin / setText / keysToText / undo | index,text | 编辑权威事件序列，全部可 `record.undo` 回滚；`keysToText` 把选中处的**最大连续按键段**换成一条 text 事件 |
 | template.snip | — | {started}，完成走通知 |
 | input.probe | — | {alive, text_alive, input_source{id,name,event_channel_unsupported}}（F18 + 零宽空格两段回环） |
 | hotkey.set / clear | actions | 绑定快照 |
@@ -94,3 +95,6 @@
 - 2026-09-12 `record.stop` 增加 `unaccounted`，一致性等式从前端收回后端（假警报修复）
 - 2026-09-12 `input.probe` 增加 `input_source`——`text_alive=true` 不等于"中文能录"，
   必须按当前输入法给结论（见 recorder.md 已知问题）
+- 2026-09-12 新增 `record.keysToText`：把一段连续按键换成一条 text 事件，让
+  IME 中文（事件层只录到拼音）能走 Unicode 通道确定性回放；同时补齐
+  `record.current/remove/removeMovesBefore/setOrigin/setText/undo` 的接口记录

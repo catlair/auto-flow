@@ -102,9 +102,14 @@ const selectedEvent = computed(() => {
   return i >= 0 && i < b.length ? b[i] : null;
 });
 const textDraft = ref("");
+// 把一段连续按键替换成一条 text 事件时填的实际文字。
+// 中文录制录下来的是拼音按键（上屏不投递事件，见 core/inputsource.py），回放靠
+// 重新驱动输入法——能用但不确定。换成文本事件后回放走 Unicode 通道，结果确定。
+const keysToTextDraft = ref("");
 
 watch(selectedEvent, (ev) => {
   textDraft.value = ev && ev.kind === "text" ? String(ev.text ?? "") : "";
+  keysToTextDraft.value = "";
 });
 
 async function onApplyText() {
@@ -112,6 +117,15 @@ async function onApplyText() {
   if (!ev || ev.kind !== "text") return;
   if (textDraft.value === String(ev.text ?? "")) return;
   await edit("record.setText", { index: selected.value, text: textDraft.value });
+}
+
+async function onKeysToText() {
+  const ev = selectedEvent.value;
+  if (!ev || ev.kind !== "key" || !keysToTextDraft.value) return;
+  await edit("record.keysToText", {
+    index: selected.value,
+    text: keysToTextDraft.value,
+  });
 }
 
 // ---- 文本链路自检 ----
@@ -343,9 +357,11 @@ async function onToNode() {
       </span>
     </div>
     <div v-if="textProbe === 'ok' && probeSource?.unsupported === true" class="af-probe-hint">
-      <b>「{{ probeSource.name }}」已实测不经过事件层</b>：上屏走 insertText:，
-      不投递任何键盘事件，事件通道原理上覆盖不到——用它录中文只会得到一串拼音字母。
-      中文请改用「<b>键盘输入</b>」节点直接填写（回放走 Unicode 通道，中文正常）。
+      <b>「{{ probeSource.name }}」已实测不经过事件层</b>：上屏走 insertText:，不投递
+      任何键盘事件，所以事件表里只会有拼音字母。<b>回放仍能打出中文</b>——重新驱动
+      输入法即可（实测：录 nihao+空格 → 回放得到「你好」），但依赖回放时输入法状态
+      与候选顺序，<b>不确定</b>。要确定就选中那段字母按键，填上实际文字「替换为文本」；
+      或直接用「<b>键盘输入</b>」节点填写。
     </div>
     <div v-else-if="textProbe === 'ok' && probeSource" class="af-probe-hint">
       当前输入法「{{ probeSource.name }}」不在已知不支持名单里，但<b>未经实测</b>。
@@ -393,6 +409,26 @@ async function onToNode() {
       >
         应用
       </button>
+    </div>
+    <div v-if="selectedEvent?.kind === 'key' && !store.recording" class="af-textedit">
+      <span class="af-edit-sel">这段按键</span>
+      <input
+        v-model="keysToTextDraft"
+        class="af-textinput"
+        placeholder="填入这段按键实际打出的文字，如 你好"
+        @keydown.enter.prevent="onKeysToText"
+      />
+      <button class="af-chip" :disabled="!keysToTextDraft" @click="onKeysToText">
+        替换为文本
+      </button>
+    </div>
+    <div
+      v-if="selectedEvent?.kind === 'key' && !store.recording"
+      class="af-probe-hint"
+    >
+      中文是用拼音输入法打的：事件表里只有字母按键，回放会<b>重新驱动输入法</b>上屏，
+      所以能打出中文但不稳定（输入法没开就变成字面量）。填入实际文字后替换成一条
+      文本事件，回放改走 Unicode 通道，结果确定。
     </div>
     <div v-if="store.recordBuffer.length" class="af-stream-bar">
       <span>共 {{ total }} 条</span>

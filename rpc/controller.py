@@ -15,7 +15,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
-from core.events import Node, Workflow
+from core.events import MacroEvent, Node, Workflow
 from core import executor as _executor_mod  # 仅类型/构造；真正运行在 P1-2
 
 # 节点菜单顺序（§9.4）**不再在这里维护**：唯一真源是各节点的 order
@@ -579,6 +579,50 @@ class AppController:
             return self._record_payload()
         self._record_snapshot()
         res.events[idx] = replace(ev, text=new)
+        return self._record_payload()
+
+    def record_keys_to_text(self, index: Any = None, text: Any = "") -> dict:
+        """把选中的一段**连续按键**换成一条 `text` 事件。
+
+        用途：中文录制走的是"录下拼音按键、回放时重新驱动输入法上屏"这条路
+        （2026-09-12 端到端验证成立：录 nihao+空格，回放得到「你好」）。它能用，
+        但**不确定**——依赖回放时输入法处于同样状态、且候选顺序一致；输入法没开
+        就会打出字面量 "nihao"。
+
+        换成一条 `text` 事件后，回放走 Unicode 通道 `type_text`，不经过输入法，
+        结果确定；事件表里也终于能读懂在打什么字。
+
+        范围：从选中下标向两侧扩到**最大连续按键段**（只吞 `kind="key"`），
+        整段替换为一条 text 事件，时间戳/坐标取该段第一条（回放起点不变）。
+        用户要提供实际文字——IME 提交了什么，事件层无从得知，不能猜。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index 须为整数")
+        if not (0 <= idx < len(res.events)):
+            raise ControllerError(-32602, "下标越界")
+        if res.events[idx].kind != "key":
+            raise ControllerError(-32603, "该事件不是按键事件")
+        new = "" if text is None else str(text)
+        if not new:
+            raise ControllerError(-32602, "文本不能为空")
+        lo = hi = idx
+        while lo > 0 and res.events[lo - 1].kind == "key":
+            lo -= 1
+        while hi + 1 < len(res.events) and res.events[hi + 1].kind == "key":
+            hi += 1
+        run = res.events[lo:hi + 1]
+        # 至少要有一个"按下"：否则这段只是按键抬起（例如上一个动作的尾巴），
+        # 把它当成一次输入会张冠李戴。
+        if not any(e.pressed for e in run):
+            raise ControllerError(-32603, "这段按键里没有按下事件")
+        self._record_snapshot()
+        first = run[0]
+        res.events = res.events[:lo] + [
+            MacroEvent(ts_ms=first.ts_ms, kind="text", text=new,
+                       x=first.x, y=first.y)] + res.events[hi + 1:]
         return self._record_payload()
 
     def record_undo(self) -> dict:

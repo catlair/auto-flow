@@ -4,8 +4,8 @@
 
 | 模块 | 文档 | 状态 | 验收 | 备注 |
 | --- | --- | --- | --- | --- |
-| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 132 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
-| 回放引擎 | [player.md](modules/player.md) | ✅ | 132 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
+| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 133 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
+| 回放引擎 | [player.md](modules/player.md) | ✅ | 133 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
 | 工作流执行器 | [executor.md](modules/executor.md) | ✅ | 测试 | 异常兜底 + 条件门控 + 热停 |
 | 节点体系 | [nodes.md](modules/nodes.md) | ✅ | 测试 + 真机 | 9 种内置节点，自描述参数 |
 | 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | Retina 坐标换算；锁屏时 Quartz 兜底 |

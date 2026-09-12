@@ -1093,6 +1093,77 @@ def test_record_set_text_edits_only_text_events():
     ctrl.shutdown()
 
 
+def test_record_keys_to_text_collapses_a_pinyin_run():
+    """把一段连续按键整段换成一条 text 事件，让 IME 中文走上确定性回放。
+
+    2026-09-12 实测：录 `nihao`+空格、回放时重新驱动输入法确实能得到「你好」，
+    但结果依赖回放瞬间的输入法状态与候选顺序。换成一条 text 事件后走 Unicode
+    通道（`type_text`），不经过输入法，结果确定；事件表里也能读懂在打什么。
+
+    范围规则：从选中下标向两侧扩到**最大连续按键段**，只能吞 `kind="key"`，
+    前后非按键事件必须原样保留；新事件的时间戳与坐标取该段第一条，回放起点不变。
+    """
+    from rpc.controller import AppController
+    from core.events import RecordResult
+
+    def pinyin_run(ts0=100):
+        """n i h a o Space 的按下/抬起对，坐标沿用同一个值。"""
+        evs, ts = [], ts0
+        for k in ("n", "i", "h", "a", "o", "space"):
+            for pressed in (True, False):
+                evs.append(MacroEvent(ts_ms=ts, kind="key", key=k,
+                                      pressed=pressed, x=640, y=360))
+                ts += 30
+        return evs
+
+    ctrl = AppController()
+    ctrl._last_record = RecordResult(events=(
+        [MacroEvent(ts_ms=0, kind="move", x=1, y=2)]
+        + pinyin_run()
+        + [MacroEvent(ts_ms=500, kind="mouse", button="left",
+                      pressed=True, x=9, y=9)]
+    ))
+    total = len(ctrl._last_record.events)          # 1 + 12 + 1
+    assert total == 14
+
+    r = ctrl.record_keys_to_text(5, "你好")          # 下标落在按键段中间
+    evs = r["events"]
+    assert len(evs) == 3, "整段按键应塌成一条 text，前后非按键事件原样保留"
+    assert evs[0]["kind"] == "move" and evs[0]["ts_ms"] == 0
+    assert evs[2]["kind"] == "mouse" and evs[2]["ts_ms"] == 500
+    mid = evs[1]
+    assert mid["kind"] == "text" and mid["text"] == "你好"
+    assert mid["ts_ms"] == 100 and (mid["x"], mid["y"]) == (640, 360)
+    assert r["can_undo"] is True
+
+    back = ctrl.record_undo()["events"]
+    assert len(back) == total
+    assert [e["kind"] for e in back].count("key") == 12
+
+    for call, msg in (
+        (lambda: ctrl.record_keys_to_text(0, "x"), "不是按键事件"),  # move
+        (lambda: ctrl.record_keys_to_text(99, "x"), "下标越界"),
+        (lambda: ctrl.record_keys_to_text(2, ""), "文本不能为空"),
+    ):
+        try:
+            call()
+            raise AssertionError("应报错")
+        except Exception as e:  # noqa: BLE001
+            assert msg in str(e), f"期望 {msg}，实际 {e}"
+
+    # 全是「抬起」的一段（例如上一个动作的尾巴）不能当成一次输入
+    ctrl._last_record = RecordResult(events=[
+        MacroEvent(ts_ms=0, kind="key", key="a", pressed=False),
+        MacroEvent(ts_ms=10, kind="key", key="b", pressed=False),
+    ])
+    try:
+        ctrl.record_keys_to_text(0, "x")
+        raise AssertionError("应报错")
+    except Exception as e:  # noqa: BLE001
+        assert "没有按下事件" in str(e)
+    ctrl.shutdown()
+
+
 def test_input_probe_refuses_while_busy():
     """自检会投递真实输入：录制中/运行中必须拒绝。
 

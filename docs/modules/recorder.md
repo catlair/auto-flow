@@ -28,7 +28,7 @@
 | F-REC-12 | **滚轮单位标注** | ✅ | `wheel_unit="line"`（pynput 取的是 DeltaAxis 行增量）（v3） |
 | F-REC-13 | **轨迹终点补全** | ✅ | 停止时补回最后一个被降采样的位置（v3） |
 | F-REC-14 | **按键事件带坐标** | ✅ | key 事件带上 listener 提供的 (x,y) 与 flags（v3） |
-| F-REC-15 | **事件编辑** | ✅ | 面板选中行即可删除 / 删此前的移动 / 设为原点 / 撤销（v3） |
+| F-REC-15 | **事件编辑** | ✅ | 面板选中行即可删除 / 删此前的移动 / 设为原点 / 改写文本 / **按键段转文本** / 撤销（v3） |
 | F-REC-16 | **文本事件聚合** | ✅ | 输入法/Unicode 提交聚合为 `kind="text"`，间隔 ≤500ms 视为同一段输入（v3） |
 
 ## 验收记录
@@ -43,14 +43,20 @@
   `test_recorder_flushes_text_before_other_events_keeping_order`、
   `test_recorder_flushes_text_when_input_pauses`、
   `test_recorder_text_merge_keeps_captured_invariant`。
-  ⚠️ **待真机确认**：系统拼音输入法是否也走事件层（见计划书 §15.8）。
+  ✅ **真机已定性**（2026-09-12）：系统拼音走通道 ② `insertText:`，事件层看不到
+  中文，但**录下的拼音按键回放时会重新驱动输入法上屏，中文往返成立**（见已知问题）。
+  ⚠️ 该往返依赖输入法状态与候选顺序，不确定；要确定性回放用
+  `record.keysToText` 换成文本事件。
 - **F-REC-15**（2026-09-12）：`test_record_remove_by_index_and_array`、
   `test_record_remove_ignores_out_of_range_indexes`、
   `test_record_remove_moves_before_keeps_real_actions`、
   `test_record_set_origin_follows_selected_event`、
   `test_record_undo_restores_previous_state`、
   `test_record_edit_without_recording_raises`、
-  `test_record_to_node_uses_edited_events`。
+  `test_record_to_node_uses_edited_events`、
+  `test_record_set_text_edits_only_text_events`、
+  `test_record_keys_to_text_collapses_a_pinyin_run`（整段按键塌成一条 text、
+  前后事件原样保留、时间戳取段首、撤销还原、三条错误路径）。
 - **F-REC-10/11/12/13/14**（2026-09-12，v3 重写）：测试
   `test_recorder_keeps_drag_trajectory_without_decimation`、
   `test_recorder_merges_double_click_sequence`、
@@ -149,6 +155,12 @@
     删后的序列，不存在"面板一份、实际写入另一份"的空间。编辑前存快照进撤销栈
     （上限 20），因为编辑是破坏性的。越界下标**忽略而非报错**——UI 可能因并发
     刷新拿到过期下标，为此中断用户操作不值得。
+    改写文本（`record.setText`）与"按键段转文本"（`record.keysToText`）同样必须
+    **替换元素**而不是原地改：撤销栈存的是 `list(res.events)` 浅拷贝，元素是同一
+    批对象，原地改会把快照一起改掉，撤销就永远回不去。`keysToText` 的范围是
+    从选中下标向两侧扩到**最大连续 `kind="key"` 段**（前后非按键事件不动），
+    新事件的时间戳与坐标取该段第一条以保证回放起点不变；整段全是"抬起"时拒绝
+    （那多半是上一个动作的尾巴，当成一次输入会张冠李戴）。
 17. **新增"有意移除"类别时必须同步丢帧判据**：`captured` 与入库 `count` 之间
     隔着 decimate / 窗口过滤 / 上限 / 文本聚合 / 尾部裁剪五类有意丢弃。判据
     `unaccounted`（见 rpc-protocol.md 设计要点 4）在后端按这五类求和，
@@ -177,11 +189,23 @@
   ```
 
   **结论：`com.apple.inputmethod.SCIM.ITABC`（系统简体拼音）走通道 ②，
-  事件通道原理上覆盖不到。** 回放中文正常（`type_text` 走 Unicode 通道），
-  所以是"录不到、放得出"。
+  事件通道原理上覆盖不到**——录下来的只有拼音按键，录不到汉字。
 
-  务实做法：中文用「**键盘输入**」节点（`mode="text"`）直接填，别靠录制。
-  若将来要做录制侧中文，唯一可行方向是 AX 轮询 `kAXValueAttribute` 差分，
+  **但中文往返是成立的（同次实测）**：把录下的那 12 条拼音按键原样回放，
+  输入法被重新驱动，输入框里得到的就是「你好」：
+
+  ```
+  录制: 12 条事件，全是 key（n i h a o Space 的按下/抬起），无 text 事件
+  回放: total=12 skipped=0 → 输入框内容 '你好'
+  ```
+
+  所以准确说法是"**录得到拼音、放得出中文，但不确定**"——结果依赖回放瞬间
+  输入法是否开启、候选顺序是否一致；输入法没开就退化成字面量 `nihao`。
+  要确定性回放，用 `record.keysToText` 把那段按键换成一条 text 事件（回放走
+  `type_text` 的 Unicode 通道，不经过输入法），顺带事件表也能读懂在打什么。
+  文字只能由用户填：IME 提交了什么，事件层无从得知，不能猜。
+
+  录制侧直接拿到汉字的唯一可行方向是 AX 轮询 `kAXValueAttribute` 差分，
   但它对终端/画布类应用不适用，且无法知道插入位置——需单独评估。
 - **自检 `text_alive=true` 不等于"中文能录"**：自检投递的是**我们自己合成的**
   Unicode 事件，与输入法走哪条通道无关，所以系统拼音下它也恒为绿。
@@ -207,5 +231,8 @@
   "只丢最后一次窗口内按下及其之后"，加"停止点击必须刚刚发生"护栏；
   快捷键停止不再裁剪（`toggleRecord({by})` 强制调用方表态）；裁剪可撤销
 - 2026-09-12 **输入法通道定性**：实测定论系统拼音走 `insertText:`（通道②），
-  事件通道覆盖不到中文。自检补 `input_source`，避免"自检通过 ⇒ 中文没问题"
-  的错误推论；中文改用「键盘输入」节点（见已知问题）
+  事件通道覆盖不到中文；同次实测确认**拼音按键回放仍能上屏中文**（往返成立但
+  不确定）。自检补 `input_source`，避免"自检通过 ⇒ 中文没问题"的错误推论
+- 2026-09-12 **按键段转文本**（`record.keysToText`）：选中一条按键 → 填入实际
+  文字 → 整段最大连续按键换成一条 text 事件，回放改走 Unicode 通道变确定；
+  面板加"这段按键 / 替换为文本"输入块与说明（见已知问题）
