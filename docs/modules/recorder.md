@@ -21,8 +21,12 @@
 | F-REC-06 | 热键回声抑制 | ✅ | Recorder(skip_keys)——F9/F10/F11 不入事件 |
 | F-REC-07 | 事件上限自停 | ✅ | 10 万条上限，stopped_by_limit 上报 |
 | F-REC-08 | 丢帧定位计量 | ✅ | captured/filtered/limit_dropped/监听器存活 |
+| F-REC-09 | 停止交互裁剪 | ✅ | 按钮停止时裁掉末次点击+移向按钮的移动（trim_stop_interaction） |
 
 ## 验收记录
+
+- **F-REC-09**（2026-09-12）：`test_trim_stop_interaction`；frozen sidecar 探针
+  验证裁剪后序列 = [起始移动, dock 点击 down, up]，停止点击与移向按钮的移动已移除。
 
 - **F-REC-02/04**（2026-09-12）：连续 5 轮 venv 录制（移动+点击），每轮均捕获
   `mouse left down/up`；修复前 5 轮中点击全丢（pyobjc 符号竞争）。
