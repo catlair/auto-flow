@@ -24,6 +24,9 @@ export const useAppStore = defineStore("app", {
     connected: false,
     // Rust 侧最近一次断连原因（含查找路径 / sidecar stderr），用于给出可读提示。
     rpcDownDetail: "",
+    // 最近一次断连详情，**不被重连清空**：用户往往是在「已经恢复」之后才想起来
+    // 去看诊断，那时把详情清掉，正好看不到最需要的那份线索（只在 console 里留痕）。
+    lastRpcDownDetail: "",
     // 崩溃重连状态：断开时刻/累计断连次数/恢复提示。
     // 恢复提示刻意**不塞进 banner**——banner 只放「有问题」的信息，
     // 否则「已恢复」会把真正需要用户处理的错误顶掉。
@@ -83,7 +86,8 @@ export const useAppStore = defineStore("app", {
         rpcDownCount: state.rpcDownCount,
         rpcDownAt: state.rpcDownAt,
         lastRecoveredAt: state.lastRecoveredAt,
-        rpcDownDetail: state.rpcDownDetail,
+        // 优先给「最近一次断连」的详情：面板通常在已恢复时才被打开
+        rpcDownDetail: state.lastRpcDownDetail || state.rpcDownDetail,
         lastError: state.lastError,
         permissions: {
           accessibility: !!p.accessibility,
@@ -155,6 +159,7 @@ export const useAppStore = defineStore("app", {
           }
         } else {
           this.rpcDownDetail = detail || "";
+          if (detail) this.lastRpcDownDetail = detail;
           this.rpcDownAt = Date.now();
           this.rpcDownCount += 1;
           // detail 可能含查找路径 + sidecar 最近 stderr：横幅只显示首行，全文留给

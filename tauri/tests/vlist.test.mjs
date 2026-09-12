@@ -62,6 +62,18 @@ test("滚到底部时窗口贴住末尾，不越界", () => {
   assert.equal(w.offsetY, w.start * H);
 });
 
+test("scrollTop 远超内容高度时不出现 start>end 的空窗口", () => {
+  // 过度滚动（惯性滚动/程序设置 scrollTop）会让 first 落到 count 之外。
+  // 不夹取的话 start 会超过 end，slice(start,end) 返回空数组 —— 列表整片消失。
+  const count = 5000;
+  const viewportH = 200;
+  const w = computeWindow({ count, itemH: H, viewportH, scrollTop: 1e9, overscan: 8 });
+  assert.ok(w.start < w.end, `窗口为空：${w.start}..${w.end}`);
+  assert.ok(w.end <= count, `end 越界：${w.end}`);
+  assert.ok(w.offsetY <= w.totalH - H, `占位高度超过内容总高：${w.offsetY}`);
+  assert.ok(w.start < count);
+});
+
 test("count=0 返回空窗口", () => {
   const w = computeWindow({ count: 0, itemH: H, viewportH: 200, scrollTop: 0 });
   assert.deepEqual(w, { start: 0, end: 0, offsetY: 0, totalH: 0 });

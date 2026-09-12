@@ -52,13 +52,14 @@ onMounted(() => store.init());
 
   <div v-if="store.banner" :class="['af-banner', store.bannerKind]">
     {{ store.banner }}
+    <!-- 非 ok 的横幅都给一个通往诊断面板的入口：断连详情、运行错误都在那里 -->
     <button
-      v-if="store.rpcDownDetail"
+      v-if="store.bannerKind !== 'ok'"
       class="af-link"
       style="margin-left: 8px"
       @click="diagOpen = true"
     >
-      查看详情
+      诊断
     </button>
   </div>
 

@@ -339,6 +339,24 @@ test("断线显示原因与「正在重连」，恢复后给出恢复提示且 b
   assert.equal(store.reconnectNotice, "");
 });
 
+test("重连后断连详情仍可查——用户常在恢复之后才去看诊断", async () => {
+  const { store, emitStatus } = setup();
+  await store.init();
+  emitStatus(false, "sidecar 未找到\n搜索路径：/Applications/x");
+  assert.ok(store.diagnostics.rpcDownDetail.includes("搜索路径：/Applications/x"));
+
+  emitStatus(true, "");
+  await settle();
+  assert.equal(store.connected, true);
+  // 「当前断连详情」随恢复清空（横幅不再指向它）
+  assert.equal(store.rpcDownDetail, "");
+  // 但诊断面板仍要能看到最近一次——否则最需要的那份线索只剩 console 里有
+  assert.ok(
+    store.diagnostics.rpcDownDetail.includes("搜索路径：/Applications/x"),
+    "恢复后诊断里应仍保留最近一次断连详情"
+  );
+});
+
 test("诊断信息汇总连接/权限/节点数，且后端已挂时仍可读", async () => {
   const { store, emitStatus, mod } = setup(baseHandler(threeNodes()));
   await store.init();
@@ -371,7 +389,9 @@ test("诊断面板不触发 RPC：断开后取值不新增请求", async () => {
   await store.init();
   emitStatus(false, "断开");
   const n = methods().length;
-  void store.diagnostics;
+  // 先确认 getter 真的可用，否则下面的断言在「getter 不存在」时会空过
+  const d = store.diagnostics;
+  assert.ok(d && d.appVersion, "诊断信息应可用");
   void store.diagnostics;
   assert.equal(methods().length, n);
 });
