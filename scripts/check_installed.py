@@ -159,6 +159,14 @@ class Sidecar:
 def _live_checks(sidecar_path: str) -> list:
     out, s = [], Sidecar(sidecar_path)
     try:
+        # 端点真的挂在 RPC 线上（不是只在方法表里有个字符串）。趁还没录过，
+        # 调用应报 no_record_result(-32003)；没注册会报 unknown method(-32601)。
+        # 两者能区分"没注册"与"注册了但实现炸了"。
+        ks = s.call("record.keysToText", {"index": 0, "text": "x"})
+        code = (ks.get("error") or {}).get("code")
+        out.append((f"record.keysToText 已挂上 RPC（未录制时返回 {code}）",
+                    code == -32003))
+
         r = s.call("app.info").get("result") or {}
         out.append((f"app.info 有响应（v{r.get('appVersion')} "
                     f"proto={r.get('protocolVersion')} frozen={r.get('frozen')}）",
