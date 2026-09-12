@@ -34,8 +34,23 @@ tauri/
 
    ```bash
    ./scripts/build_sidecar.sh
+   # 目标已存在时 `cp -R src dst` 会拷成 dst/src（嵌套错位），所以先挪开旧的。
+   # 用 mv 而不是 rm -rf：本环境下批量删除会被安全策略拦下。
+   [ -e src-tauri/autoflow-sidecar ] && \
+     mv src-tauri/autoflow-sidecar "src-tauri/.autoflow-sidecar.old-$(date +%Y%m%d%H%M%S)"
    cp -R ../dist/autoflow-sidecar src-tauri/autoflow-sidecar
    ```
+
+   校验落点（可执行文件与自带模型都要在）：
+
+   ```bash
+   ls -l src-tauri/autoflow-sidecar/autoflow-sidecar
+   ls -l src-tauri/autoflow-sidecar/_internal/models/yolo11n.onnx
+   ```
+
+   注意 `.autoflow-sidecar.old-*` 这种点号开头的旧目录**不会**被
+   `bundle.resources = ["autoflow-sidecar/**/*"]` 匹配到，留在原地不影响打包，
+   确认新产物可用后再自行清理。
 
 3. **生成图标**（见 `src-tauri/icons/README.md`）：`npm run tauri icon <1024.png>`。
    （仓库已带 `icon-source.png` 可作源；首次需生成 `icons/` 各尺寸。）
