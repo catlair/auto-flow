@@ -22,7 +22,7 @@
 | F-REC-06 | 热键回声抑制 | ✅ | Recorder(skip_keys)——F9/F10/F11 不入事件 |
 | F-REC-07 | 事件上限自停 | ✅ | 10 万条上限，stopped_by_limit 上报 |
 | F-REC-08 | 丢帧定位计量 | ✅ | captured / decimated / window_dropped / limit_dropped / 监听器存活 |
-| F-REC-09 | 停止交互裁剪 | ✅ | `trim_stop_interaction`：按**停止那一刻**的窗口边界定位停止点击 |
+| F-REC-09 | 停止点击裁剪 | ✅ | `trim_stop_interaction`：**仅按钮停止**，只丢最后一次窗口内按下及其之后 |
 | F-REC-10 | **拖拽语义记录** | ✅ | 自行跟踪按键保持状态，移动事件带 `dragged`（v3） |
 | F-REC-11 | **双击/三击归并** | ✅ | 相邻快速同位置按下归并为 `clicks=1/2/3`（v3） |
 | F-REC-12 | **滚轮单位标注** | ✅ | `wheel_unit="line"`（pynput 取的是 DeltaAxis 行增量）（v3） |
@@ -58,8 +58,11 @@
   `test_recorder_flushes_last_decimated_position` 通过。
 - **F-REC-03/08**（2026-09-12）：`test_recorder_decimates_redundant_moves_but_not_information`
   ——1px 且 1ms 的微移动被降采样，距上次保留 100ms 的移动必留。
-- **F-REC-09**（2026-09-12）：`test_trim_stop_interaction_uses_window_bounds` /
-  `test_trim_never_destroys_real_work_without_window_hit`。
+- **F-REC-09**（2026-09-12）：`test_trim_stop_interaction_drops_only_the_stop_click` /
+  `test_trim_keeps_the_whole_recording_when_it_is_pure_movement` /
+  `test_trim_refuses_click_that_is_not_recent` /
+  `test_trim_never_destroys_real_work_without_window_hit` /
+  `test_record_stop_without_trim_keeps_everything`（快捷键停止一条不丢）。
 - **F-REC-02/04**（2026-09-12）：连续 5 轮 venv 录制（移动+点击），每轮均捕获
   `mouse left down/up`；修复前 5 轮中点击全丢（pyobjc 符号竞争）。
 - **F-REC-05**（2026-08-31）：崩溃报告确认 pynput 键盘监听 TSMGetInputSourceProperty
@@ -94,9 +97,23 @@
    下发一次（`outer_*` 还含标题栏，比内容区外扩），前端监听又从不注销——
    边界一旦过期就成片吞掉真实操作，这是「操作被莫名其妙裁掉」的主因。
    v3 只把窗口边界用于**停止时定位停止点击**，且边界在停止那一刻由前端重新下发。
-6. **裁剪宁可不做也不做错**：识别不到落在窗口内的鼠标按下时一律不裁——
-   宁可让一次停止点击被回放（顶多多点一下），也不要把用户真实的最后一次拖拽
-   （同样以按下开始）误判成停止操作而静默删除。
+6. **裁剪只丢"停止点击"本身**：按钮停止时，序列尾部的
+   `[..., 用户内容, 移动, 按下(停止按钮), 抬起, 零碎移动]` 只把**按下及其之后**
+   去掉，**不碰它之前的任何事件**。
+   - 曾在这里额外"弹出尾部连续移动"（理由是"移向停止按钮的路径"）。但录制内容
+     本身经常就是一段鼠标移动；那段"路径"与用户真正想录的轨迹在数据上无法区分，
+     于是整段录制被裁空（2026-09-12 事故：`captured=470 / decimated=151 /
+     trimmed=319 / count=0`，一次 7.8 秒的纯移动录制归零）。**移动轨迹是用户的
+     数据，不是噪声**；要删由用户在面板上显式删（`record.remove`）。
+   - 另一条护栏：**停止点击必须刚刚发生**（`TRIM_STOP_CLICK_MS=1500`）。最后那个
+     窗口内按下离录制结束太久 ⇒ 它是用户的真实操作，不是停止点击 ⇒ 一律不裁。
+   - **只有按钮停止才裁**：F9 已在 `skip_keys` 里、根本不进序列，没有停止动作
+     可裁。`toggleRecord` 因此要求调用方显式给出 `by: "button" | "hotkey"`——
+     曾经两个入口共用默认 `trim: true`，导致快捷键停止也去裁（见事故）。
+   - 裁剪是破坏性的且发生在用户看到统计之前，故**押一份裁剪前快照进撤销栈**，
+     `record.undo` 可整段还原。
+   - 识别不到（边界缺失 / 边界内无按下）时一律不裁：宁可让一次停止点击被回放
+     （顶多多点一下），也不做静默的数据损坏。
 7. **stop 顺序**：先停监听器、后置 `_stopping` 闸、再排空队列——顺序反了会把
    最后一批在途事件误判为丢弃（录制尾部丢帧）。
 8. **监听器存活在 stop 之前采样**：pynput 的 `stop()` 不 join、自建 tap 的
@@ -156,3 +173,6 @@
   监听器存活判定去竞态
 - 2026-09-12 **事件编辑**：面板选中行 → 删除 / 删此前的移动 / 设为原点 / 撤销；
   编辑直接作用于权威序列，写入节点即取编辑结果
+- 2026-09-12 **裁剪事故修复**：停止裁剪从"截断+无上界弹尾部移动"改为
+  "只丢最后一次窗口内按下及其之后"，加"停止点击必须刚刚发生"护栏；
+  快捷键停止不再裁剪（`toggleRecord({by})` 强制调用方表态）；裁剪可撤销

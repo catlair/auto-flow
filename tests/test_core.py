@@ -667,20 +667,56 @@ def test_recorder_next_clicks_resets_when_position_moves():
     assert rec._next_clicks("left", 80, 80, 100) == 1
 
 
-def test_trim_stop_interaction_uses_window_bounds():
-    """按钮停止时裁掉"点停止按钮"那次点击及其前移向按钮的移动。"""
+def test_trim_stop_interaction_drops_only_the_stop_click():
+    """按钮停止：只丢"点停止按钮"这一次点击，它之前的事件一律原样保留。
+
+    曾经的实现会在截断后再"弹出尾部连续移动"（当时认为是移向按钮的路径），
+    结果把 [move(30)] 也删了。移动轨迹是用户的数据，不能当噪声。
+    """
     from core.recorder import trim_stop_interaction
     ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
     events = [
         ev(ts_ms=0, kind="move", x=300, y=300),
         ev(ts_ms=10, kind="mouse", x=300, y=300, button="left", pressed=True),
         ev(ts_ms=20, kind="mouse", x=300, y=300, button="left", pressed=False),
-        ev(ts_ms=30, kind="move", x=900, y=400),          # 移向窗口
+        ev(ts_ms=30, kind="move", x=900, y=400),          # 用户内容，必须保留
         ev(ts_ms=40, kind="mouse", x=1000, y=400, button="left", pressed=True),   # 点停止
         ev(ts_ms=45, kind="mouse", x=1000, y=400, button="left", pressed=False),
     ]
-    out = trim_stop_interaction(events, (900, 300, 400, 300))
-    assert [e.ts_ms for e in out] == [0, 10, 20]          # 尾部交互整体裁掉
+    out = trim_stop_interaction(events, (900, 300, 400, 300), end_ts_ms=45)
+    assert [e.ts_ms for e in out] == [0, 10, 20, 30]   # 只丢停止点击及其后的残余
+
+
+def test_trim_keeps_the_whole_recording_when_it_is_pure_movement():
+    """回归 2026-09-12：一段纯移动的录制 + 末尾一次停止点击，裁完不能变空。
+
+    真实数据：captured=470 / decimated=151 / trimmed=319 / count=0。
+    即 7.8 秒的鼠标移动全被"弹出尾部移动"吃掉了。
+    """
+    from core.recorder import trim_stop_interaction
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    moves = [ev(ts_ms=i * 16, kind="move", x=600 + i, y=400) for i in range(300)]
+    stop_click = ev(ts_ms=4800, kind="mouse", x=1000, y=400,
+                    button="left", pressed=True)
+    events = moves + [stop_click]
+    out = trim_stop_interaction(events, (900, 300, 400, 300), end_ts_ms=4850)
+    assert len(out) == 300                     # 移动一条不少
+    assert all(e.kind == "move" for e in out)
+
+
+def test_trim_refuses_click_that_is_not_recent():
+    """停止点击必须刚刚发生；最后那个窗口内按下离结束太久 → 那是真实操作，不裁。"""
+    from core.recorder import trim_stop_interaction
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    events = [
+        ev(ts_ms=0, kind="move", x=600, y=400),
+        ev(ts_ms=100, kind="mouse", x=1000, y=400, button="left", pressed=True),
+        ev(ts_ms=110, kind="mouse", x=1000, y=400, button="left", pressed=False),
+        ev(ts_ms=5000, kind="move", x=610, y=400),
+    ]
+    # 按下发生在 100ms，录制到 5000ms 才停 → 距结束 4900ms，远超窗口
+    assert trim_stop_interaction(events, (900, 300, 400, 300),
+                                end_ts_ms=5000) == events
 
 
 def test_trim_never_destroys_real_work_without_window_hit():
@@ -1110,12 +1146,14 @@ def test_input_probe_keeps_key_listener_wired_to_text():
 
 
 def test_record_stop_unaccounted_is_zero_after_trim():
-    """按钮停止（trim 为真）裁掉尾部交互后，一致性等式仍必须配平。
+    """按钮停止（trim 为真）裁掉停止点击后，一致性等式仍必须配平。
 
     回归：4b16c52 曾把 trimmed 并进 filtered 修过一次；v3 重写把 filtered 与
     trimmed 拆成两个字段，等式又被打破——于是**每次用按钮停止录制**（且尾部有
     可识别的停止点击）都会误报「检测到系统层丢事件，请反馈」。
-    按老口径：captured(6) − filtered(0) − limit(0) − text_merged(0) = 6 ≠ count(3)。
+
+    另回归 2026-09-12：这里同时锁住"裁掉的只有停止点击那 2 条"，以及裁剪
+    可被 record.undo 整段还原（拿不回来的裁剪不接受）。
     """
     from rpc.controller import AppController
     from core.events import RecordResult
@@ -1132,14 +1170,14 @@ def test_record_stop_unaccounted_is_zero_after_trim():
             self._win_bounds = b
 
         def elapsed_ms(self):
-            return 0
+            return 45          # 停止点击(40ms)距录制结束(45ms)很近 → 是停止点击
 
     ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
     result = RecordResult(events=[
         ev(ts_ms=0, kind="move", x=300, y=300),
         ev(ts_ms=10, kind="mouse", x=300, y=300, button="left", pressed=True),
         ev(ts_ms=20, kind="mouse", x=300, y=300, button="left", pressed=False),
-        ev(ts_ms=30, kind="move", x=1000, y=400),                               # 移向窗口
+        ev(ts_ms=30, kind="move", x=1000, y=400),                               # 用户内容，保留
         ev(ts_ms=40, kind="mouse", x=1000, y=400, button="left", pressed=True),  # 点停止
         ev(ts_ms=45, kind="mouse", x=1000, y=400, button="left", pressed=False),
     ], n_captured=6)
@@ -1148,8 +1186,49 @@ def test_record_stop_unaccounted_is_zero_after_trim():
     ctrl.recording = True
     ctrl.recorder = _FakeRec(result)
     stats = ctrl.record_stop(trim=True, window_bounds=(900, 300, 400, 300))
-    assert stats["trimmed"] == 3
-    assert stats["count"] == 3
+    assert stats["trimmed"] == 2          # 只有停止点击的按下+抬起
+    assert stats["count"] == 4
+    assert stats["unaccounted"] == 0
+    # 裁剪是破坏性的，必须能撤销回原样
+    assert ctrl._record_undo, "裁剪前应押入撤销快照"
+    ctrl.record_undo()
+    assert len(ctrl._last_record.events) == 6
+    ctrl.shutdown()
+
+
+def test_record_stop_without_trim_keeps_everything():
+    """快捷键停止（trim=False）一条都不能丢：F9 已在 skip_keys 里，没有停止点击。"""
+    from rpc.controller import AppController
+    from core.events import RecordResult
+
+    class _FakeRec:
+        def __init__(self, result):
+            self._result = result
+            self._win_bounds = (900, 300, 400, 300)
+
+        def stop(self):
+            return self._result
+
+        def set_window_bounds(self, b):
+            self._win_bounds = b
+
+        def elapsed_ms(self):
+            return 4850
+
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    moves = [ev(ts_ms=i * 16, kind="move", x=600 + i, y=400) for i in range(20)]
+    # 窗口内的真实点击（用户自己的操作），快捷键停止时绝不能动它
+    result = RecordResult(events=moves + [
+        ev(ts_ms=1300, kind="mouse", x=1000, y=400, button="left", pressed=True),
+        ev(ts_ms=1310, kind="mouse", x=1000, y=400, button="left", pressed=False),
+    ], n_captured=22)
+
+    ctrl = AppController()
+    ctrl.recording = True
+    ctrl.recorder = _FakeRec(result)
+    stats = ctrl.record_stop(trim=False, window_bounds=(900, 300, 400, 300))
+    assert stats["trimmed"] == 0
+    assert stats["count"] == 22
     assert stats["unaccounted"] == 0
     ctrl.shutdown()
 

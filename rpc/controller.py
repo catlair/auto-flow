@@ -372,8 +372,9 @@ class AppController:
     def record_stop(self, trim: bool = False, window_bounds: Any = None) -> dict:
         """停止录制。
 
-        `trim=True`（按钮停止）：把"点停止按钮"这次交互从序列尾部裁掉，
-        否则回放会复现它、点到回放当时该位置上的任意东西。
+        `trim=True`（**仅按钮停止**）：把"点停止按钮"这一次点击从序列尾部裁掉，
+        否则回放会复现它、点到回放当时该位置上的任意东西。快捷键停止不裁——
+        F9 已在 skip_keys 里，根本不进序列，没有"停止点击"可裁。
 
         `window_bounds` 由前端在**停止那一刻**下发（而不是录制开始时）——
         录制期间用户可能移动过窗口，用开始时的旧边界会裁错位置。
@@ -390,9 +391,16 @@ class AppController:
         result = rec.stop()
         n_trimmed = 0
         if trim:
-            before = len(result.events)
-            result.events = trim_stop_interaction(result.events, rec._win_bounds)
-            n_trimmed = before - len(result.events)
+            before = list(result.events)
+            result.events = trim_stop_interaction(
+                result.events, rec._win_bounds, rec.elapsed_ms())
+            n_trimmed = len(before) - len(result.events)
+        if n_trimmed:
+            # 裁剪是**破坏性**的（还发生在用户看到统计之前），押一份裁剪前的快照，
+            # 让 record.undo 能把它整段还原。拿不回数据的静默裁剪不接受。
+            self._record_undo.append(before)
+            if len(self._record_undo) > self._UNDO_LIMIT:
+                self._record_undo.pop(0)
         if result.events and result.events[-1].kind == "move":
             elapsed = rec.elapsed_ms()
             if elapsed > result.events[-1].ts_ms:

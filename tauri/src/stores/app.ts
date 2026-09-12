@@ -273,7 +273,7 @@ export const useAppStore = defineStore("app", {
           // 输入框聚焦时屏蔽热键（§14 顺带修复）
           if (this.isInputFocused()) break;
           const a = n.params.action;
-          if (a === "record") this.toggleRecord();
+          if (a === "record") this.toggleRecord({ by: "hotkey" });
           else if (a === "run") this.toggleRun();
           else if (a === "pick") {
             // 后端事件自带光标坐标（CLI 进程读不到全局光标），直接回填
@@ -464,12 +464,22 @@ export const useAppStore = defineStore("app", {
         this.setClickThrough(true);
       }
     },
-    async toggleRecord() {
+    /**
+     * 开始/停止录制。
+     *
+     * `by` 必须由调用方显式给出（不给默认值）：**按钮停止**才有"停止点击"需要从
+     * 序列尾部裁掉；**快捷键停止**的 F9 已由后端 skip_keys 排除，序列里没有停止
+     * 动作，裁任何东西都只会误删用户内容。
+     *
+     * 这两个入口曾共用同一个默认 `trim: true`，于是按 F9 停止时后端会去找"最后一个
+     * 落在窗口矩形内的按下"——那是个真实操作——并从它处把后面整段截掉（2026-09-12
+     * 事故：一次 7.8 秒的移动录制被裁成 0 条）。
+     */
+    async toggleRecord(opts: { by: "button" | "hotkey" }) {
       if (this.recording) {
-        // 按钮停止：trim 把"点停止按钮"这次交互从尾部裁掉（回放不再复现它）。
         // 窗口边界在**停止这一刻**取，避免用录制开始时的旧边界裁错位置。
         const r = await rpc.request("record.stop", {
-          trim: true,
+          trim: opts.by === "button",
           window_bounds: await this.windowBounds(),
         });
         this.recording = false;

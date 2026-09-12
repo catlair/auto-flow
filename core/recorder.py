@@ -72,6 +72,11 @@ MAX_CLICKS = 3
 # 合并为一条 text 事件；超过则另起一条（保留"打字中间停顿过"的节奏）。
 TEXT_JOIN_MS = 500
 
+# ---- 停止裁剪参数 ----
+# 停止点击必须**刚刚发生**：它离录制结束超过这个窗口，说明序列里最后那个
+# 窗口内按下根本不是停止点击，而是用户的真实操作——此时一律不裁。
+TRIM_STOP_CLICK_MS = 1500
+
 ButtonName = {"left": "left", "right": "right", "middle": "middle"}
 
 
@@ -393,20 +398,31 @@ class Recorder:
 
 
 def trim_stop_interaction(events: list[MacroEvent],
-                          window_bounds: Optional[tuple] = None) -> list[MacroEvent]:
-    """裁掉「停止录制」这次交互（按钮停止时调用）。
+                          window_bounds: Optional[tuple] = None,
+                          end_ts_ms: Optional[int] = None) -> list[MacroEvent]:
+    """裁掉「点停止按钮」这一次点击（**仅**按钮停止时调用，见 rpc/controller）。
 
-    用鼠标点「停止录制」时，这次点击（和移向按钮的路径）已在事件序列里——
-    回放会复现它，点到回放当时该位置的任意东西。规则：
+    为什么需要它：用鼠标点「停止录制」时，这次点击和别的点击一样进了序列；
+    回放会照着复现，等于在回放那一刻去点那个屏幕位置上的任意东西。所以要把
+    **这一次点击**从尾部去掉。
 
-    1) 找到最后一次**落在 Auto Flow 窗口内**的鼠标按下——那就是停止点击，
-       从其处截断；
-    2) 再移除尾部连续移动（移向停止按钮的路径），
-       使回放终止于最后一次实质动作（点击/按键/滚轮）。
+    规则只有一条——**丢掉最后一次窗口内的鼠标按下，以及它之后的残余**：
 
-    **识别不到就不裁**：窗口边界缺失、或边界内没有任何鼠标按下时一律原样返回。
-    宁可让一次停止点击被回放（顶多多点一下），也不要把用户真实的最后一次
-    拖拽（同样以按下开始）误判成停止操作而删掉——后者是静默的数据损坏。
+        [ ...用户的内容... , 移动, 按下(停止按钮), 抬起, 点击后的零碎移动 ]
+          └────────── 原样保留 ──────────┘ └──── 只丢这一段 ────┘
+
+    两条护栏：
+
+    1) **不碰停止点击之前的任何事件**。曾在这里额外"弹出尾部连续移动"（当时的
+       理由是"移向停止按钮的路径"），但录制内容本身经常就是一段鼠标移动——
+       那段"路径"与用户真正想录的轨迹在数据上无法区分，于是整段录制被裁空
+       （2026-09-12 事故：captured=470 → trimmed=319 → count=0）。移动轨迹是
+       用户的数据，不是噪声；要删请由用户在面板上显式删（record.remove）。
+    2) **停止点击必须刚刚发生**（`TRIM_STOP_CLICK_MS`）。它离录制结束太久，说明
+       序列里最后那个窗口内按下不是停止点击而是用户的真实操作，此时不裁。
+
+    **识别不到就不裁**：边界缺失、或边界内没有鼠标按下时原样返回。宁可让一次
+    停止点击被回放（顶多多点一下），也不做静默的数据损坏。
     """
     if not events or not window_bounds:
         return events
@@ -418,7 +434,7 @@ def trim_stop_interaction(events: list[MacroEvent],
             idx = i
     if idx < 0:
         return events
-    out = events[:idx]
-    while out and out[-1].kind == "move":
-        out.pop()
-    return out
+    if end_ts_ms is not None \
+            and end_ts_ms - events[idx].ts_ms > TRIM_STOP_CLICK_MS:
+        return events
+    return events[:idx]

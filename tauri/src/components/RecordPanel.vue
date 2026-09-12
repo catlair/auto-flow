@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
 
 async function onToggleRecord() {
   try {
-    await store.toggleRecord();
+    await store.toggleRecord({ by: "button" });
     const s = store.lastRecordInfo;
     if (!s) return;
     if (s.mouse_died || s.kb_died) {

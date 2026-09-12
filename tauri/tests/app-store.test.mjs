@@ -422,3 +422,20 @@ test("error 级提示记入 lastError，后续 ok/warn 不覆盖它", () => {
   assert.equal(store.lastError, "运行出错：boom", "诊断要能看到最近一次真正的错误");
   assert.equal(store.diagnostics.lastError, "运行出错：boom");
 });
+
+test("录制停止：只有按钮停止才裁停止点击，快捷键停止不裁", async () => {
+  // 回归 2026-09-12：两个入口曾共用默认 trim:true，于是按 F9 停止也会去序列里
+  // 找"最后一个窗口内的按下"当停止点击，从那里把后面整段截掉——一次 7.8 秒的
+  // 移动录制被裁成 0 条。快捷键停止时序列里根本没有停止动作可裁。
+  const { store, calls } = setup();
+
+  store.recording = true;
+  await store.toggleRecord({ by: "hotkey" });
+  let stop = calls.filter((c) => c.method === "record.stop").at(-1);
+  assert.equal(stop.params.trim, false, "F9 停止不得裁剪");
+
+  store.recording = true;
+  await store.toggleRecord({ by: "button" });
+  stop = calls.filter((c) => c.method === "record.stop").at(-1);
+  assert.equal(stop.params.trim, true, "按钮停止要裁掉这次点击");
+});
