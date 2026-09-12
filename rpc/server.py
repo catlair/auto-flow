@@ -290,6 +290,11 @@ _HANDLERS = {
         trim=bool(p.get("trim", False)), window_bounds=p.get("window_bounds"))),
     "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
     "record.current": _ctl(lambda p: _CTRL.record_current()),
+    "record.remove": _ctl(lambda p: _CTRL.record_remove(p.get("indexes"))),
+    "record.removeMovesBefore": _ctl(lambda p: _CTRL.record_remove_moves_before(
+        p.get("index", 0))),
+    "record.setOrigin": _ctl(lambda p: _CTRL.record_set_origin(p.get("index"))),
+    "record.undo": _ctl(lambda p: _CTRL.record_undo()),
     "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
     "record.bounds": _ctl(lambda p: _CTRL.record_bounds(p.get("bounds"))),
     # --- 模板截取（screencapture -i 框选，异步回填 template.snipped） ---

@@ -38,12 +38,13 @@ function matches(ev: any, f: string): boolean {
   return true;
 }
 
-const events = computed(() =>
-  filter.value === "all"
-    ? store.recordBuffer
-    : store.recordBuffer.filter((e: any) => matches(e, filter.value))
-);
-const total = computed(() => events.value.length);
+// 行带上**缓冲内的真实下标**：过滤后仍要能指回后端序列里那一条，否则删除会删错。
+const rows = computed(() => {
+  const b = store.recordBuffer;
+  const all = b.map((ev: any, idx: number) => ({ ev, idx }));
+  return filter.value === "all" ? all : all.filter((r) => matches(r.ev, filter.value));
+});
+const total = computed(() => rows.value.length);
 const win = computed(() =>
   computeWindow({
     count: total.value,
@@ -52,7 +53,54 @@ const win = computed(() =>
     scrollTop: scrollTop.value,
   })
 );
-const visible = computed(() => events.value.slice(win.value.start, win.value.end));
+const visible = computed(() => rows.value.slice(win.value.start, win.value.end));
+
+// ---- 选中与编辑 ----
+const selected = ref(-1);
+let busy = false;
+
+async function edit(method: string, params: Record<string, unknown> = {}) {
+  if (busy) return;
+  busy = true;
+  try {
+    await store.recordEdit(method, params);
+  } catch (e) {
+    MessagePlugin.error("编辑失败：" + errMessage(e));
+  } finally {
+    busy = false;
+  }
+}
+
+async function onDeleteSelected() {
+  if (selected.value < 0) return;
+  const idx = selected.value;
+  selected.value = -1;
+  await edit("record.remove", { indexes: [idx] });
+}
+
+async function onDropMovesBefore() {
+  if (selected.value < 0) return;
+  await edit("record.removeMovesBefore", { index: selected.value });
+}
+
+async function onSetOrigin() {
+  if (selected.value < 0) return;
+  await edit("record.setOrigin", { index: selected.value });
+}
+
+async function onUndo() {
+  await edit("record.undo");
+}
+
+/** Delete / Backspace 删除选中行（事件流聚焦时）。 */
+function onStreamKey(e: KeyboardEvent) {
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (selected.value >= 0) {
+      e.preventDefault();
+      void onDeleteSelected();
+    }
+  }
+}
 
 /** 事件流每一行的展示：key 事件此前只显示 "key @ 0,0"，看不出按了什么键。 */
 function fmtEvent(ev: any): string {
@@ -99,7 +147,9 @@ function scrollToBottom() {
 }
 
 // 新事件到达时，只有原本就贴在底部才继续跟随。
-watch(total, () => {
+// 同时收敛选中下标：删除/过滤切换后原下标可能已不存在。
+watch(total, (n) => {
+  if (selected.value >= n) selected.value = -1;
   if (!follow.value) return;
   void nextTick(scrollToBottom);
 });
@@ -184,7 +234,7 @@ async function onToNode() {
       >
     </div>
     <div v-if="store.lastRecordInfo" class="af-rec-stats">
-      已录 {{ store.lastRecordInfo.count }} 条事件
+      已录 {{ store.lastRecordCount }} 条事件
       <template v-if="durationMs"> · 时长 {{ fmtDuration(durationMs) }}</template>
       <template v-if="store.lastRecordInfo.decimated">
         · 冗余移动降采样 {{ store.lastRecordInfo.decimated }} 条</template>
@@ -208,29 +258,45 @@ async function onToNode() {
         {{ f.label }}
       </button>
     </div>
+    <div v-if="store.recordBuffer.length && !store.recording" class="af-edit">
+      <span class="af-edit-sel">
+        {{ selected >= 0 ? `已选 #${selected}` : "点一行选中（Delete 可删）" }}
+      </span>
+      <button class="af-chip" :disabled="selected < 0" @click="onDeleteSelected">删除</button>
+      <button class="af-chip" :disabled="selected < 0" @click="onDropMovesBefore">
+        删此前的移动
+      </button>
+      <button class="af-chip" :disabled="selected < 0" @click="onSetOrigin">设为原点</button>
+      <button class="af-chip" :disabled="!store.recordCanUndo" @click="onUndo">撤销</button>
+    </div>
     <div v-if="store.recordBuffer.length" class="af-stream-bar">
       <span>共 {{ total }} 条</span>
       <span v-if="total > win.end || win.start > 0" class="af-range">
         显示 {{ win.start + 1 }}–{{ win.end }}
       </span>
       <span style="flex: 1" />
+      <span class="af-range">原点 {{ store.recordOrigin[0] }},{{ store.recordOrigin[1] }}</span>
       <button v-if="!follow" class="af-jump" @click="scrollToBottom">↓ 回到最新</button>
     </div>
     <div
       ref="streamEl"
       class="af-stream"
       :class="{ live: store.recording }"
+      tabindex="0"
       @scroll.passive="onScroll"
+      @keydown="onStreamKey"
     >
       <div class="af-vlist" :style="{ height: win.totalH + 'px' }">
         <div class="af-vwin" :style="{ transform: `translateY(${win.offsetY}px)` }">
           <div
-            v-for="(ev, i) in visible"
-            :key="win.start + i"
+            v-for="(row, i) in visible"
+            :key="row.idx"
             class="af-ev"
+            :class="{ sel: row.idx === selected }"
             :style="{ height: ITEM_H + 'px' }"
+            @click="selected = row.idx === selected ? -1 : row.idx"
           >
-            {{ fmtEvent(ev) }}
+            {{ fmtEvent(row.ev) }}
           </div>
         </div>
       </div>
@@ -280,6 +346,27 @@ async function onToNode() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+.af-ev.sel {
+  background: #e8f0ff;
+  color: #0052d9;
+}
+.af-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.af-edit-sel {
+  font-size: 11px;
+  color: #888;
+  margin-right: 2px;
+}
+.af-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 /* 撑出完整滚动高度，再由 .af-vwin 平移到当前窗口位置 */
 .af-vlist {

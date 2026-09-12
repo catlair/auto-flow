@@ -769,3 +769,89 @@ def test_player_slow_move_is_sampled_over_time(monkeypatch):
     assert len(fm.moves) > 3
 
 
+# ---------- 录制事件编辑 ----------
+def _ctrl_with_events():
+    from rpc.controller import AppController
+    from core.events import RecordResult
+    ctrl = AppController()
+    ctrl._last_record = RecordResult(events=[
+        MacroEvent(ts_ms=0, kind="move", x=500, y=500),
+        MacroEvent(ts_ms=10, kind="move", x=501, y=500),
+        MacroEvent(ts_ms=20, kind="mouse", x=501, y=500, button="left", pressed=True),
+        MacroEvent(ts_ms=40, kind="mouse", x=501, y=500, button="left", pressed=False),
+        MacroEvent(ts_ms=50, kind="key", key="a", pressed=True),
+    ], origin_x=500, origin_y=500)
+    return ctrl
+
+
+def test_record_remove_by_index_and_array():
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_remove(0)
+    assert r["count"] == 4 and r["can_undo"] is True
+    # 删掉第一条后序列为 [move, down, up, key]，再批量删 [1,2] 即删掉按下/释放
+    r = ctrl.record_remove([1, 2])
+    assert r["count"] == 2
+    assert [e["kind"] for e in r["events"]] == ["move", "key"]
+    ctrl.shutdown()
+
+
+def test_record_remove_ignores_out_of_range_indexes():
+    """越界下标忽略而不是报错——UI 可能因为并发刷新拿到过期下标。"""
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_remove([-1, 99, 0])
+    assert r["count"] == 4
+    ctrl.shutdown()
+
+
+def test_record_remove_moves_before_keeps_real_actions():
+    """删掉开头"把光标移过去"的移动，点击/按键/滚轮保留。"""
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_remove_moves_before(2)
+    assert [e["kind"] for e in r["events"]] == ["mouse", "mouse", "key"]
+    ctrl.shutdown()
+
+
+def test_record_set_origin_follows_selected_event():
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_set_origin(3)
+    assert r["origin"] == [501, 500]
+    ctrl.shutdown()
+
+
+def test_record_undo_restores_previous_state():
+    ctrl = _ctrl_with_events()
+    ctrl.record_remove(0)
+    assert ctrl.record_current()["count"] == 4
+    r = ctrl.record_undo()
+    assert r["count"] == 5
+    assert r["can_undo"] is False           # 栈已空
+    try:
+        ctrl.record_undo()
+        raise AssertionError("空栈应报错")
+    except Exception as e:  # noqa: BLE001
+        assert "nothing_to_undo" in str(e)
+    ctrl.shutdown()
+
+
+def test_record_edit_without_recording_raises():
+    from rpc.controller import AppController
+    ctrl = AppController()
+    try:
+        ctrl.record_remove(0)
+        raise AssertionError("无录制结果应报错")
+    except Exception as e:  # noqa: BLE001
+        assert "no_record_result" in str(e)
+    ctrl.shutdown()
+
+
+def test_record_to_node_uses_edited_events():
+    """写入节点必须取编辑后的序列——编辑的就是权威序列本身。"""
+    ctrl = _ctrl_with_events()
+    ctrl.record_remove([0, 1])
+    ctrl.record_to_node()
+    node = ctrl.workflow.nodes[-1]
+    assert node.type == "record_replay"
+    assert [e["kind"] for e in node.params["events"]] == ["mouse", "mouse", "key"]
+    ctrl.shutdown()
+
+

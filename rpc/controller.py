@@ -56,6 +56,7 @@ class AppController:
         self.executor = _executor_mod.Executor()
         self.recorder = None  # 在 P1-2 装入 Recorder
         self._last_record = None
+        self._record_undo: list = []   # 事件编辑的撤销栈（快照，上限见 _UNDO_LIMIT）
         self._rec_poller = None
         self._rec_poller_rec = None
         self._run_thread = None  # 运行线程引用：shutdown 需要等它收尾
@@ -316,6 +317,7 @@ class AppController:
             self.recorder = Recorder(skip_keys=set(self._hotkey_map.keys()),
                                      window_bounds=self._parse_bounds(window_bounds),
                                      drop_in_window=bool(drop_in_window))
+            self._record_undo.clear()   # 新录制开始：旧序列的撤销栈已无意义
             self.recorder.start()
             self.recording = True
             self._rec_poller_rec = self.recorder
@@ -423,22 +425,124 @@ class AppController:
         self._broadcast_workflow()
         return {**self.workflow_current(), "index": inserted, "node": self._public_node(node)}
 
-    def record_current(self) -> dict:
-        """返回最近一次录制的**权威**事件序列。
+    # ---- 录制事件编辑（对 _last_record 就地增删改，写入节点即取编辑后的结果） ----
+    # 编辑的是**权威序列**本身：面板删掉一条，写入节点的就是删后的序列，
+    # 不存在"面板显示一份、实际写入另一份"的空间。
+    _UNDO_LIMIT = 20
 
-        面板此前只靠 `record.event` 增量推送维护自己的缓冲（上限截断），
-        与写入节点的后端全量数据是两份来源，会出现"看到的和写入的不一致"。
-        改为面板在录制结束后拉一次本接口。
-        """
+    def _record_or_raise(self):
         res = self._last_record
         if res is None:
-            return {"count": 0, "events": [], "origin": [0, 0], "duration_ms": 0}
+            raise ControllerError(-32003, "no_record_result")
+        return res
+
+    def _record_snapshot(self) -> None:
+        """编辑前存一份快照，供 record.undo 回滚（编辑是破坏性的）。"""
+        res = self._last_record
+        if res is None:
+            return
+        self._record_undo.append(list(res.events))
+        if len(self._record_undo) > self._UNDO_LIMIT:
+            self._record_undo.pop(0)
+
+    def _record_payload(self) -> dict:
+        res = self._last_record
+        if res is None:
+            return {"count": 0, "events": [], "origin": [0, 0], "duration_ms": 0,
+                    "can_undo": False}
         return {
             "count": len(res.events),
             "events": [asdict(e) for e in res.events],
             "origin": [res.origin_x, res.origin_y],
             "duration_ms": res.events[-1].ts_ms if res.events else 0,
+            "can_undo": bool(self._record_undo),
         }
+
+    @staticmethod
+    def _as_indexes(indexes: Any, count: int) -> list:
+        if indexes is None:
+            return []
+        if isinstance(indexes, int):
+            indexes = [indexes]
+        if not isinstance(indexes, (list, tuple)):
+            raise ControllerError(-32602, "参数无效：indexes 须为整数或数组")
+        out = set()
+        for v in indexes:
+            try:
+                i = int(v)
+            except (TypeError, ValueError):
+                raise ControllerError(-32602, "参数无效：indexes 元素须为整数")
+            if 0 <= i < count:
+                out.add(i)
+        return sorted(out)
+
+    def record_remove(self, indexes: Any = None) -> dict:
+        """删除指定下标的事件（单个整数或整数数组）。"""
+        res = self._record_or_raise()
+        idxs = self._as_indexes(indexes, len(res.events))
+        if idxs:
+            self._record_snapshot()
+            drop = set(idxs)
+            res.events = [e for i, e in enumerate(res.events) if i not in drop]
+        return self._record_payload()
+
+    def record_remove_moves_before(self, index: Any = 0) -> dict:
+        """删除 `index` 之前的所有**移动**事件（点击/按键/滚轮保留）。
+
+        用途：录制开头往往有一段"从别处把光标移过来"的移动，回放时会先
+        划一道长线。删掉它们即可让回放从第一次实质操作处开始。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index 须为整数")
+        idx = max(0, min(idx, len(res.events)))
+        if any(e.kind == "move" for e in res.events[:idx]):
+            self._record_snapshot()
+            res.events = [e for i, e in enumerate(res.events)
+                          if i >= idx or e.kind != "move"]
+        return self._record_payload()
+
+    def record_set_origin(self, index: Any = None) -> dict:
+        """把相对坐标的原点设为指定事件的位置（默认取第一个鼠标事件）。
+
+        录制回放节点默认 `use_relative=True`，回放偏移 = 基点 − 原点。
+        换原点即换锚，用于把整条轨迹对齐到另一个参照位置。
+        """
+        res = self._record_or_raise()
+        idx = None
+        if index is not None:
+            try:
+                idx = int(index)
+            except (TypeError, ValueError):
+                raise ControllerError(-32602, "参数无效：index 须为整数")
+            if not (0 <= idx < len(res.events)):
+                raise ControllerError(-32602, "下标越界")
+        if idx is None:
+            idx = next((i for i, e in enumerate(res.events)
+                        if e.kind in ("move", "mouse", "wheel")), None)
+        if idx is None:
+            raise ControllerError(-32603, "序列里没有带坐标的事件")
+        self._record_snapshot()
+        res.origin_x, res.origin_y = res.events[idx].x, res.events[idx].y
+        return self._record_payload()
+
+    def record_undo(self) -> dict:
+        """回滚上一次编辑。"""
+        if not self._record_undo:
+            raise ControllerError(-32004, "nothing_to_undo")
+        self._last_record.events = self._record_undo.pop()
+        return self._record_payload()
+
+    def record_current(self) -> dict:
+        """返回最近一次录制的**权威**事件序列。
+
+        面板此前只靠 `record.event` 增量推送维护自己的缓冲（上限截断），
+        与写入节点的后端全量数据是两份来源，会出现"看到的和写入的不一致"。
+        改为面板在录制结束后（以及每次编辑后）拉一次本接口。
+        """
+        return self._record_payload()
 
     # ---- 热键 / 键盘捕获（P1-3，§3.2 + §9 说明） ----
     def _ensure_key_listener(self) -> None:

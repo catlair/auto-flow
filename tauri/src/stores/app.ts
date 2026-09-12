@@ -43,6 +43,9 @@ export const useAppStore = defineStore("app", {
     recording: false,
     lastRecordCount: 0,
     lastRecordInfo: null as any,
+    // 事件编辑（record.remove / removeMovesBefore / setOrigin / undo）后由返回刷新
+    recordCanUndo: false,
+    recordOrigin: [0, 0] as [number, number],
     permissions: { accessibility: false, inputMonitoring: false, screenRecording: false } as Permissions,
     workflow: { name: "未命名", speed: 1.0, repeat: 1, nodes: [] } as Workflow,
     definitions: [] as NodeDefinition[],
@@ -389,6 +392,7 @@ export const useAppStore = defineStore("app", {
       this.recordBuffer = [];
       this.lastRecordCount = 0;
       this.lastRecordInfo = null;
+      this.recordCanUndo = false;
     },
     selectNode(index: number) {
       this.selectedIndex = index;
@@ -478,14 +482,24 @@ export const useAppStore = defineStore("app", {
         return null;
       }
     },
+    /** 用后端返回的权威序列覆盖本地缓冲（录制结束、每次编辑后调用）。 */
+    _applyRecord(r: any) {
+      this.recordBuffer = r?.events ?? [];
+      this.lastRecordCount = r?.count ?? 0;
+      this.recordCanUndo = !!r?.can_undo;
+      if (Array.isArray(r?.origin)) this.recordOrigin = r.origin;
+    },
     /** 拉取后端权威事件序列覆盖本地缓冲，消除"看到的和写入的不一致"。 */
     async refreshRecordBuffer() {
       try {
-        const r = await rpc.request("record.current");
-        this.recordBuffer = r.events ?? [];
+        this._applyRecord(await rpc.request("record.current"));
       } catch {
         /* 保留增量缓冲 */
       }
+    },
+    /** 事件编辑：method 为 record.remove / removeMovesBefore / setOrigin / undo。 */
+    async recordEdit(method: string, params: Record<string, unknown> = {}) {
+      this._applyRecord(await rpc.request(method, params));
     },
     async recordSubscribe(on: boolean) {
       // §3.2：录制面板打开/录制开始时订阅事件流，关闭时退订，避免高频事件打爆管道。

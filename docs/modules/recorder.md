@@ -28,9 +28,17 @@
 | F-REC-12 | **滚轮单位标注** | ✅ | `wheel_unit="line"`（pynput 取的是 DeltaAxis 行增量）（v3） |
 | F-REC-13 | **轨迹终点补全** | ✅ | 停止时补回最后一个被降采样的位置（v3） |
 | F-REC-14 | **按键事件带坐标** | ✅ | key 事件带上 listener 提供的 (x,y) 与 flags（v3） |
+| F-REC-15 | **事件编辑** | ✅ | 面板选中行即可删除 / 删此前的移动 / 设为原点 / 撤销（v3） |
 
 ## 验收记录
 
+- **F-REC-15**（2026-09-12）：`test_record_remove_by_index_and_array`、
+  `test_record_remove_ignores_out_of_range_indexes`、
+  `test_record_remove_moves_before_keeps_real_actions`、
+  `test_record_set_origin_follows_selected_event`、
+  `test_record_undo_restores_previous_state`、
+  `test_record_edit_without_recording_raises`、
+  `test_record_to_node_uses_edited_events`。
 - **F-REC-10/11/12/13/14**（2026-09-12，v3 重写）：测试
   `test_recorder_keeps_drag_trajectory_without_decimation`、
   `test_recorder_merges_double_click_sequence`、
@@ -86,6 +94,11 @@
     是行增量（触控板同样走这两字段），不是像素。事件因此标注 `wheel_unit="line"`。
 11. **键盘事件自带坐标**：`CGEventGetLocation(event)` 可用于取点；但 CLI 进程
     `CGEventGetLocation(CGEventCreate(None))` 恒 (0,0)，不能用来读全局光标。
+12. **事件编辑改的是权威序列本身**（`rpc/controller.py` 的 `record.remove` /
+    `removeMovesBefore` / `setOrigin` / `undo`）：面板删掉一条，写入节点的就是
+    删后的序列，不存在"面板一份、实际写入另一份"的空间。编辑前存快照进撤销栈
+    （上限 20），因为编辑是破坏性的。越界下标**忽略而非报错**——UI 可能因并发
+    刷新拿到过期下标，为此中断用户操作不值得。
 
 ## 已知问题
 
@@ -103,3 +116,5 @@
 - 2026-09-12 **v3 重写**：事件模型升级（dragged/clicks/flags/wheel_unit/全事件坐标）、
   保轨采样取代固定阈值、窗口过滤改为显式开关 + 停止时定位裁剪、轨迹终点补全、
   监听器存活判定去竞态
+- 2026-09-12 **事件编辑**：面板选中行 → 删除 / 删此前的移动 / 设为原点 / 撤销；
+  编辑直接作用于权威序列，写入节点即取编辑结果
