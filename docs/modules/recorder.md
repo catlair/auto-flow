@@ -29,9 +29,21 @@
 | F-REC-13 | **轨迹终点补全** | ✅ | 停止时补回最后一个被降采样的位置（v3） |
 | F-REC-14 | **按键事件带坐标** | ✅ | key 事件带上 listener 提供的 (x,y) 与 flags（v3） |
 | F-REC-15 | **事件编辑** | ✅ | 面板选中行即可删除 / 删此前的移动 / 设为原点 / 撤销（v3） |
+| F-REC-16 | **文本事件聚合** | ✅ | 输入法/Unicode 提交聚合为 `kind="text"`，间隔 ≤500ms 视为同一段输入（v3） |
 
 ## 验收记录
 
+- **F-REC-16**（2026-09-12）：判据 `test_is_text_commit_classification`
+  （中文/emoji/多字符 → 文本；`keycode 0` 的可打印 ASCII、Return/Tab/Escape、
+  方向键私有区、普通键的布局字符 → 不是文本）；派发与合成配对抑制
+  `test_maclistener_dispatches_text_and_suppresses_synthetic_pair`、
+  `test_maclistener_never_swallows_hardware_keyup`；聚合与保序
+  `test_recorder_merges_consecutive_text_commits`、
+  `test_recorder_starts_new_text_event_after_pause`、
+  `test_recorder_flushes_text_before_other_events_keeping_order`、
+  `test_recorder_flushes_text_when_input_pauses`、
+  `test_recorder_text_merge_keeps_captured_invariant`。
+  ⚠️ **待真机确认**：系统拼音输入法是否也走事件层（见计划书 §15.8）。
 - **F-REC-15**（2026-09-12）：`test_record_remove_by_index_and_array`、
   `test_record_remove_ignores_out_of_range_indexes`、
   `test_record_remove_moves_before_keeps_real_actions`、
@@ -54,6 +66,9 @@
   断言崩溃；替换自建 tap 后录制链路无崩溃（真机多日使用）。
 - **F-REC-08**（2026-09-05）：真机录制 stats：captured=95 = count 51 + filtered 44，
   无系统层丢失。
+- **F-REC-16 口径变更**：`captured − filtered − limit_dropped − text_merged == count`。
+  聚合会让 `count` 小于 `captured`，前端一致性校验必须扣掉 `text_merged`，
+  否则每录一次中文都会误报「系统层丢事件」。
 
 ## 设计要点
 
@@ -92,6 +107,24 @@
    （曾错用低字节导致 Shift 录不到）
 10. **滚轮取到的是"行"**：pynput darwin 后端读 `kCGScrollWheelEventDeltaAxis1/2`，
     是行增量（触控板同样走这两字段），不是像素。事件因此标注 `wheel_unit="line"`。
+11. **文本提交不能用 keycode 判定**：输入法上屏与 `CGEventKeyboardSetUnicodeString`
+    投递的文本，在事件层都是"一次带 Unicode 的按键"，keycode 通常是 0。但
+    **keycode 0 就是物理 `A` 键**，且没挂字符串的事件读出来是按 keycode 换算的
+    布局字符（实测 0 → `'a'`、0x24 → `'\r'`）而**不是**空串——所以既不能
+    "keycode==0 即文本"，也不能"文本为空即非文本"。判据只能是**内容在物理上
+    是不是单键能产生的**（`core.mackeys.is_text_commit`），且刻意设计成
+    **每一条误判都对应等价的回放方式**，不存在"判错就丢信息"的分支。
+12. **合成配对 keyUp 要抑制**：文本提交后紧跟一个 keycode=0 的合成 keyUp。
+    它会被读成 `'a'`，不抑制就会在事件流里凭空多出一条"A 键释放"。用
+    `kCGEventSourceUnixProcessID`（硬件为 0、合成方为投递进程 PID）区分；
+    该字段**只用于抑制**，不参与文本判定——万一某系统上硬件事件也带 PID，
+    最坏也只是少抑制一个无害的 keyUp，不会把正常按键误判成文本。
+13. **聚合窗口 500ms，时间戳取首段**：输入法一次上屏常只提交一个字/词，
+    逐条记录会让事件流退化成"每字一行"。同一段连续输入是一个用户意图，
+    回放时一次投递（与「键盘输入」节点同语义）。时间戳取**首段**时刻，
+    回放才从正确的时刻开始；停顿超过窗口另起一条，保留打字节奏。
+14. **`poll()` 负责把停顿的文本落盘**：没有这一步，最后一段输入要等到
+    "下一个别的事件"或"停止录制"才出现，录制面板看着像卡住了。
 11. **键盘事件自带坐标**：`CGEventGetLocation(event)` 可用于取点；但 CLI 进程
     `CGEventGetLocation(CGEventCreate(None))` 恒 (0,0)，不能用来读全局光标。
 12. **事件编辑改的是权威序列本身**（`rpc/controller.py` 的 `record.remove` /

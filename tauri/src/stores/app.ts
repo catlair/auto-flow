@@ -386,7 +386,14 @@ export const useAppStore = defineStore("app", {
       this.applyCurrent(cur);
     },
     setClickThrough(enabled: boolean) {
-      invoke("set_click_through", { enabled }).catch(() => {});
+      // invoke 在没有 Tauri 环境时会**同步抛错**（ReferenceError: window is
+      // not defined），`.catch()` 只接得到异步拒绝、接不住同步抛——
+      // 必须两层都兜，否则一个纯辅助功能能把调用方的流程带崩。
+      try {
+        void invoke("set_click_through", { enabled }).catch(() => {});
+      } catch {
+        /* 无 Tauri 环境：忽略 */
+      }
     },
     clearRecord() {
       this.recordBuffer = [];
@@ -439,14 +446,17 @@ export const useAppStore = defineStore("app", {
         this.runProgress = { done: 0, total: 0 };
         try {
           await rpc.request("run.start", { base_x: this.base.x, base_y: this.base.y });
-          // 回放防误触：主窗开启鼠标穿透，回放的点击不会被自己吃掉。
-          // 停止只能用 F10（穿透期间窗口不接收点击）。
-          await invoke("set_click_through", { enabled: true });
         } catch (e) {
           this.running = false;
-          this.setClickThrough(false);
           throw e;
         }
+        // 回放防误触：主窗开启鼠标穿透，回放的点击不会被自己吃掉。
+        // 停止只能用 F10（穿透期间窗口不接收点击）。
+        //
+        // 穿透是**辅助**行为，必须与 run.start 的成败解耦：并入上面那个 try 的话，
+        // 一旦 invoke 不可用（无 Tauri 环境、命令未注册），已经把工作流跑起来的
+        // 启动会被回滚成"启动失败"——运行明明起来了却显示失败。
+        this.setClickThrough(true);
       }
     },
     async toggleRecord() {

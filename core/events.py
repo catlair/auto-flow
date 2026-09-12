@@ -32,10 +32,14 @@ class MacroEvent:
     - `wheel_unit`：滚轮增量单位，见 `WHEEL_UNITS`。v2 把滚轮增量一律当像素
       投递，而传统滚轮的增量是"行"，导致回放几乎不滚动。
     - `x` / `y`：**所有事件都带坐标**（含 key 事件）。v2 的 key 事件恒为 (0,0)。
+    - `text` + `kind="text"`：一次**文本提交**（输入法上屏的中文/emoji、或任何走
+      `CGEventKeyboardSetUnicodeString` 的投递）。这类输入在事件层是"一次带
+      Unicode 的按键"，按普通按键记录会退化成拼音字母或废键码，回放彻底失真。
+      回放端按 `core.mactype.type_text` 原样投递，不经过键码映射。
     """
 
     ts_ms: int                      # 相对录制起点的时间戳
-    kind: str                       # key / mouse / move / wheel
+    kind: str                       # key / mouse / move / wheel / text
     key: Optional[str] = None       # 键名（key 事件）
     button: Optional[str] = None    # left / right / middle（mouse 事件）
     pressed: Optional[bool] = None  # mouse: True 按下 False 释放; key 事件同义
@@ -47,8 +51,11 @@ class MacroEvent:
     clicks: int = 1                 # v3：点击序列号 1/2/3
     flags: int = 0                  # v3：CGEventFlags 快照
     wheel_unit: str = "line"        # v3：line / pixel
+    text: str = ""                  # text 事件：一次提交的文本（中文/emoji/整段）
 
     def describe(self) -> str:
+        if self.kind == "text":
+            return f"文本 {self.text!r} ({self.x},{self.y})"
         if self.kind == "key":
             return f"按键 {'↓' if self.pressed else '↑'} {self.key} ({self.x},{self.y})"
         if self.kind == "mouse":
@@ -74,6 +81,7 @@ class RecordResult:
     n_limit_dropped: int = 0
     n_decimated: int = 0             # v3：保轨采样丢弃的冗余移动（不含信息）
     n_window_dropped: int = 0        # v3：窗口过滤丢弃（默认关闭，应恒为 0）
+    n_text_merged: int = 0           # v3：被聚合进同一条 text 事件的提交次数
     # 监听线程中途死亡检测（tap 回调抛异常 → 线程退出，此后事件全丢，表现为「中间断段」）
     mouse_listener_died: bool = False
     kb_listener_died: bool = False

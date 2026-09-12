@@ -774,6 +774,59 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 - **该冒烟抓到一处单测漏掉的缺陷**：`rpc_up` 清空 `rpcDownDetail` 导致「恢复后查不到
   断连原因」，已修（`9ba92ed`）。单测覆盖不到它，是因为用例只在「断开中」断言详情。
 
+### 15.8 录制文本提交（中文/emoji，2026-09-12 完成）
+
+**问题**：中文/emoji 经输入法上屏时，录制端把它当普通按键记录——中文变成一串拼音
+字母、emoji 变成废键码，回放必然失真（v2/v3 的同一处缺口）。
+
+**事实核查**（本机实测，`pyobjc` 桥接）：
+
+- `CGEventKeyboardGetUnicodeString` 的 pyobjc 调用约定是
+  `(实际长度, 文本) = CGEventKeyboardGetUnicodeString(ev, maxLen, None, None)`
+  ——**4 个参数**，out 参数传 `None` 由桥接层按 `maxLen` 分配。
+- 未挂字符串的事件**不返回空串**，而是按 keycode 换算出的布局字符：
+  keycode 0 → `'a'`、0x24 → `'\r'`、0x35 → `'\x1b'`、0x7E → `'\x1e'`。
+  （与 §15.6 记录的"未定义垃圾值"一致）
+- `kCGEventSourceUnixProcessID` 对进程创建的事件返回该进程 PID（实测 52444），
+  硬件事件预期为 0。
+- emoji 经 `CGEventKeyboardSetUnicodeString` 完整往返（`'🎯'`，2 个 UTF-16 码元）。
+
+**关键陷阱**：**keycode 0 就是物理 `A` 键**。所以"keycode==0 即文本"会把握手用的
+`A` 键判成文本；"文本为空即非文本"也不成立（读出的是 `'a'`）。判据只能是
+**内容在物理上是不是单键能产生的**。
+
+**改法**
+
+- `core/mackeys.is_text_commit(keycode, text)`：多字符 → 是；可打印 ASCII 单字符 →
+  **否**（判成按键后按物理键回放，产出的字符完全相同）；Apple 私有区
+  U+E000–U+F8FF → 否（方向键的 U+F700 段，按文本回放会打出乱码）；其余非 ASCII
+  在 keycode 为 0 或未知时 → 是。**每条误判都对应等价的回放方式**，无丢信息分支。
+- `core/maclistener.py`：keyDown 读 Unicode，判定为文本则走 `on_text` 回调；
+  用 `kCGEventSourceUnixProcessID` 抑制紧随其后的合成配对 keyUp（否则读成 `'a'`
+  会凭空多一条"A 键释放"）。该 PID **只用于抑制**，不参与文本判定。
+- `core/recorder.py`：连续提交（间隔 ≤ `TEXT_JOIN_MS=500ms`）聚合为一条
+  `kind="text"` 事件，时间戳取**首段**；非文本事件到达前先落盘保序；`poll()` 负责
+  把停顿的文本落盘（否则最后一段要等停止才出现）；停止时补 flush。
+  `RecordResult` 新增 `n_text_merged` 计量。
+- `core/player.py`：`kind="text"` 走 `mactype.type_text`（Unicode 通道）投递，
+  **不挪光标**（与 key 事件一致——录制时的坐标只是"打字时光标在哪"）。
+- 前端：录制面板加「文本」过滤、内容展示与编辑（`record.setText`）；
+  `captured` 一致性校验扣除 `text_merged`，否则每录一次中文都误报"系统层丢事件"。
+
+**验证**：Python **123 passed**（+12）；`vue-tsc --noEmit` 零错误。
+
+**⚠️ 未验证的关键前提**：输入法提交在 macOS 上有两条通道——
+
+1. **事件通道**：IME 用 `CGEventKeyboardSetUnicodeString` 投递合成事件
+   （keycode=0 + Unicode）。被动 tap 能看到，本实现覆盖。
+2. **`insertText:` 通道**：IME 在客户端（实现了 `NSTextInputClient` 的应用）
+   内部直接插入文本，**不投递任何 CGEvent**。被动 tap 只能看到被 IME 吞掉的
+   原始按键（拼音字母）。
+
+系统拼音输入法走哪条**尚未在真机确认**。判据很简单：录一段中文，看事件表
+「文本」过滤下有没有内容——有则走通道 1，只有连续字母则是通道 2，
+后者需要另一套方案（如 AX 轮询 `kAXValueAttribute` 差分）。
+
 ---
 
 ## 16. 持久化与配置分工

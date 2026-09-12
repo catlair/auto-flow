@@ -11,7 +11,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
@@ -392,8 +392,11 @@ class AppController:
             if elapsed > result.events[-1].ts_ms:
                 result.events[-1].ts_ms = elapsed
         self._last_record = result
-        # 丢帧定位计量一并上报：captured=系统投递数；count=captured-decimated-window-limit 后入库数。
-        # count << captured 且 decimated/window 也小 → 系统层（CGEventTap）丢事件，需要另查。
+        # 丢帧定位计量一并上报：captured=系统投递数；
+        # count = captured − decimated − window − limit − text_merged 后入库数。
+        # count << captured 且各项丢弃都小 → 系统层（CGEventTap）丢事件，需要另查。
+        # 注意 text_merged：一次输入法上屏被聚合进同一条 text 事件，它同样会让
+        # count 小于 captured，但**不是丢帧**——前端的一致性校验必须扣掉它。
         stats = {
             "count": len(result.events),
             "origin": [result.origin_x, result.origin_y],
@@ -403,6 +406,7 @@ class AppController:
             "decimated": result.n_decimated,
             "window_dropped": result.n_window_dropped,
             "limit_dropped": result.n_limit_dropped,
+            "text_merged": result.n_text_merged,
             "trimmed": n_trimmed,
             "mouse_died": result.mouse_listener_died,
             "kb_died": result.kb_listener_died,
@@ -526,6 +530,33 @@ class AppController:
             raise ControllerError(-32603, "序列里没有带坐标的事件")
         self._record_snapshot()
         res.origin_x, res.origin_y = res.events[idx].x, res.events[idx].y
+        return self._record_payload()
+
+    def record_set_text(self, index: Any = None, text: Any = "") -> dict:
+        """改写某条 text 事件的内容。
+
+        用途：输入法提交的内容有时不是想要的（同音字、多打的字），或者自动识别
+        把一段输入法编码拆成了多个片段。回放前在这里改掉，比"重录一遍"省事。
+
+        必须**替换元素**而不是原地 `ev.text = ...`：撤销栈存的是
+        `list(res.events)`（浅拷贝，元素是同一批对象），原地改会把快照一起改掉，
+        撤销就永远回不到旧内容了。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index 须为整数")
+        if not (0 <= idx < len(res.events)):
+            raise ControllerError(-32602, "下标越界")
+        ev = res.events[idx]
+        if ev.kind != "text":
+            raise ControllerError(-32603, "该事件不是文本事件")
+        new = "" if text is None else str(text)
+        if new == ev.text:
+            return self._record_payload()
+        self._record_snapshot()
+        res.events[idx] = replace(ev, text=new)
         return self._record_payload()
 
     def record_undo(self) -> dict:

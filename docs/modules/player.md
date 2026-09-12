@@ -26,8 +26,13 @@
 | F-PLY-11 | **双击/三击** | ✅ | 按 `clicks` 写入 `kCGMouseEventClickState`（v3） |
 | F-PLY-12 | **滚轮单位与双轴** | ✅ | 按 `wheel_unit` 选 line/pixel，横纵两轴一起创建（v3） |
 | F-PLY-13 | **长空档不平滑爬行** | ✅ | 单段滑行封顶 0.25s，长等待先静止再走（v3） |
+| F-PLY-14 | **文本事件投递** | ✅ | `kind="text"` 走 `mactype.type_text`（Unicode 通道），不挪光标（v3） |
 
 ## 验收记录
+
+- **F-PLY-14**（2026-09-12）：`test_player_types_text_events_without_moving_cursor`
+  ——中文与 emoji 各走一次 `type_text`，光标位置不变。中文/emoji 无法经键码映射
+  投递（`pynput` 的 `type()` 只覆盖 ASCII），只能走 Unicode 通道。
 
 - **F-PLY-09**（2026-09-12）：`test_player_catches_up_by_skipping_instead_of_bursting`
   ——61 个"计划时刻已过去"的事件全部按各自位置投递，落点精确（1770），

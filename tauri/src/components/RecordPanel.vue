@@ -24,6 +24,7 @@ const FILTERS = [
   { key: "all", label: "全部" },
   { key: "mouse", label: "点击" },
   { key: "key", label: "键盘" },
+  { key: "text", label: "文本" },
   { key: "drag", label: "拖拽" },
   { key: "wheel", label: "滚轮" },
 ] as const;
@@ -33,6 +34,7 @@ function matches(ev: any, f: string): boolean {
   if (f === "all") return true;
   if (f === "drag") return ev.kind === "move" && !!ev.dragged;
   if (f === "key") return ev.kind === "key";
+  if (f === "text") return ev.kind === "text";
   if (f === "mouse") return ev.kind === "mouse";
   if (f === "wheel") return ev.kind === "wheel";
   return true;
@@ -92,6 +94,26 @@ async function onUndo() {
   await edit("record.undo");
 }
 
+// ---- 文本事件内容编辑 ----
+// 输入法提交的内容经常需要改（同音字、多打的字）。直接改这一条，比"重录一遍"省事。
+const selectedEvent = computed(() => {
+  const i = selected.value;
+  const b = store.recordBuffer;
+  return i >= 0 && i < b.length ? b[i] : null;
+});
+const textDraft = ref("");
+
+watch(selectedEvent, (ev) => {
+  textDraft.value = ev && ev.kind === "text" ? String(ev.text ?? "") : "";
+});
+
+async function onApplyText() {
+  const ev = selectedEvent.value;
+  if (!ev || ev.kind !== "text") return;
+  if (textDraft.value === String(ev.text ?? "")) return;
+  await edit("record.setText", { index: selected.value, text: textDraft.value });
+}
+
 /** Delete / Backspace 删除选中行（事件流聚焦时）。 */
 function onStreamKey(e: KeyboardEvent) {
   if (e.key === "Delete" || e.key === "Backspace") {
@@ -107,6 +129,7 @@ function fmtEvent(ev: any): string {
   const t = `${ev.ts_ms ?? 0}ms`;
   const xy = `(${ev.x ?? 0},${ev.y ?? 0})`;
   if (ev.kind === "key") return `${t}  按键 ${ev.pressed ? "↓" : "↑"} ${ev.key ?? "?"}  ${xy}`;
+  if (ev.kind === "text") return `${t}  文本 ${JSON.stringify(String(ev.text ?? ""))}  ${xy}`;
   if (ev.kind === "mouse") {
     const c = (ev.clicks ?? 1) > 1 ? ` ×${ev.clicks}` : "";
     return `${t}  鼠标 ${ev.pressed ? "按下" : "释放"} ${ev.button ?? "left"}${c}  ${xy}`;
@@ -117,6 +140,19 @@ function fmtEvent(ev: any): string {
   }
   return `${t}  ${ev.dragged ? "拖拽" : "移动"}  ${xy}`;
 }
+
+/** 文本事件统计：条数 / 总字数。用来一眼确认"中文到底录成文本了没有"。 */
+const textStats = computed(() => {
+  let n = 0;
+  let chars = 0;
+  for (const ev of store.recordBuffer) {
+    if (ev.kind === "text") {
+      n += 1;
+      chars += String(ev.text ?? "").length;
+    }
+  }
+  return { n, chars };
+});
 
 /** 缓冲内的事件跨度（毫秒），用于快速判断录制时长是否合理。 */
 const durationMs = computed(() => {
@@ -192,7 +228,13 @@ async function onToggleRecord() {
       MessagePlugin.warning(`事件数达到上限，超限丢弃 ${s.limit_dropped ?? 0} 条`);
     } else if ((s.window_dropped ?? 0) > 0) {
       MessagePlugin.warning(`窗口过滤丢弃了 ${s.window_dropped} 条事件（不应发生，请反馈）`);
-    } else if ((s.captured ?? 0) - (s.filtered ?? 0) - (s.limit_dropped ?? 0) !== (s.count ?? 0)) {
+    } else if (
+      (s.captured ?? 0) - (s.filtered ?? 0) - (s.limit_dropped ?? 0) -
+        (s.text_merged ?? 0) !==
+      (s.count ?? 0)
+    ) {
+      // text_merged 必须扣掉：输入法一次上屏被聚合进同一条 text 事件，
+      // 同样让 count 小于 captured，但那不是丢帧。
       MessagePlugin.warning("检测到系统层丢事件，请反馈（captured≠count+filtered）");
     }
   } catch (e) {
@@ -238,6 +280,9 @@ async function onToNode() {
       <template v-if="durationMs"> · 时长 {{ fmtDuration(durationMs) }}</template>
       <template v-if="store.lastRecordInfo.decimated">
         · 冗余移动降采样 {{ store.lastRecordInfo.decimated }} 条</template>
+      <template v-if="textStats.n">
+        · 文本事件 {{ textStats.n }} 条（{{ textStats.chars }} 字，聚合
+        {{ store.lastRecordInfo.text_merged ?? 0 }} 段）</template>
       <template v-if="store.lastRecordInfo.trimmed">
         · 裁掉停止交互 {{ store.lastRecordInfo.trimmed }} 条</template>
       <template v-if="store.lastRecordInfo.limit_dropped">
@@ -268,6 +313,22 @@ async function onToNode() {
       </button>
       <button class="af-chip" :disabled="selected < 0" @click="onSetOrigin">设为原点</button>
       <button class="af-chip" :disabled="!store.recordCanUndo" @click="onUndo">撤销</button>
+    </div>
+    <div v-if="selectedEvent?.kind === 'text' && !store.recording" class="af-textedit">
+      <span class="af-edit-sel">文本内容</span>
+      <input
+        v-model="textDraft"
+        class="af-textinput"
+        placeholder="改写这条文本事件"
+        @keydown.enter.prevent="onApplyText"
+      />
+      <button
+        class="af-chip"
+        :disabled="textDraft === String(selectedEvent.text ?? '')"
+        @click="onApplyText"
+      >
+        应用
+      </button>
     </div>
     <div v-if="store.recordBuffer.length" class="af-stream-bar">
       <span>共 {{ total }} 条</span>
@@ -363,6 +424,25 @@ async function onToNode() {
   font-size: 11px;
   color: #888;
   margin-right: 2px;
+}
+.af-textedit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.af-textinput {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #d5d8dd;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #444;
+}
+.af-textinput:focus {
+  outline: none;
+  border-color: #0052d9;
 }
 .af-chip:disabled {
   opacity: 0.45;

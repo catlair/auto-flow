@@ -2,6 +2,10 @@
 
 打印字符 → 小写字符本身；功能/修饰键 → 脚本名（Space/Return/F9/UpArrow…）。
 播放侧由 core.keymap.name_to_key 还原为 pynput 按键。
+
+另含「这条键盘事件是不是一段文本的提交」的判据（见 `is_text_commit`）——
+输入法上屏、以及任何 `CGEventKeyboardSetUnicodeString` 投递的文本，在事件层
+表现为**一次带 Unicode 的按键**，不是逐字符的真实按键，必须区别对待。
 """
 from __future__ import annotations
 
@@ -65,3 +69,40 @@ def modifier_edge(keycode: int, flags: int, last_flags: int) -> bool | None:
     if prev and not now:
         return False
     return None
+
+
+def is_text_commit(keycode: int, text: str) -> bool:
+    """这条键盘事件是「一段文本的提交」而不是一次物理按键吗？
+
+    背景：输入法上屏、以及 `CGEventKeyboardSetUnicodeString` 投递的文本，在
+    事件层都是**一次**带 Unicode 字符串的按键（keycode 通常是 0）。若当成普通
+    按键记录，中文会被拆成拼音字母、emoji 会变成一串废键码，回放完全失真。
+
+    **陷阱**：keycode 0 不是"无键码"——按 ANSI 布局它就是物理 `A` 键，物理 `A`
+    键的事件同样读出 `'a'`。所以绝不能"keycode==0 即文本"。真正可靠的判据是
+    **文本内容本身在物理上是不是单键能产生的**：
+
+    - 文本为空 → 不是（没有内容的键盘事件没有文本语义）。
+    - 多字符 → 是。单次物理按键产生不了两个字符。
+    - 可打印 ASCII（0x20–0x7E）单字符 → **不是**。哪怕它来自输入法也是安全的：
+      判成按键后按物理键回放，产出的字符完全相同（keycode 0 → `A` 键 → `'a'`）。
+    - Apple 私有区（U+E000–U+F8FF）→ 不是。功能键（方向键等）在事件层用
+      U+F700 段表示，按文本回放会打出一个乱码私用字符。
+    - 其余（中文、emoji、控制字符之外的任意非 ASCII）→ 键码未知或为 0 时判定
+      为文本；键码已知且是普通键时不算（例如瑞典布局 `å` 落在 `[` 的键码上，
+      按物理键回放能还原成 `å`，比按文本投递更忠实）。
+
+    结论：**这是一个"判错也不会改变行为"的保守判据**——每一条误判都对应一种
+    等价的回放方式，不存在"判错就丢信息"的分支。
+    """
+    if not text:
+        return False
+    if len(text) > 1:
+        return True
+    cp = ord(text[0])
+    if 0x20 <= cp <= 0x7E:
+        return False
+    if 0xE000 <= cp <= 0xF8FF:
+        return False
+    return keycode == 0 or keycode not in VK_NAMES
+

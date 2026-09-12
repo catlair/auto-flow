@@ -4,8 +4,8 @@
 
 | 模块 | 文档 | 状态 | 验收 | 备注 |
 | --- | --- | --- | --- | --- |
-| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 111 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 |
-| 回放引擎 | [player.md](modules/player.md) | ✅ | 111 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 |
+| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 123 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
+| 回放引擎 | [player.md](modules/player.md) | ✅ | 123 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
 | 工作流执行器 | [executor.md](modules/executor.md) | ✅ | 测试 | 异常兜底 + 条件门控 + 热停 |
 | 节点体系 | [nodes.md](modules/nodes.md) | ✅ | 测试 + 真机 | 9 种内置节点，自描述参数 |
 | 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | Retina 坐标换算；锁屏时 Quartz 兜底 |
@@ -23,5 +23,8 @@
 - 📋 工作流变量系统：跨节点传值（计划书 §workflow_vars 曾有占位）
 - 📋 Windows 支持：core 逻辑平台无关，输入层需按平台抽象（pynput 可跨）
 - 📋 视觉模型按需分发：opencv/onnxruntime 占 sidecar 体积 200MB+，可拆可选包
-- 📋 录制类型化文本：中文/emoji 目前录成按键序列，可按输入法组合结果聚合为文本事件
 - 🧹 构建残留清理：`./scripts/clean_old_builds.sh`（预演）/ `--apply`（移入废纸篓）
+
+> 待真机确认：系统拼音输入法提交中文时是否也走事件层（`keycode=0` + Unicode）。
+> 若只出现连续字母按键、事件表「文本」过滤为空，说明该输入法走 `insertText:` 通道，
+> 被动 tap 看不到——此时需要另一套方案（AX 差分捕获）。见计划书 §15.8。

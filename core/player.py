@@ -24,6 +24,8 @@ v3 的做法：
 - **滚轮单位**：按 `wheel_unit` 选择 line/pixel，且横纵两轴一起创建
   （v2 只用 1 个轴创建事件再设第 2 轴字段，横向滚轮被丢弃；且把"行"当"像素"
   投递，量级差一个数量级，表现为滚轮几乎不动）。
+- **文本事件**：`kind="text"` 走 `core.mactype.type_text`（Unicode 通道）原样
+  投递，不经过键码映射，也不挪动光标。中文/emoji 只有这条路能回放。
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ from typing import Callable, Optional
 from core.events import MacroEvent
 from core.keymap import name_to_key
 from core.mactype import MacKeyboardController as KeyboardController
+from core.mactype import type_text
 
 import Quartz as _Q
 
@@ -207,6 +210,14 @@ class Player:
                     self._play_key(ev, opt, pressed_keys)
                     continue
 
+                if ev.kind == "text":
+                    # 文本事件不挪光标（与 key 事件一致）：录制时的坐标只是"打字时
+                    # 光标在哪"，回放该打到哪里由当前焦点决定。走 Unicode 通道投递，
+                    # 不经过键码映射——中文/emoji 只有这条路能打出来。
+                    self._sleep_until(due)
+                    self._play_text(ev)
+                    continue
+
                 target = (ev.x + dx, ev.y + dy)
                 pos, jumped = self._travel(pos, target, due, held_button)
                 skipped += jumped
@@ -316,6 +327,20 @@ class Player:
     @staticmethod
     def _button(name: Optional[str]) -> str:
         return name if name in ("left", "right", "middle") else "left"
+
+    def _play_text(self, ev: MacroEvent) -> None:
+        """投递一条文本事件（中文/emoji/整段）。
+
+        `type_text` 走 `CGEventKeyboardSetUnicodeString`，按 UTF-16 码元切块并
+        **绝不切开代理对**——emoji 只有这条路能完整送达（见 core/mactype.py）。
+        """
+        text = getattr(ev, "text", "") or ""
+        if not text:
+            return
+        try:
+            type_text(text)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _play_key(self, ev: MacroEvent, opt: PlayOptions, pressed_keys: list) -> None:
         if ev.key in opt.suppress_keys:

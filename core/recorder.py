@@ -19,6 +19,11 @@ v2 的四类"静默丢弃"及其修复：
    窗口边界仍会传给录制器，但只用于停止时**定位停止点击**做尾部裁剪。
 4. **语义缺失**。v3 补齐 `clicks`（双击/三击序列号）、`wheel_unit`（滚轮单位）、
    `flags`，并让 key 事件也带上坐标。
+5. **文本被拆成按键**。中文/emoji 输入法上屏在事件层是"一次带 Unicode 的按键"，
+   v2 按普通按键记录，中文变成一串拼音字母、emoji 变成废键码，回放必然失真。
+   v3 经 `core.mackeys.is_text_commit` 识别文本提交，并把**连续的一段输入聚合
+   为一条 `text` 事件**（间隔 ≤ `TEXT_JOIN_MS`）——一次连续输入是一个用户意图，
+   回放时按 `type_text` 一次投递，与「键盘输入」节点同语义。
 """
 from __future__ import annotations
 
@@ -62,6 +67,11 @@ DOUBLE_CLICK_MS = 500
 DOUBLE_CLICK_PX = 6
 MAX_CLICKS = 3
 
+# ---- 文本聚合参数 ----
+# 输入法一次上屏往往只提交一个字/词。间隔在此之内视为**同一段连续输入**，
+# 合并为一条 text 事件；超过则另起一条（保留"打字中间停顿过"的节奏）。
+TEXT_JOIN_MS = 500
+
 ButtonName = {"left": "left", "right": "right", "middle": "middle"}
 
 
@@ -87,6 +97,10 @@ class Recorder:
         self._last_kept_xy: Optional[tuple[int, int]] = None
         self._last_kept_ts: int = 0
         self._pending_move: Optional[MacroEvent] = None   # 最近一个被降采样的移动
+        # 文本聚合：`_pending_text` 是正在累积的 text 事件（ts_ms 取首段时刻），
+        # `_pending_text_end_ms` 是最近一段的到达时刻（用于判间隔与超时落盘）。
+        self._pending_text: Optional[MacroEvent] = None
+        self._pending_text_end_ms: int = 0
         # 点击序列：最后一次按下 → (按下时刻, x, y, 序列号)
         self._last_press: dict[str, tuple[int, int, int, int]] = {}
         self._press_clicks: dict[str, int] = {}
@@ -96,6 +110,7 @@ class Recorder:
         self._n_decimated = 0       # 保轨降采样丢弃的冗余移动
         self._n_window_dropped = 0  # 窗口过滤丢弃（仅在显式开启时非零）
         self._n_limit_dropped = 0   # 超上限丢弃
+        self._n_text_merged = 0     # 被聚合进同一条 text 事件的提交次数
         self._mouse_died = False
         self._kb_died = False
 
@@ -146,6 +161,14 @@ class Recorder:
             ts_ms=now_ms() - self._start_ms, kind="key",
             key=name, pressed=bool(pressed), x=int(x), y=int(y), flags=int(flags)))
 
+    def _on_text(self, text: str, x: int = 0, y: int = 0) -> None:
+        """一段文本提交（输入法上屏 / 合成 Unicode 投递）。聚合见 `_merge_text`。"""
+        if not text:
+            return
+        self._push(MacroEvent(
+            ts_ms=now_ms() - self._start_ms, kind="text",
+            text=text, x=int(x), y=int(y)))
+
     def _next_clicks(self, name: str, x: int, y: int, ts: int) -> int:
         """把相邻的快速按下归并成双击/三击序列号（回放写入 ClickState）。
 
@@ -176,7 +199,7 @@ class Recorder:
             on_move=self._on_move, on_click=self._on_click, on_scroll=self._on_scroll)
         self._mouse_listener.start()
         # 键盘用自建 CGEventTap（pynput 键盘监听在 macOS 15 会崩溃，见 maclistener.py）
-        self._kb_listener = MacKeyboardListener(self._on_key_event)
+        self._kb_listener = MacKeyboardListener(self._on_key_event, self._on_text)
         self._kb_listener.start()
 
     def stop(self) -> RecordResult:
@@ -205,6 +228,8 @@ class Recorder:
             except queue.Empty:
                 break
             self._accept(ev)
+        # 聚合中的文本先落盘（否则录制结束时最后一段输入会整段丢掉）
+        self._flush_text()
         # 补回最后一个被降采样的位置：否则"移过去就停手"的终点会停在轨迹中段
         self._flush_pending_move()
         return self.result()
@@ -228,31 +253,41 @@ class Recorder:
         return bx <= x < bx + bw and by <= y < by + bh
 
     def poll(self) -> list[MacroEvent]:
+        """取增量事件；顺带把"已经停顿下来"的文本聚合落盘。
+
+        返回的是**真正入库**的事件：文本聚合会把多段提交并成一条，
+        因此不保证与入参一一对应，但保证与权威序列、与写入节点的内容一致。
+        """
         out = []
         while True:
             try:
                 ev = self._q.get_nowait()
             except queue.Empty:
                 break
-            self._accept(ev)
-            out.append(ev)
+            out.extend(self._accept(ev))
+        out.extend(self._flush_text_if_stale())
         return out
 
     # ---- 保轨采样 ----
-    def _accept(self, ev: MacroEvent) -> None:
+    def _accept(self, ev: MacroEvent) -> list[MacroEvent]:
+        """接收一条事件，返回本次真正入库的事件（可能为空，也可能合并掉旧的）。"""
         with self._lock:
             if len(self._events) >= MAX_RECORD_EVENTS:
                 self._stopped_by_limit = True
                 self._n_limit_dropped += 1
-                return
+                return []
             if (self._drop_in_window and ev.kind in ("move", "mouse", "wheel")
                     and self._in_window(ev.x, ev.y)):
                 self._n_window_dropped += 1
-                return
+                return []
+            if ev.kind == "text":
+                return self._merge_text_locked(ev)
+            # 非文本事件之前先把聚合中的文本落盘，否则顺序会颠倒
+            out = self._flush_text_locked()
             if ev.kind == "move" and not self._keep_move(ev):
                 self._n_decimated += 1
                 self._pending_move = ev      # 记住被降采样的位置，停止时补回
-                return
+                return out
             # 非移动事件一定保留；其坐标成为后续移动的比较基准
             if ev.kind == "move":
                 self._pending_move = None
@@ -261,6 +296,8 @@ class Recorder:
             if ev.kind in ("move", "mouse", "wheel") and self._origin is None:
                 self._origin = (ev.x, ev.y)
             self._events.append(ev)
+            out.append(ev)
+            return out
 
     def _keep_move(self, ev: MacroEvent) -> bool:
         """是否保留这条移动。三选一即保留——只删冗余采样，不删信息。"""
@@ -291,6 +328,55 @@ class Recorder:
         self._last_kept_ts = pm.ts_ms
         self._events.append(pm)
 
+    # ---- 文本聚合 ----
+    def _merge_text_locked(self, ev: MacroEvent) -> list[MacroEvent]:
+        """把连续的文本提交聚合为一条 text 事件（调用方须已持锁）。
+
+        输入法一次上屏往往只提交一个字/词，逐条记录会让事件流退化成"每字一行"，
+        回放也随之变成逐字投递。间隔 ≤ `TEXT_JOIN_MS` 的连续提交视为**同一段
+        连续输入**：时间戳保留首段时刻（回放从正确的位置开始），正文拼接。
+
+        返回本次**因此落盘**的事件：间隔过大会把上一条冲出来，否则为空
+        （新起的一条仍留在 `_pending_text` 里继续等后续提交）。
+        """
+        pt = self._pending_text
+        if pt is not None and ev.ts_ms - self._pending_text_end_ms <= TEXT_JOIN_MS:
+            pt.text += ev.text
+            self._pending_text_end_ms = ev.ts_ms
+            self._n_text_merged += 1
+            return []
+        out = self._flush_text_locked()
+        self._pending_text = ev
+        self._pending_text_end_ms = ev.ts_ms
+        return out
+
+    def _flush_text_locked(self) -> list[MacroEvent]:
+        """把聚合中的文本落盘（调用方须已持锁）。"""
+        pt = self._pending_text
+        self._pending_text = None
+        if pt is None:
+            return []
+        self._events.append(pt)
+        return [pt]
+
+    def _flush_text(self) -> None:
+        with self._lock:
+            self._flush_text_locked()
+
+    def _flush_text_if_stale(self) -> list[MacroEvent]:
+        """停顿超过 `TEXT_JOIN_MS` 就把聚合中的文本落盘。
+
+        没有这一步，最后一段输入要等到"下一个别的事件"或"停止录制"才会出现在
+        事件流里——录制面板看着像卡住了。
+        """
+        with self._lock:
+            pt = self._pending_text
+            if pt is None:
+                return []
+            if now_ms() - self._start_ms - self._pending_text_end_ms < TEXT_JOIN_MS:
+                return []
+            return self._flush_text_locked()
+
     def result(self) -> RecordResult:
         with self._lock:
             ox, oy = self._origin or (0, 0)
@@ -302,7 +388,8 @@ class Recorder:
                                 mouse_listener_died=self._mouse_died,
                                 kb_listener_died=self._kb_died,
                                 n_decimated=self._n_decimated,
-                                n_window_dropped=self._n_window_dropped)
+                                n_window_dropped=self._n_window_dropped,
+                                n_text_merged=self._n_text_merged)
 
 
 def trim_stop_interaction(events: list[MacroEvent],

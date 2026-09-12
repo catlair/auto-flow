@@ -25,7 +25,12 @@ tests/__pycache__/
 
 # 迁移期垃圾
 .af-sidecar-old-*/
+# build_sidecar.sh / Tauri 打包留下的旧副本（同卷改名，非删除）。
+# 两种命名都出现过，必须都覆盖：先是非点号前缀，后有一次带点号前缀——
+# 只写一种就会让几百 MB 的残留一直挂在 git status 里。
+autoflow-sidecar.old.*/
 .autoflow-sidecar.old.*/
+dist.old.*/
 tauri/dist.old.*/
 tauri/vite.config.ts.timestamp-*.mjs
 tauri/src-tauri/autoflow-sidecar/

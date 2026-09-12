@@ -855,3 +855,219 @@ def test_record_to_node_uses_edited_events():
     ctrl.shutdown()
 
 
+# ---------- 文本提交（输入法 / Unicode 投递） ----------
+def test_is_text_commit_classification():
+    """文本提交判据：每一条"误判"都必须对应等价的回放方式，不能有丢信息的分支。"""
+    from core.mackeys import is_text_commit
+
+    # 是文本提交
+    assert is_text_commit(0, "你好")        # 输入法上屏
+    assert is_text_commit(0, "🎯")          # emoji
+    assert is_text_commit(0, "nihao")       # 单次按键产生不了多字符
+    assert is_text_commit(0, "你")
+    assert is_text_commit(0x0A, "你")       # 键码未知 + 非 ASCII
+
+    # 不是文本提交
+    assert not is_text_commit(0, "")        # 无内容
+    assert not is_text_commit(0, "a")       # keycode 0 就是物理 A 键，按按键回放等价
+    assert not is_text_commit(0, "1")
+    assert not is_text_commit(0x24, "\r")   # Return
+    assert not is_text_commit(0x30, "\t")   # Tab
+    assert not is_text_commit(0x35, "\x1b")  # Escape
+    assert not is_text_commit(0x7E, "\x1e")  # 方向键的控制码
+    assert not is_text_commit(0x7E, "\uf700")  # 方向键的私有区表示（回放会打出乱码）
+    assert not is_text_commit(0x21, "å")    # 普通键的布局字符：按物理键回放更忠实
+
+
+def _patch_tap_quartz(monkeypatch, maclistener, text, pid):
+    """把 tap 回调依赖的 Quartz 调用换成可控假实现，返回可变状态（可改 pid）。"""
+    q = maclistener.Quartz
+    state = {"pid": pid, "text": text}
+    monkeypatch.setattr(q, "CGEventGetIntegerValueField",
+                        lambda ev, f: state["pid"] if f == q.kCGEventSourceUnixProcessID else 0)
+    monkeypatch.setattr(q, "CGEventGetLocation",
+                        lambda ev: type("Loc", (), {"x": 5.0, "y": 6.0})())
+    monkeypatch.setattr(q, "CGEventGetFlags", lambda ev: 0)
+    monkeypatch.setattr(q, "CGEventKeyboardGetUnicodeString",
+                        lambda ev, n, a, b: (len(state["text"]), state["text"]))
+    monkeypatch.setattr(maclistener, "vk_to_name",
+                        lambda kc: {0: "a", 0x24: "Return"}.get(kc))
+    return state
+
+
+def test_maclistener_dispatches_text_and_suppresses_synthetic_pair(monkeypatch):
+    """文本提交走 on_text；其后由进程投递的合成配对 keyUp 必须被抑制。
+
+    回归：keycode 0 同时是物理 A 键的键码，合成配对 keyUp 若不过滤会被录成
+    一次"A 键释放"，在事件流里凭空多出一条脏事件。
+    """
+    from core import maclistener
+    keys, texts = [], []
+    lis = maclistener.MacKeyboardListener(
+        lambda n, p, x=0, y=0, fl=0: keys.append((n, p)),
+        lambda t, x, y: texts.append((t, x, y)))
+    state = _patch_tap_quartz(monkeypatch, maclistener, "你好", pid=4242)
+
+    lis._callback(None, maclistener._KEY_DOWN, object(), None)   # 文本提交
+    lis._callback(None, maclistener._KEY_UP, object(), None)     # 合成配对 → 抑制
+
+    assert texts == [("你好", 5, 6)]
+    assert keys == []
+
+    # 真实 a 键：keycode 0、内容是可打印 ASCII → 是按键，不是文本
+    state["text"] = "a"
+    lis._callback(None, maclistener._KEY_DOWN, object(), None)
+    lis._callback(None, maclistener._KEY_UP, object(), None)
+    assert texts == [("你好", 5, 6)]
+    assert keys == [("a", True), ("a", False)]
+
+
+def test_maclistener_never_swallows_hardware_keyup(monkeypatch):
+    """来源 PID 为 0（硬件）时不抑制——宁可多录一条 keyUp，也不吞掉真实按键。"""
+    from core import maclistener
+    keys = []
+    lis = maclistener.MacKeyboardListener(lambda n, p, x=0, y=0, fl=0: keys.append((n, p)))
+    state = _patch_tap_quartz(monkeypatch, maclistener, "你好", pid=0)
+
+    lis._callback(None, maclistener._KEY_DOWN, object(), None)   # 文本提交（无 on_text）
+    lis._callback(None, maclistener._KEY_UP, object(), None)     # 硬件来源 → 照常派发
+    assert keys == [("a", False)]
+
+
+def test_recorder_merges_consecutive_text_commits():
+    """连续上屏聚合为一条 text 事件，时间戳取首段（回放从正确时刻开始）。"""
+    from core.recorder import Recorder
+    rec = Recorder()
+    for i, ch in enumerate("你好世界"):
+        rec._accept(MacroEvent(ts_ms=i * 100, kind="text", text=ch, x=10, y=20))
+    rec._flush_text()
+    r = rec.result()
+    assert len(r.events) == 1
+    assert r.events[0].kind == "text" and r.events[0].text == "你好世界"
+    assert r.events[0].ts_ms == 0
+    assert r.n_text_merged == 3
+
+
+def test_recorder_starts_new_text_event_after_pause():
+    """停顿超过合流窗口即另起一条，保留"打字中间停过"的节奏。"""
+    from core.recorder import Recorder, TEXT_JOIN_MS
+    rec = Recorder()
+    rec._accept(MacroEvent(ts_ms=0, kind="text", text="你", x=1, y=2))
+    rec._accept(MacroEvent(ts_ms=TEXT_JOIN_MS + 1, kind="text", text="好", x=1, y=2))
+    rec._flush_text()
+    r = rec.result()
+    assert [e.text for e in r.events] == ["你", "好"]
+    assert r.n_text_merged == 0
+
+
+def test_recorder_flushes_text_before_other_events_keeping_order():
+    """非文本事件到达前必须先落盘，否则顺序颠倒（变成先点击后打字）。"""
+    from core.recorder import Recorder
+    rec = Recorder()
+    rec._accept(MacroEvent(ts_ms=0, kind="text", text="你好", x=5, y=5))
+    rec._accept(MacroEvent(ts_ms=10, kind="mouse", x=5, y=5, button="left", pressed=True))
+    r = rec.result()
+    assert [(e.kind, e.text) for e in r.events] == [("text", "你好"), ("mouse", "")]
+
+
+def test_recorder_text_merge_keeps_captured_invariant():
+    """captured − filtered − limit − text_merged == count（前端一致性校验的口径）。
+
+    回归：聚合会让 count 小于 captured，若前端不扣掉 text_merged，
+    每录一次中文都会误报"系统层丢事件"。
+    """
+    from core.recorder import Recorder
+    rec = Recorder()
+    for ts in (0, 10, 20):
+        rec._push(MacroEvent(ts_ms=ts, kind="text", text="你", x=1, y=1))
+    rec._push(MacroEvent(ts_ms=30, kind="mouse", x=1, y=1, button="left", pressed=True))
+    rec.poll()
+    r = rec.result()
+    assert [e.kind for e in r.events] == ["text", "mouse"]
+    assert r.n_text_merged == 2
+    assert r.n_captured - r.n_filtered - r.n_limit_dropped - r.n_text_merged == len(r.events)
+
+
+def test_recorder_flushes_text_when_input_pauses(monkeypatch):
+    """停顿超过合流窗口即落盘——否则最后一段输入要等"下一个事件"才出现在流里，
+    录制面板看着像卡住了。"""
+    from core import recorder as rec_mod
+    rec = rec_mod.Recorder()
+    rec._start_ms = 1000
+    clock = {"t": 1000}
+    monkeypatch.setattr(rec_mod, "now_ms", lambda: clock["t"])
+
+    rec._push(MacroEvent(ts_ms=0, kind="text", text="你好", x=1, y=1))
+    assert rec.poll() == []                                  # 刚打完：还在等后续提交
+    clock["t"] = 1000 + rec_mod.TEXT_JOIN_MS
+    assert [e.text for e in rec.poll()] == ["你好"]            # 停顿到位 → 落盘
+
+
+def test_player_types_text_events_without_moving_cursor(monkeypatch):
+    """文本事件走 Unicode 通道投递，且不挪动光标（与 key 事件一致）。"""
+    from core import player as player_mod
+    p, fm, fk = make_player(monkeypatch)
+    typed = []
+    monkeypatch.setattr(player_mod, "type_text", lambda t: typed.append(t))
+    fm.pos = (321.0, 654.0)
+    events = [
+        MacroEvent(ts_ms=0, kind="text", text="你好", x=10, y=10),
+        MacroEvent(ts_ms=5, kind="key", key="a", pressed=True),
+        MacroEvent(ts_ms=10, kind="text", text="🎯", x=10, y=10),
+    ]
+    p.play(events, PlayOptions(use_relative=True, base_x=0, base_y=0))
+    assert typed == ["你好", "🎯"]
+    assert fm.pos == (321.0, 654.0)
+
+
+def test_tolerant_event_carries_text_and_v3_defaults():
+    """v3 新增字段全部有默认值：旧脚本导入不报错，text 原样保留。"""
+    from tasks.builtin import tolerant_event
+    ev = tolerant_event({"ts_ms": 5, "kind": "text", "text": "你好"})
+    assert ev.kind == "text" and ev.text == "你好"
+    old = tolerant_event({"ts_ms": 1, "kind": "key", "key": "a"})
+    assert old.text == "" and old.dragged is False and old.clicks == 1
+    assert old.flags == 0 and old.wheel_unit == "line"
+
+
+def test_record_set_text_edits_only_text_events():
+    """改写文本事件内容，且撤销能回到旧内容。
+
+    回归：撤销栈存的是 list(events)（浅拷贝，元素同一批对象）。若原地
+    `ev.text = ...`，快照会被一起改掉，撤销永远回不到旧内容。
+    """
+    from rpc.controller import AppController
+    from core.events import RecordResult
+    ctrl = AppController()
+    ctrl._last_record = RecordResult(events=[
+        MacroEvent(ts_ms=0, kind="text", text="你好", x=1, y=2),
+        MacroEvent(ts_ms=5, kind="key", key="a", pressed=True),
+    ])
+    r = ctrl.record_set_text(0, "您好")
+    assert r["events"][0]["text"] == "您好"
+    assert r["can_undo"] is True
+    assert ctrl.record_undo()["events"][0]["text"] == "你好"
+
+    for bad, msg in ((1, "不是文本事件"), (99, "下标越界")):
+        try:
+            ctrl.record_set_text(bad, "x")
+            raise AssertionError("应报错")
+        except Exception as e:  # noqa: BLE001
+            assert msg in str(e)
+    ctrl.shutdown()
+
+
+def test_record_to_node_keeps_text_events():
+    """文本事件必须原样写进节点（含 text 字段），否则回放时中文整段消失。"""
+    from rpc.controller import AppController
+    from core.events import RecordResult
+    ctrl = AppController()
+    ctrl._last_record = RecordResult(events=[
+        MacroEvent(ts_ms=0, kind="text", text="你好", x=1, y=2),
+    ])
+    ctrl.record_to_node()
+    events = ctrl.workflow.nodes[-1].params["events"]
+    assert events[0]["kind"] == "text" and events[0]["text"] == "你好"
+    ctrl.shutdown()
+
+

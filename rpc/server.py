@@ -294,6 +294,7 @@ _HANDLERS = {
     "record.removeMovesBefore": _ctl(lambda p: _CTRL.record_remove_moves_before(
         p.get("index", 0))),
     "record.setOrigin": _ctl(lambda p: _CTRL.record_set_origin(p.get("index"))),
+    "record.setText": _ctl(lambda p: _CTRL.record_set_text(p.get("index"), p.get("text"))),
     "record.undo": _ctl(lambda p: _CTRL.record_undo()),
     "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
     "record.bounds": _ctl(lambda p: _CTRL.record_bounds(p.get("bounds"))),
