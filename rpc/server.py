@@ -285,7 +285,7 @@ _HANDLERS = {
     "run.start": _ctl(lambda p: _CTRL.run_start(p.get("base_x", 0), p.get("base_y", 0))),
     "run.stop": _ctl(lambda p: _CTRL.run_stop()),
     "record.start": _ctl(lambda p: _CTRL.record_start()),
-    "record.stop": _ctl(lambda p: _CTRL.record_stop()),
+    "record.stop": _ctl(lambda p: _CTRL.record_stop(bool((p or {}).get("trim", False)))),
     "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
     "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
     # --- 模板截取（screencapture -i 框选，异步回填 template.snipped） ---

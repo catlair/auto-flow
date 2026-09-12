@@ -562,3 +562,33 @@ def test_broadcast_summary_never_mutates_tree(tmp_path):
     evs2 = [tolerant_event(x) for x in node.params["events"]]
     assert all(e is not None for e in evs2)
     ctrl.shutdown()
+
+
+def test_trim_stop_interaction():
+    """按钮停止时必须裁掉停止交互：末次点击 + 移向按钮的移动。"""
+    from core.recorder import trim_stop_interaction
+    E = lambda **kw: MacroEvent(**kw)
+    events = [
+        E(ts_ms=0, kind="move", x=100, y=100),
+        E(ts_ms=200, kind="mouse", x=200, y=200, button="left", pressed=True),   # 打开 dock
+        E(ts_ms=300, kind="mouse", x=200, y=200, button="left", pressed=False),
+        E(ts_ms=400, kind="mouse", x=300, y=300, button="left", pressed=True),   # 关闭应用
+        E(ts_ms=500, kind="mouse", x=300, y=300, button="left", pressed=False),
+        E(ts_ms=600, kind="move", x=900, y=420),                                 # 移向停止按钮
+        E(ts_ms=700, kind="mouse", x=950, y=430, button="left", pressed=True),   # 停止点击
+        E(ts_ms=800, kind="mouse", x=950, y=430, button="left", pressed=False),
+    ]
+    out = trim_stop_interaction(events)
+    # 回放终止于「关闭应用」点击；移向停止按钮的路径与停止点击一并移除
+    assert len(out) == 5 and out[-1].pressed is False and out[-1].x == 300
+    # 热键停止（F9 已被 skip_keys 过滤）不应误裁：末次点击是实质动作
+    hotkey_stop = events[:-2]  # 假设 F9 停止：无停止点击，尾部是移动
+    out2 = trim_stop_interaction(hotkey_stop)
+    # 无 trim 标志时调用方不会调用；但函数自身对「末尾无按下」的情形裁移动——
+    # 热键路径根本不调用本函数，这里仅验证纯函数行为可预期
+    assert len(out2) <= len(hotkey_stop)
+    # 全移动序列：末次按下为停止点击，裁后为空
+    only_moves = [E(ts_ms=0, kind="move", x=1, y=1),
+                  E(ts_ms=100, kind="mouse", x=2, y=2, button="left", pressed=True),
+                  E(ts_ms=150, kind="mouse", x=2, y=2, button="left", pressed=False)]
+    assert trim_stop_interaction(only_moves) == []

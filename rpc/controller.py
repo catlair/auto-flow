@@ -335,7 +335,7 @@ class AppController:
         if evs and self._record_subscribed:
             self._notify("record.event", {"events": [asdict(e) for e in evs]})
 
-    def record_stop(self) -> dict:
+    def record_stop(self, trim: bool = False) -> dict:
         with self._lock:
             if not self.recording or self.recorder is None:
                 raise ControllerError(-32003, "not_recording")
@@ -343,6 +343,9 @@ class AppController:
             self.recorder = None
             self.recording = False
         result = rec.stop()
+        if trim:
+            from core.recorder import trim_stop_interaction
+            result.events = trim_stop_interaction(result.events)
         self._last_record = result
         # 丢帧定位计量一并上报：captured=系统投递数；count=captured-filtered-limit 后入库数。
         # count << captured 且 filtered 也小 → 系统层（CGEventTap）丢事件，需要另查。

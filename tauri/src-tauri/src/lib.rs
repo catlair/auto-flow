@@ -213,6 +213,18 @@ fn send_rpc(app: tauri::AppHandle, line: String) -> Result<(), String> {
     }
 }
 
+/// 回放防误触：运行期间主窗开启鼠标穿透（点击落到窗下方的目标上），
+/// 运行结束由前端关闭。录制时保持可点（用户要点停止按钮）。
+#[tauri::command]
+fn set_click_through(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window
+        .set_ignore_cursor_events(enabled)
+        .map_err(|e| e.to_string())
+}
+
 /// 查询末次上下线状态，返回 `[up, detail]`。
 /// 用途：Tauri 事件不缓存也不重放，sidecar 若在前端注册监听前就启动失败，
 /// 那次 rpc_down 会永久丢失；前端连上后主动查一次即可补齐。
@@ -243,7 +255,7 @@ pub fn run() {
             spawn_and_watch(&handle, &state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![send_rpc, rpc_status])
+        .invoke_handler(tauri::generate_handler![send_rpc, rpc_status, set_click_through])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

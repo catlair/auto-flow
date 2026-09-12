@@ -7,6 +7,7 @@ import type {
   Permissions,
   Workflow,
 } from "@/rpc/types";
+import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const PROTOCOL_VERSION = 1;
@@ -309,9 +310,11 @@ export const useAppStore = defineStore("app", {
           this.running = false;
           this.runNodeType = "";
           this.runProgress = { done: 0, total: 0 };
+          this.setClickThrough(false);
           break;
         case "run.error":
           this.running = false;
+          this.setClickThrough(false);
           this.setBanner("运行出错：" + (n.params.message ?? ""), "error");
           break;
         case "schedule.fired":
@@ -379,6 +382,9 @@ export const useAppStore = defineStore("app", {
       const cur = await rpc.request("node.params.set", { index, key, value });
       this.applyCurrent(cur);
     },
+    setClickThrough(enabled: boolean) {
+      invoke("set_click_through", { enabled }).catch(() => {});
+    },
     clearRecord() {
       this.recordBuffer = [];
       this.lastRecordCount = 0;
@@ -429,17 +435,21 @@ export const useAppStore = defineStore("app", {
         this.runProgress = { done: 0, total: 0 };
         try {
           await rpc.request("run.start", { base_x: this.base.x, base_y: this.base.y });
+          // 回放防误触：主窗开启鼠标穿透，回放的点击不会被自己吃掉。
+          // 停止只能用 F10（穿透期间窗口不接收点击）。
+          await invoke("set_click_through", { enabled: true });
         } catch (e) {
           this.running = false;
+          this.setClickThrough(false);
           throw e;
         }
       }
     },
-    async toggleRecord() {
+    async toggleRecord(via: "button" | "hotkey" = "hotkey") {
       if (this.recording) {
-        // 统计直接取响应回填：record.stopped 通知在大帧/高频事件流下可能被
-        // WebView 丢弃，若只依赖通知，写入节点按钮会因 lastRecordCount=0 永远禁用。
-        const r = await rpc.request("record.stop");
+        // via=button：点「停止录制」按钮的那次点击本身会被录进事件序列，
+        // 必须让后端裁掉停止交互（含移向按钮的移动），否则回放会复现它。
+        const r = await rpc.request("record.stop", { trim: via === "button" });
         this.recording = false;
         this.lastRecordInfo = r;
         this.lastRecordCount = r.count ?? 0;

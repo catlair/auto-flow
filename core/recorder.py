@@ -162,3 +162,24 @@ class Recorder:
                                 n_limit_dropped=self._n_limit_dropped,
                                 mouse_listener_died=self._mouse_died,
                                 kb_listener_died=self._kb_died)
+
+
+def trim_stop_interaction(events: list[MacroEvent]) -> list[MacroEvent]:
+    """裁掉「停止录制」交互本身（仅按钮停止时调用）。
+
+    用鼠标点「停止录制」时，这次点击（和移向按钮的移动）已在事件序列里——
+    回放会复现它，点到回放当时该位置的任意东西。规则：
+    1) 从末次鼠标按下起全部移除（停止点击 + 其后残留）；
+    2) 再移除尾部连续移动（移向停止按钮的路径），
+       使回放终止于最后一次实质动作（点击/按键/滚轮）。
+    """
+    last_down = -1
+    for i, ev in enumerate(events):
+        if ev.kind == "mouse" and ev.pressed:
+            last_down = i
+    if last_down < 0:
+        return events
+    out = events[:last_down]
+    while out and out[-1].kind == "move":
+        out.pop()
+    return out
