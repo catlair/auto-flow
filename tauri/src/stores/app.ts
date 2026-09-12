@@ -1,6 +1,5 @@
 // 全局状态：后端是唯一真源（§10），前端近乎无状态——只持有视图态、表单草稿、运行/录制态镜像。
 import { defineStore } from "pinia";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { errMessage, rpc } from "@/rpc/client";
 import type {
   JsonRpcNotification,
@@ -58,7 +57,6 @@ export const useAppStore = defineStore("app", {
     bannerKind: "ok" as "ok" | "warn" | "error",
     // key.captured 订阅（ParamsPanel 捕获键时接收回填）
     _captured: new Set<CapturedKeyHandler>(),
-    _unwatchBounds: null as null | (() => void),
     // 合并并发握手（首连与 rpc_up 事件可能同时触发）
     _handshaking: false,
   }),
@@ -449,20 +447,24 @@ export const useAppStore = defineStore("app", {
     },
     async toggleRecord() {
       if (this.recording) {
-        // 停止交互（点按钮/移向按钮）由后端按窗口边界过滤，天然不入事件序列。
-        const r = await rpc.request("record.stop");
+        // 按钮停止：trim 把"点停止按钮"这次交互从尾部裁掉（回放不再复现它）。
+        // 窗口边界在**停止这一刻**取，避免用录制开始时的旧边界裁错位置。
+        const r = await rpc.request("record.stop", {
+          trim: true,
+          window_bounds: await this.windowBounds(),
+        });
         this.recording = false;
         this.lastRecordInfo = r;
         this.lastRecordCount = r.count ?? 0;
         await this.recordSubscribe(false);
-        this._unwatchBounds?.();
+        await this.refreshRecordBuffer();
       } else {
         this.recordBuffer = [];
-        this._unwatchBounds?.();
+        // 边界仅用于停止时定位停止点击；drop_in_window 保持关闭——按窗口矩形
+        // 丢弃事件会在边界过期时成片吞掉真实操作。
         await rpc.request("record.start", { window_bounds: await this.windowBounds() });
         this.recording = true;
         await this.recordSubscribe(true);
-        this.watchWindowBounds();
       }
     },
     async windowBounds(): Promise<[number, number, number, number] | null> {
@@ -476,17 +478,14 @@ export const useAppStore = defineStore("app", {
         return null;
       }
     },
-    /** 录制期间窗口移动/缩放时同步边界到后端（经 Tauri 事件）。 */
-    watchWindowBounds() {
-      const send = async () => {
-        if (!this.recording) return;
-        const b = await this.windowBounds();
-        if (b) await rpc.request("record.bounds", { bounds: b }).catch(() => {});
-      };
-      const cleanup = () => {};
-      listen("tauri://move", () => void send());
-      listen("tauri://resize", () => void send());
-      this._unwatchBounds = cleanup;
+    /** 拉取后端权威事件序列覆盖本地缓冲，消除"看到的和写入的不一致"。 */
+    async refreshRecordBuffer() {
+      try {
+        const r = await rpc.request("record.current");
+        this.recordBuffer = r.events ?? [];
+      } catch {
+        /* 保留增量缓冲 */
+      }
     },
     async recordSubscribe(on: boolean) {
       // §3.2：录制面板打开/录制开始时订阅事件流，关闭时退订，避免高频事件打爆管道。

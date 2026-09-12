@@ -19,7 +19,31 @@ const viewportH = ref(0);
 // 是否跟随最新。用户往上翻看历史时不要把他拽回底部。
 const follow = ref(true);
 
-const total = computed(() => store.recordBuffer.length);
+// ---- 类型过滤：用来快速核对"拖拽到底录进去没有" ----
+const FILTERS = [
+  { key: "all", label: "全部" },
+  { key: "mouse", label: "点击" },
+  { key: "key", label: "键盘" },
+  { key: "drag", label: "拖拽" },
+  { key: "wheel", label: "滚轮" },
+] as const;
+const filter = ref<string>("all");
+
+function matches(ev: any, f: string): boolean {
+  if (f === "all") return true;
+  if (f === "drag") return ev.kind === "move" && !!ev.dragged;
+  if (f === "key") return ev.kind === "key";
+  if (f === "mouse") return ev.kind === "mouse";
+  if (f === "wheel") return ev.kind === "wheel";
+  return true;
+}
+
+const events = computed(() =>
+  filter.value === "all"
+    ? store.recordBuffer
+    : store.recordBuffer.filter((e: any) => matches(e, filter.value))
+);
+const total = computed(() => events.value.length);
 const win = computed(() =>
   computeWindow({
     count: total.value,
@@ -28,7 +52,36 @@ const win = computed(() =>
     scrollTop: scrollTop.value,
   })
 );
-const visible = computed(() => store.recordBuffer.slice(win.value.start, win.value.end));
+const visible = computed(() => events.value.slice(win.value.start, win.value.end));
+
+/** 事件流每一行的展示：key 事件此前只显示 "key @ 0,0"，看不出按了什么键。 */
+function fmtEvent(ev: any): string {
+  const t = `${ev.ts_ms ?? 0}ms`;
+  const xy = `(${ev.x ?? 0},${ev.y ?? 0})`;
+  if (ev.kind === "key") return `${t}  按键 ${ev.pressed ? "↓" : "↑"} ${ev.key ?? "?"}  ${xy}`;
+  if (ev.kind === "mouse") {
+    const c = (ev.clicks ?? 1) > 1 ? ` ×${ev.clicks}` : "";
+    return `${t}  鼠标 ${ev.pressed ? "按下" : "释放"} ${ev.button ?? "left"}${c}  ${xy}`;
+  }
+  if (ev.kind === "wheel") {
+    const u = ev.wheel_unit === "pixel" ? "px" : "行";
+    return `${t}  滚轮 dy=${ev.wheel_dy ?? 0}${u} dx=${ev.wheel_dx ?? 0}${u}  ${xy}`;
+  }
+  return `${t}  ${ev.dragged ? "拖拽" : "移动"}  ${xy}`;
+}
+
+/** 缓冲内的事件跨度（毫秒），用于快速判断录制时长是否合理。 */
+const durationMs = computed(() => {
+  const b = store.recordBuffer;
+  return b.length ? Number(b[b.length - 1].ts_ms ?? 0) : 0;
+});
+
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+}
 
 function onScroll() {
   const el = streamEl.value;
@@ -48,6 +101,13 @@ function scrollToBottom() {
 // 新事件到达时，只有原本就贴在底部才继续跟随。
 watch(total, () => {
   if (!follow.value) return;
+  void nextTick(scrollToBottom);
+});
+
+// 切换过滤条件后，窗口高度与滚动位置都失效，直接回到最新。
+watch(filter, () => {
+  scrollTop.value = 0;
+  follow.value = true;
   void nextTick(scrollToBottom);
 });
 
@@ -72,14 +132,17 @@ async function onToggleRecord() {
   try {
     await store.toggleRecord();
     const s = store.lastRecordInfo;
-    if (s?.mouse_died || s?.kb_died) {
+    if (!s) return;
+    if (s.mouse_died || s.kb_died) {
       MessagePlugin.warning(
         (s.mouse_died ? "鼠标" : "") + (s.mouse_died && s.kb_died ? "、" : "") +
-        (s.kb_died ? "键盘" : "") + "监听中途停止，死亡时刻后的事件未记录"
+        (s.kb_died ? "键盘" : "") + "监听未在运行，其记录范围内的事件可能缺失"
       );
-    } else if (s?.stopped_by_limit) {
+    } else if (s.stopped_by_limit) {
       MessagePlugin.warning(`事件数达到上限，超限丢弃 ${s.limit_dropped ?? 0} 条`);
-    } else if (s && (s.captured ?? 0) - (s.filtered ?? 0) - (s.limit_dropped ?? 0) !== (s.count ?? 0)) {
+    } else if ((s.window_dropped ?? 0) > 0) {
+      MessagePlugin.warning(`窗口过滤丢弃了 ${s.window_dropped} 条事件（不应发生，请反馈）`);
+    } else if ((s.captured ?? 0) - (s.filtered ?? 0) - (s.limit_dropped ?? 0) !== (s.count ?? 0)) {
       MessagePlugin.warning("检测到系统层丢事件，请反馈（captured≠count+filtered）");
     }
   } catch (e) {
@@ -121,12 +184,31 @@ async function onToNode() {
       >
     </div>
     <div v-if="store.lastRecordInfo" class="af-rec-stats">
-      已录 {{ store.lastRecordInfo.count }} 条事件<template v-if="store.lastRecordInfo.filtered">
-        · 过滤微移动/停止交互 {{ store.lastRecordInfo.filtered }} 条</template><template v-if="store.lastRecordInfo.limit_dropped">
-        · 超限丢弃 {{ store.lastRecordInfo.limit_dropped }} 条</template><template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
+      已录 {{ store.lastRecordInfo.count }} 条事件
+      <template v-if="durationMs"> · 时长 {{ fmtDuration(durationMs) }}</template>
+      <template v-if="store.lastRecordInfo.decimated">
+        · 冗余移动降采样 {{ store.lastRecordInfo.decimated }} 条</template>
+      <template v-if="store.lastRecordInfo.trimmed">
+        · 裁掉停止交互 {{ store.lastRecordInfo.trimmed }} 条</template>
+      <template v-if="store.lastRecordInfo.limit_dropped">
+        · 超限丢弃 {{ store.lastRecordInfo.limit_dropped }} 条</template>
+      <template v-if="store.lastRecordInfo.window_dropped">
+        · <span style="color:#e34d59">窗口过滤丢弃 {{ store.lastRecordInfo.window_dropped }} 条</span></template>
+      <template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
         · <span style="color:#e34d59">监听中断</span></template>
     </div>
-    <div v-if="total" class="af-stream-bar">
+    <div v-if="store.recordBuffer.length" class="af-filters">
+      <button
+        v-for="f in FILTERS"
+        :key="f.key"
+        class="af-chip"
+        :class="{ on: filter === f.key }"
+        @click="filter = f.key"
+      >
+        {{ f.label }}
+      </button>
+    </div>
+    <div v-if="store.recordBuffer.length" class="af-stream-bar">
       <span>共 {{ total }} 条</span>
       <span v-if="total > win.end || win.start > 0" class="af-range">
         显示 {{ win.start + 1 }}–{{ win.end }}
@@ -148,8 +230,7 @@ async function onToNode() {
             class="af-ev"
             :style="{ height: ITEM_H + 'px' }"
           >
-            {{ ev.kind }} @ {{ ev.x ?? "-" }},{{ ev.y ?? "-" }} {{ ev.button ? ev.button : "" }}
-            {{ ev.ts_ms }}ms
+            {{ fmtEvent(ev) }}
           </div>
         </div>
       </div>
@@ -217,6 +298,26 @@ async function onToNode() {
   margin-top: 6px;
   font-size: 11px;
   color: #666;
+}
+.af-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.af-chip {
+  border: 1px solid #d5d8dd;
+  background: #fff;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: #666;
+  cursor: pointer;
+}
+.af-chip.on {
+  border-color: #0052d9;
+  color: #0052d9;
+  background: #f0f4ff;
 }
 .af-stream-bar {
   display: flex;

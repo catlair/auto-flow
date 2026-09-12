@@ -4,8 +4,8 @@
 
 | 模块 | 文档 | 状态 | 验收 | 备注 |
 | --- | --- | --- | --- | --- |
-| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 91 测试 + 真机 | 点击捕获依赖 pyobjc 符号预热（F-REC-04） |
-| 回放引擎 | [player.md](modules/player.md) | ✅ | 测试 + 真机 | 点击时序已修：到位也等计划时间点 |
+| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 104 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 |
+| 回放引擎 | [player.md](modules/player.md) | ✅ | 104 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 |
 | 工作流执行器 | [executor.md](modules/executor.md) | ✅ | 测试 | 异常兜底 + 条件门控 + 热停 |
 | 节点体系 | [nodes.md](modules/nodes.md) | ✅ | 测试 + 真机 | 9 种内置节点，自描述参数 |
 | 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | Retina 坐标换算；锁屏时 Quartz 兜底 |
@@ -23,4 +23,5 @@
 - 📋 工作流变量系统：跨节点传值（计划书 §workflow_vars 曾有占位）
 - 📋 Windows 支持：core 逻辑平台无关，输入层需按平台抽象（pynput 可跨）
 - 📋 视觉模型按需分发：opencv/onnxruntime 占 sidecar 体积 200MB+，可拆可选包
-- 📋 录制事件编辑：时间轴 UI 上增删改单条事件
+- 📋 录制事件编辑：时间轴 UI 上增删改单条事件（v3 已具备类型过滤与权威数据源，编辑待做）
+- 📋 录制类型化文本：中文/emoji 目前录成按键序列，可按输入法组合结果聚合为文本事件

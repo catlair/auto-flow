@@ -171,7 +171,7 @@ fn spawn_and_watch(app: &tauri::AppHandle, state: &Arc<SidecarState>) {
             // 【关键】lines() 会剥掉换行符，而前端 onChunk 按 \n 切分缓冲——若 emit 的
             // payload 不带 \n，帧会永远滞留在前端缓冲区，dispatch 一次都不执行，
             // 表现为「所有请求挂起、权限横幅全 ✗」。必须把 \n 补回去。
-            log_line(&format!("rpc_event: {}", preview(&line, 160)));
+            log_line(&format!("rpc_event: {}", preview(&line, 400)));
             let _ = h.emit("rpc_event", format!("{line}\n"));
         }
         // stdout 关闭 = sidecar 退出。必须做两件事（此前都漏了）：

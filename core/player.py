@@ -1,37 +1,79 @@
-"""回放引擎：按事件时间戳重放，鼠标移动做轨迹插值，支持速度倍率与停止标志。
+"""回放引擎 v3：虚拟时钟 + 时间采样插值 + 三档追赶。
 
-插值算法与 Tauri 版 macro-recorder 一致：
-两点间按 10px 步长滑行（≤120 步），步数同时受事件时间预算约束（≥8ms/步），
-保证轨迹连续、不瞬移。时间基准为事件绝对时间戳 ts_ms / speed。
+v2 的三个结构性缺陷（"回放丢帧严重"的直接成因）：
+
+1. **每步强制 ≥8ms**（`MIN_STEP_S`）。滑行循环哪怕预算已经耗尽也至少 sleep 8ms，
+   而录制侧快速拖拽的移动事件率轻松超过 125/s——播放器从结构上就追不上，
+   落后的量只增不减。
+2. **落后即雪崩**。预算算成 `ts/1000/speed - 已耗时`，一旦为负，
+   `max(budget, 0)` 让剩余事件全部瞬时连发，整条时间线塌成一坨。
+3. **按像素步长插值**（10px/步、上限 120 步）。快速长距离移动被压成十几个
+   上百像素的跳变，视觉上就是丢帧；慢速移动又因为点太少而不平滑。
+
+v3 的做法：
+
+- **虚拟时钟**：`due = t0 + ts_ms / speed`，每个事件的计划时刻只由时间线决定，
+  误差不累积。
+- **时间采样插值**：给定剩余时间与位移，按 ~6ms 一个采样点铺开（点数由**时间**
+  决定而非像素），既保证慢速平滑，也保证快速不跳变。
+- **三档追赶**：`剩余 > 4ms` 正常插值；`0 < 剩余 ≤ 4ms` 压缩为一次投递；
+  `剩余 ≤ 0`（已落后）直接跳帧投递目标位置并计数。**任何情况下单事件的开销
+  上限是一次投递**，落后会被自然追平，绝不出现"剩余事件瞬时连发"。
+- **拖拽回放**：按键保持期间投递 `kCGEvent*MouseDragged` 而非 `MouseMoved`。
+- **点击序列**：写入 `kCGMouseEventClickState`，双击/三击才能被目标应用识别。
+- **滚轮单位**：按 `wheel_unit` 选择 line/pixel，且横纵两轴一起创建
+  （v2 只用 1 个轴创建事件再设第 2 轴字段，横向滚轮被丢弃；且把"行"当"像素"
+  投递，量级差一个数量级，表现为滚轮几乎不动）。
 """
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
 from typing import Callable, Optional
 
-from pynput.keyboard import Controller as KeyboardController
-
 from core.events import MacroEvent
 from core.keymap import name_to_key
-
-import logging
+from core.mactype import MacKeyboardController as KeyboardController
 
 import Quartz as _Q
 
 logger = logging.getLogger("autoflow.player")
 
-_BTN_TYPE = {"left": _Q.kCGMouseButtonLeft, "right": _Q.kCGMouseButtonRight,
-             "middle": _Q.kCGMouseButtonCenter}
+# ---- 输出目标 ----
+# HID 层最接近真实硬件，兼容性优于 session 层（v2 用 session，部分应用收不到）。
+_POST_TAP = _Q.kCGHIDEventTap
+
+# ---- 插值/追赶参数 ----
+SAMPLE_S = 0.006        # 采样间隔 ≈ 6ms（约 160Hz，够平滑且开销可控）
+MIN_SAMPLE_S = 0.004    # 剩余时间低于此值：不再插值，直接投递目标点
+TRAVEL_MAX_S = 0.25     # 单次移动的最长滑行时间（更长的空档先等待，不匀速爬行）
+MAX_STEPS = 400
+
+SCROLL_UNIT = {"line": _Q.kCGScrollEventUnitLine,
+               "pixel": _Q.kCGScrollEventUnitPixel}
+
+_BUTTON_CODE = {"left": _Q.kCGMouseButtonLeft, "right": _Q.kCGMouseButtonRight,
+                "middle": _Q.kCGMouseButtonCenter}
+_DOWN = {"left": _Q.kCGEventLeftMouseDown, "right": _Q.kCGEventRightMouseDown,
+         "middle": _Q.kCGEventOtherMouseDown}
+_UP = {"left": _Q.kCGEventLeftMouseUp, "right": _Q.kCGEventRightMouseUp,
+       "middle": _Q.kCGEventOtherMouseUp}
+_DRAGGED = {"left": _Q.kCGEventLeftMouseDragged,
+            "right": _Q.kCGEventRightMouseDragged,
+            "middle": _Q.kCGEventOtherMouseDragged}
 
 
 class QuartzMouse:
-    """Quartz 直发的鼠标输出（post 到 kCGHIDEventTap）。
+    """Quartz 直发的鼠标输出（post 到 HID 层）。
 
     为什么不用 pynput 的 Controller：PyInstaller frozen sidecar 里
     pynput 鼠标 press/release 会【静默失效】（不抛异常、事件不出现），
-    表现为「回放移动正常但点击无效果」。post 目标用 HID 层。
+    表现为「回放移动正常但点击无效果」。
+
+    相对 pynput Controller 额外补上它内部才有的两件事：按键保持期间的
+    拖拽事件类型切换、点击序列号（ClickState）写入。
     """
 
     def __init__(self) -> None:
@@ -39,59 +81,51 @@ class QuartzMouse:
 
     @property
     def position(self) -> tuple:
-        return _current_pos()
+        return self._pos
 
     @position.setter
     def position(self, xy) -> None:
+        self.move_to(xy)
+
+    def move_to(self, xy, button: Optional[str] = None) -> None:
+        """移动到目标点。`button` 非空表示按键保持中——必须发 Dragged 类型，
+        否则应用只看到"光标在动"，不会执行拖拽。"""
         x, y = int(xy[0]), int(xy[1])
-        ev = _Q.CGEventCreateMouseEvent(None, _Q.kCGEventMouseMoved, (x, y),
-                                        _Q.kCGMouseButtonLeft)
-        _Q.CGEventPost(_Q.kCGSessionEventTap, ev)
+        etype = _DRAGGED.get(button or "", _Q.kCGEventMouseMoved)
+        ev = _Q.CGEventCreateMouseEvent(
+            None, etype, (x, y), _BUTTON_CODE.get(button or "", _Q.kCGMouseButtonLeft))
+        _Q.CGEventPost(_POST_TAP, ev)
         self._pos = (x, y)
 
     def _post_button(self, etype, button: str, clicks: int) -> None:
-        x, y = self.position
-        ev = _Q.CGEventCreateMouseEvent(None, etype, (x, y),
-                                        _BTN_TYPE.get(button, _Q.kCGMouseButtonLeft))
-        _Q.CGEventSetIntegerValueField(ev, _Q.kCGMouseEventClickState, clicks)
-        _Q.CGEventPost(_Q.kCGSessionEventTap, ev)
-        logger.info("mouse post: %s btn=%s at (%d,%d) clicks=%d",
-                    etype, button, x, y, clicks)
+        x, y = self._pos
+        ev = _Q.CGEventCreateMouseEvent(
+            None, etype, (x, y), _BUTTON_CODE.get(button, _Q.kCGMouseButtonLeft))
+        if clicks > 1:
+            _Q.CGEventSetIntegerValueField(ev, _Q.kCGMouseEventClickState, clicks)
+        _Q.CGEventPost(_POST_TAP, ev)
 
-    def press(self, button: str = "left") -> None:
-        self._post_button(_Q.kCGEventLeftMouseDown if button == "left"
-                          else _Q.kCGEventRightMouseDown if button == "right"
-                          else _Q.kCGEventOtherMouseDown, button, 1)
+    def press(self, button: str = "left", clicks: int = 1) -> None:
+        self._post_button(_DOWN.get(button, _Q.kCGEventLeftMouseDown), button, clicks)
 
-    def release(self, button: str = "left") -> None:
-        self._post_button(_Q.kCGEventLeftMouseUp if button == "left"
-                          else _Q.kCGEventRightMouseUp if button == "right"
-                          else _Q.kCGEventOtherMouseUp, button, 1)
+    def release(self, button: str = "left", clicks: int = 1) -> None:
+        self._post_button(_UP.get(button, _Q.kCGEventLeftMouseUp), button, clicks)
 
     def click(self, button: str = "left", count: int = 1) -> None:
         for i in range(1, count + 1):
-            self._post_button(_Q.kCGEventLeftMouseDown if button == "left"
-                              else _Q.kCGEventRightMouseDown if button == "right"
-                              else _Q.kCGEventOtherMouseDown, button, i)
-            self._post_button(_Q.kCGEventLeftMouseUp if button == "left"
-                              else _Q.kCGEventRightMouseUp if button == "right"
-                              else _Q.kCGEventOtherMouseUp, button, i)
+            self.press(button, i)
+            self.release(button, i)
 
-    def scroll(self, dx: int, dy: int) -> None:
-        x, y = self.position
-        ev = _Q.CGEventCreateScrollWheelEvent(None, _Q.kCGScrollEventUnitPixel, 1, int(dy))
-        _Q.CGEventSetIntegerValueField(ev, _Q.kCGScrollWheelEventDeltaAxis2, int(dx))
-        _Q.CGEventPost(_Q.kCGSessionEventTap, ev)
+    def scroll(self, dx: int, dy: int, unit: str = "line") -> None:
+        # 两个轴一起创建：只创建 1 个轴再回填第 2 轴字段会被系统忽略（横向滚轮丢失）
+        ev = _Q.CGEventCreateScrollWheelEvent(
+            None, SCROLL_UNIT.get(unit, _Q.kCGScrollEventUnitLine), 2, int(dy), int(dx))
+        _Q.CGEventPost(_POST_TAP, ev)
 
 
 def _current_pos() -> tuple:
     loc = _Q.CGEventGetLocation(_Q.CGEventCreate(None))
     return (loc.x, loc.y)
-from core.mactype import MacKeyboardController as KeyboardController
-
-STEP_PX = 10.0
-MAX_STEPS = 120
-MIN_STEP_S = 0.008
 
 
 class PlayOptions:
@@ -114,6 +148,9 @@ class Player:
         self.mouse = QuartzMouse()
         self.kb = KeyboardController()
         self._t0 = 0.0
+        # 上一次回放的诊断计数（跳帧次数 / 总事件数），供 UI 展示
+        self.last_skipped = 0
+        self.last_total = 0
 
     def stop_playback(self) -> None:
         self._stop.set()
@@ -122,9 +159,14 @@ class Player:
     def stopping(self) -> bool:
         return self._stop.is_set()
 
+    # ---- 主循环 ----
     def play(self, events: list, opt: PlayOptions,
-             on_progress: Optional[Callable[[int, int], None]] = None) -> None:
-        """回放一段事件序列；相对模式下偏移由基点与原点计算。"""
+             on_progress: Optional[Callable[[int, int], None]] = None) -> dict:
+        """回放一段事件序列；相对模式下偏移由基点与原点计算。
+
+        返回诊断字典 `{"total": n, "skipped": k}`——`skipped` 是因落后而
+        跳过的中间采样点数（不是事件丢失，落点仍然精确）。
+        """
         self._stop.clear()
         speed = max(opt.speed, 0.01)
         has_mouse = any(ev.kind in ("move", "mouse", "wheel") for ev in events)
@@ -142,67 +184,127 @@ class Player:
         else:
             dx, dy = 0, 0
             start = self._first_xy(events, opt)
-        if has_mouse:
-            self.mouse.position = start
-        self._t0 = time.monotonic()
 
+        self._t0 = time.monotonic()
+        skipped = 0
+        total = len(events)
         pos = start
+        if has_mouse:
+            self.mouse.move_to(start)
+
         held_button: Optional[str] = None
         pressed_keys: list = []
-        total = len(events)
         try:
             for i, ev in enumerate(events):
                 if self.stopping:
                     break
                 if on_progress and (i % 25 == 0 or i == total - 1):
                     on_progress(i + 1, total)
-                budget_s = ev.ts_ms / 1000.0 / speed - self._elapsed_s()
+                due = self._t0 + ev.ts_ms / 1000.0 / speed
+
                 if ev.kind == "key":
-                    self._wait(budget_s)
+                    self._sleep_until(due)
                     self._play_key(ev, opt, pressed_keys)
-                elif ev.kind in ("mouse", "move", "wheel"):
-                    target = (ev.x + dx, ev.y + dy)
-                    # 滑行消耗时间预算；已到位（点击/原地事件）也必须等到计划
-                    # 时间点再执行——否则 press/release 挤在上一事件后立刻发出，
-                    # 与录制时序脱节，表现为「点击录到了但回放无效果」。
-                    if math.hypot(target[0] - pos[0], target[1] - pos[1]) < 1:
-                        self._wait(max(budget_s, 0.0))
-                    pos = self._glide(pos, target, max(budget_s, 0.0))
-                    if ev.kind == "mouse":
-                        btn = self._button(ev.button)
-                        if ev.pressed:
-                            held_button = btn
-                            self.mouse.press(btn)
-                        else:
-                            held_button = None
-                            self.mouse.release(btn)
-                    elif ev.kind == "wheel":
-                        self.mouse.scroll(ev.wheel_dx, ev.wheel_dy)
+                    continue
+
+                target = (ev.x + dx, ev.y + dy)
+                pos, jumped = self._travel(pos, target, due, held_button)
+                skipped += jumped
+
+                if ev.kind == "mouse":
+                    btn = self._button(ev.button)
+                    clicks = max(int(ev.clicks or 1), 1)
+                    if ev.pressed:
+                        held_button = btn
+                        self.mouse.press(btn, clicks)
+                    else:
+                        held_button = None
+                        self.mouse.release(btn, clicks)
+                elif ev.kind == "wheel":
+                    self.mouse.scroll(ev.wheel_dx, ev.wheel_dy,
+                                      getattr(ev, "wheel_unit", "line"))
         finally:
             # 中断/异常时也要松开，避免鼠标键或键盘卡在按下状态
             if held_button:
                 try:
                     self.mouse.release(held_button)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     pass
             for k in pressed_keys:
                 try:
                     self.kb.release(k)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     pass
         if on_progress:
             on_progress(total, total)
+        self.last_skipped, self.last_total = skipped, total
+        return {"total": total, "skipped": skipped}
 
     # ---- 供节点使用的公开工具 ----
     def wait(self, seconds: float) -> None:
-        self._wait(seconds)
+        self._sleep_until(time.monotonic() + max(seconds, 0.0))
 
     def glide_now(self, target: tuple) -> None:
         """立即从当前位置滑到目标点（短预算，用于节点式移动）。"""
         self._glide(self.mouse.position, target, 0.15)
 
+    # ---- 调度核心 ----
     def _elapsed_s(self) -> float:
         return time.monotonic() - self._t0
+
+    def _travel(self, pos: tuple, target: tuple, due: float,
+                button: Optional[str]) -> tuple:
+        """把光标从 pos 移到 target，计划时刻为 due。
+
+        返回 `(新位置, 跳过的采样点数)`：`0` 表示按计划插值到达，
+        `1` 表示因为没有剩余时间而一次性投递（落后时发生，落点仍精确）。
+        """
+        tx, ty = int(target[0]), int(target[1])
+        cx, cy = pos
+        dist = math.hypot(tx - cx, ty - cy)
+        remaining = due - time.monotonic()
+
+        if dist < 1:
+            # 十字光标已在目标点（点击/原地事件）：只需等到计划时刻，
+            # 否则 press/release 会挤在上一事件后立刻发出，应用不认这种瞬时点击。
+            self._sleep_until(due)
+            return (tx, ty), 0
+
+        if remaining <= MIN_SAMPLE_S:
+            # 已落后或几乎没有预算：跳帧——一次投递到目标，绝不追加延迟。
+            # 这是 v2"剩余事件瞬时连发"的替代方案：落后被限制在单个事件内。
+            self.mouse.move_to((tx, ty), button)
+            return (tx, ty), 1
+
+        # 长空档先等待，只把最后 TRAVEL_MAX_S 用于滑行（否则会匀速爬行很久）
+        travel = min(remaining, TRAVEL_MAX_S)
+        self._sleep_until(due - travel)
+
+        steps = int(travel / SAMPLE_S)
+        steps = max(1, min(steps, MAX_STEPS))
+        step_dt = travel / steps
+        start = time.monotonic()
+        for s in range(1, steps + 1):
+            if self.stopping:
+                self.mouse.move_to((tx, ty), button)
+                return (tx, ty), 0
+            self._sleep_until(start + step_dt * s)
+            ratio = s / steps
+            self.mouse.move_to((cx + (tx - cx) * ratio, cy + (ty - cy) * ratio), button)
+        return (tx, ty), 0
+
+    def _glide(self, from_pos: tuple, target: tuple, budget_s: float) -> tuple:
+        """兼容旧调用：给定预算时间把光标滑到目标。"""
+        pos, _ = self._travel(from_pos, target, time.monotonic() + max(budget_s, 0.0), None)
+        return pos
+
+    def _sleep_until(self, deadline: float) -> None:
+        """等待到指定时刻，随时响应停止。"""
+        while not self.stopping:
+            remain = deadline - time.monotonic()
+            if remain <= 0:
+                break
+            time.sleep(min(remain, 0.002))
 
     @staticmethod
     def _first_xy(events: list, opt: PlayOptions) -> tuple:
@@ -214,36 +316,6 @@ class Player:
     @staticmethod
     def _button(name: Optional[str]) -> str:
         return name if name in ("left", "right", "middle") else "left"
-
-    def _wait(self, seconds: float) -> None:
-        """等待到事件的计划时间点，随时响应停止。"""
-        deadline = time.monotonic() + max(seconds, 0.0)
-        while not self.stopping:
-            remain = deadline - time.monotonic()
-            if remain <= 0:
-                break
-            time.sleep(min(remain, 0.02))
-
-    def _glide(self, from_pos: tuple, target: tuple, budget_s: float) -> tuple:
-        """从当前位置滑向目标：10px 步长、≤120 步、步数受时间预算约束。"""
-        cx, cy = from_pos
-        tx, ty = int(target[0]), int(target[1])
-        dist = math.hypot(tx - cx, ty - cy)
-        if dist < 1:
-            return (tx, ty)
-        steps = min(max(int(math.ceil(dist / STEP_PX)), 1), MAX_STEPS)
-        if budget_s > MIN_STEP_S:
-            steps = min(steps, max(int(budget_s / MIN_STEP_S), 1))
-        step_wait = max(min(budget_s / steps, 0.05), MIN_STEP_S) if steps else MIN_STEP_S
-        for s in range(1, steps + 1):
-            if self.stopping:
-                self.mouse.position = (tx, ty)
-                return (tx, ty)
-            ratio = s / steps
-            self.mouse.position = (int(cx + (tx - cx) * ratio), int(cy + (ty - cy) * ratio))
-            time.sleep(step_wait)
-        self.mouse.position = (tx, ty)
-        return (tx, ty)
 
     def _play_key(self, ev: MacroEvent, opt: PlayOptions, pressed_keys: list) -> None:
         if ev.key in opt.suppress_keys:
@@ -259,5 +331,5 @@ class Player:
                 self.kb.release(key)
                 if key in pressed_keys:
                     pressed_keys.remove(key)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass

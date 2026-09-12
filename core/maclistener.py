@@ -39,9 +39,10 @@ _MOUSE_MOVED = Quartz.kCGEventMouseMoved
 class MacKeyboardListener(threading.Thread):
     """后台线程创建事件 tap 并跑 CFRunLoop。
 
-    on_key(name: str, pressed: bool, x: int, y: int) 在 tap 线程回调，坐标为
-    按键时刻光标的逻辑位置（键盘事件自带 location——纯 CLI 进程里
-    CGEventGetLocation(CGEventCreate(None)) 恒返回 (0,0)，不能用来读光标）。
+    on_key(name: str, pressed: bool, x: int, y: int, flags: int) 在 tap 线程回调，
+    坐标为按键时刻光标的逻辑位置（键盘事件自带 location——纯 CLI 进程里
+    CGEventGetLocation(CGEventCreate(None)) 恒返回 (0,0)，不能用来读光标），
+    flags 为该事件时刻的 CGEventFlags 快照（修饰键状态）。
     消费方自行保证线程安全（Recorder 入队；UI 用 Qt 信号跨线程）。
     """
 
@@ -69,16 +70,16 @@ class MacKeyboardListener(threading.Thread):
             if (x, y) == (0, 0):
                 # 合成键盘事件不带 location：用最近鼠标事件的光标位置兜底
                 x, y = self._last_mouse
+            flags = int(Quartz.CGEventGetFlags(event))
             if evtype == _FLAGS_CHANGED:
-                flags = int(Quartz.CGEventGetFlags(event))
                 pressed = modifier_edge(int(keycode), flags, self._last_flags)
                 self._last_flags = flags
                 if pressed is not None:
-                    self._dispatch(vk_to_name(int(keycode)), pressed, x, y)
+                    self._dispatch(vk_to_name(int(keycode)), pressed, x, y, flags)
             elif evtype == _KEY_DOWN:
-                self._dispatch(vk_to_name(int(keycode)), True, x, y)
+                self._dispatch(vk_to_name(int(keycode)), True, x, y, flags)
             elif evtype == _KEY_UP:
-                self._dispatch(vk_to_name(int(keycode)), False, x, y)
+                self._dispatch(vk_to_name(int(keycode)), False, x, y, flags)
         except Exception:
             # 回调异常必须留痕：此前静默 pass，消费方签名不匹配时表现为
             # 「热键/按键捕获完全无效，日志毫无线索」。只记首次，避免刷屏。
@@ -87,9 +88,9 @@ class MacKeyboardListener(threading.Thread):
                 logger.exception("键盘 tap 回调异常（同类异常后续不再记录）")
         return event
 
-    def _dispatch(self, name, pressed, x, y):
+    def _dispatch(self, name, pressed, x, y, flags: int = 0):
         if name:
-            self._on_key(name, pressed, x, y)
+            self._on_key(name, pressed, x, y, flags)
 
     # ---- 线程 ----
     def run(self) -> None:

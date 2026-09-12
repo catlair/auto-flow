@@ -21,12 +21,18 @@ HOTKEY_NAMES = {"F9", "F10", "F11"}
 
 def tolerant_event(d: dict) -> Optional[MacroEvent]:
     """容忍缺字段/多字段的 MacroEvent 构造；非 dict（如损坏文件的字符串/摘要
-    {"count":N}）返回 None，由调用方跳过——绝不抛 'str' has no 'get'。"""
+    {"count":N}）返回 None，由调用方跳过——绝不抛 'str' has no 'get'。
+
+    v2 旧脚本没有 dragged/clicks/flags/wheel_unit，取默认值即可（等价于
+    "非拖拽的单击、按行滚轮"），因此 v2 → v3 不需要单独迁移步骤。
+    """
     if not isinstance(d, dict):
         return None
-    keys = {"ts_ms", "kind", "key", "button", "pressed", "x", "y", "wheel_dx", "wheel_dy"}
+    keys = {"ts_ms", "kind", "key", "button", "pressed", "x", "y", "wheel_dx", "wheel_dy",
+            "dragged", "clicks", "flags", "wheel_unit"}
     defaults = {"ts_ms": 0, "kind": "move", "key": None, "button": None, "pressed": None,
-                "x": 0, "y": 0, "wheel_dx": 0, "wheel_dy": 0}
+                "x": 0, "y": 0, "wheel_dx": 0, "wheel_dy": 0,
+                "dragged": False, "clicks": 1, "flags": 0, "wheel_unit": "line"}
     data = {k: d.get(k, v) for k, v in defaults.items() if k in keys}
     return MacroEvent(**data)
 

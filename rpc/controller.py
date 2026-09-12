@@ -299,7 +299,14 @@ class AppController:
         return {"running": self.running}
 
     # ---- record.*（Recorder 包装，100ms 批量推 record.event，§5 节流） ----
-    def record_start(self, window_bounds: Any = None) -> dict:
+    def record_start(self, window_bounds: Any = None,
+                     drop_in_window: bool = False) -> dict:
+        """开始录制。
+
+        `window_bounds` 只用于停止时定位"停止按钮那次点击"（尾部裁剪），
+        **不再**用于丢弃落于窗口内的事件——v2 的矩形过滤会在边界过期时
+        成片吞掉真实操作，是"操作被莫名其妙裁掉"的主因。
+        """
         from core.recorder import Recorder
         with self._lock:
             if self.recording:
@@ -307,7 +314,8 @@ class AppController:
             if self.running:
                 raise ControllerError(-32002, "busy_recording")
             self.recorder = Recorder(skip_keys=set(self._hotkey_map.keys()),
-                                     window_bounds=self._parse_bounds(window_bounds))
+                                     window_bounds=self._parse_bounds(window_bounds),
+                                     drop_in_window=bool(drop_in_window))
             self.recorder.start()
             self.recording = True
             self._rec_poller_rec = self.recorder
@@ -353,30 +361,47 @@ class AppController:
         if evs and self._record_subscribed:
             self._notify("record.event", {"events": [asdict(e) for e in evs]})
 
-    def record_stop(self, trim: bool = False) -> dict:
+    def record_stop(self, trim: bool = False, window_bounds: Any = None) -> dict:
+        """停止录制。
+
+        `trim=True`（按钮停止）：把"点停止按钮"这次交互从序列尾部裁掉，
+        否则回放会复现它、点到回放当时该位置上的任意东西。
+
+        `window_bounds` 由前端在**停止那一刻**下发（而不是录制开始时）——
+        录制期间用户可能移动过窗口，用开始时的旧边界会裁错位置。
+        """
+        from core.recorder import trim_stop_interaction
         with self._lock:
             if not self.recording or self.recorder is None:
                 raise ControllerError(-32003, "not_recording")
             rec = self.recorder
             self.recorder = None
             self.recording = False
+        if window_bounds is not None:
+            rec.set_window_bounds(self._parse_bounds(window_bounds))
         result = rec.stop()
-        # 尾部停留补时：最后一个事件是移动时，把录制结束前的停留时长补进其
-        # 时间戳——「移过去并停留十秒」的时序在回放中被完整保留。
+        n_trimmed = 0
+        if trim:
+            before = len(result.events)
+            result.events = trim_stop_interaction(result.events, rec._win_bounds)
+            n_trimmed = before - len(result.events)
         if result.events and result.events[-1].kind == "move":
             elapsed = rec.elapsed_ms()
             if elapsed > result.events[-1].ts_ms:
                 result.events[-1].ts_ms = elapsed
         self._last_record = result
-        # 丢帧定位计量一并上报：captured=系统投递数；count=captured-filtered-limit 后入库数。
-        # count << captured 且 filtered 也小 → 系统层（CGEventTap）丢事件，需要另查。
+        # 丢帧定位计量一并上报：captured=系统投递数；count=captured-decimated-window-limit 后入库数。
+        # count << captured 且 decimated/window 也小 → 系统层（CGEventTap）丢事件，需要另查。
         stats = {
             "count": len(result.events),
             "origin": [result.origin_x, result.origin_y],
             "stopped_by_limit": result.stopped_by_limit,
             "captured": result.n_captured,
             "filtered": result.n_filtered,
+            "decimated": result.n_decimated,
+            "window_dropped": result.n_window_dropped,
             "limit_dropped": result.n_limit_dropped,
+            "trimmed": n_trimmed,
             "mouse_died": result.mouse_listener_died,
             "kb_died": result.kb_listener_died,
         }
@@ -398,6 +423,23 @@ class AppController:
         self._broadcast_workflow()
         return {**self.workflow_current(), "index": inserted, "node": self._public_node(node)}
 
+    def record_current(self) -> dict:
+        """返回最近一次录制的**权威**事件序列。
+
+        面板此前只靠 `record.event` 增量推送维护自己的缓冲（上限截断），
+        与写入节点的后端全量数据是两份来源，会出现"看到的和写入的不一致"。
+        改为面板在录制结束后拉一次本接口。
+        """
+        res = self._last_record
+        if res is None:
+            return {"count": 0, "events": [], "origin": [0, 0], "duration_ms": 0}
+        return {
+            "count": len(res.events),
+            "events": [asdict(e) for e in res.events],
+            "origin": [res.origin_x, res.origin_y],
+            "duration_ms": res.events[-1].ts_ms if res.events else 0,
+        }
+
     # ---- 热键 / 键盘捕获（P1-3，§3.2 + §9 说明） ----
     def _ensure_key_listener(self) -> None:
         """确保全局键盘监听线程存活（CGEventTap 失败则返回，线程随即结束）。"""
@@ -415,11 +457,14 @@ class AppController:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _on_key(self, name: str, pressed: bool, x: int = 0, y: int = 0) -> None:
+    def _on_key(self, name: str, pressed: bool, x: int = 0, y: int = 0,
+                flags: int = 0) -> None:
         """单一 listener 回调：按 _key_mode 在捕获 / 热键 / 取点间分发。
 
         热键去抖：CGEventTap 会收到系统 key-repeat 的连续 KeyDown，长按 F9
-        会被当成多次按下反复 toggle，故同名键 400ms 内只触发一次。"""
+        会被当成多次按下反复 toggle，故同名键 400ms 内只触发一次。
+        `flags` 是按键时刻的 CGEventFlags 快照，此处不参与判定，仅为与
+        MacKeyboardListener 的新签名对齐。"""
         if not name:
             return
         if self._probing:

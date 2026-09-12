@@ -205,8 +205,10 @@ def test_executor_node_exception_stops_gracefully(capsys):
 class FakeMouse:
     def __init__(self):
         self.pos = (0.0, 0.0)
-        self.releases = []
+        self.moves = []      # (x, y, 保持中的按键) —— button 非空表示拖拽事件
         self.presses = []
+        self.releases = []
+        self.scrolls = []    # (dx, dy, unit)
 
     @property
     def position(self):
@@ -214,16 +216,20 @@ class FakeMouse:
 
     @position.setter
     def position(self, v):
+        self.move_to(v)
+
+    def move_to(self, v, button=None):
         self.pos = (float(v[0]), float(v[1]))
+        self.moves.append((self.pos[0], self.pos[1], button))
 
-    def press(self, b):
-        self.presses.append(("down", str(b)))
+    def press(self, b, clicks=1):
+        self.presses.append(("down", str(b), clicks))
 
-    def release(self, b):
-        self.releases.append(("up", str(b)))
+    def release(self, b, clicks=1):
+        self.releases.append(("up", str(b), clicks))
 
-    def scroll(self, dx, dy):
-        pass
+    def scroll(self, dx, dy, unit="line"):
+        self.scrolls.append((dx, dy, unit))
 
 
 class FakeKb:
@@ -483,14 +489,15 @@ def test_modifier_edge():
 
 
 def test_maclistener_callback_logic(monkeypatch):
-    """不创建真实 tap，验证 _dispatch 对无名键码的过滤（含坐标透传）。"""
+    """不创建真实 tap，验证 _dispatch 对无名键码的过滤（含坐标与 flags 透传）。"""
     from core import maclistener
     got = []
-    lis = maclistener.MacKeyboardListener(lambda n, p, x=0, y=0: got.append((n, p, x, y)))
-    lis._dispatch("a", True, 10, 20)
+    lis = maclistener.MacKeyboardListener(
+        lambda n, p, x=0, y=0, fl=0: got.append((n, p, x, y, fl)))
+    lis._dispatch("a", True, 10, 20, 0x100000)
     lis._dispatch(None, True, 10, 20)   # 未知键码应被丢弃
     lis._dispatch("Return", False, 30, 40)
-    assert got == [("a", True, 10, 20), ("Return", False, 30, 40)]
+    assert got == [("a", True, 10, 20, 0x100000), ("Return", False, 30, 40, 0)]
 
 
 
@@ -564,23 +571,201 @@ def test_broadcast_summary_never_mutates_tree(tmp_path):
     ctrl.shutdown()
 
 
-def test_recorder_drops_events_inside_window_bounds():
-    """录制时落在 Auto Flow 自身窗口内的鼠标事件不录制（确定性替代猜测式裁剪）：
-    用户点「停止录制」按钮、移向按钮的移动天然不入事件序列。"""
+def test_recorder_window_filter_is_opt_in():
+    """窗口过滤默认关闭。
+
+    v2 默认按窗口矩形丢弃事件，且边界只在录制开始时下发一次、前端监听从不
+    注销——边界一旦过期就成片吞掉真实操作，正是"操作被莫名其妙裁掉"的主因。
+    v3 改为显式开关，默认不丢任何事件。
+    """
     from core.recorder import Recorder
     rec = Recorder(window_bounds=(90, 50, 1100, 720))
-    rec.start()
-    rec._accept(MacroEvent(ts_ms=0, kind="move", x=500, y=400))      # 窗口内
-    rec._accept(MacroEvent(ts_ms=1, kind="mouse", x=1000, y=400, button="left", pressed=True))   # 窗口内
-    rec._accept(MacroEvent(ts_ms=2, kind="move", x=1300, y=400))     # 窗口外
-    rec._accept(MacroEvent(ts_ms=3, kind="mouse", x=1300, y=400, button="left", pressed=True))   # 窗口外
+    rec._accept(MacroEvent(ts_ms=0, kind="move", x=500, y=400))       # 窗口内
+    rec._accept(MacroEvent(ts_ms=1, kind="mouse", x=1000, y=400, button="left", pressed=True))
+    rec._accept(MacroEvent(ts_ms=2, kind="wheel", x=200, y=200, wheel_dy=1))
+    r = rec.result()
+    assert r.n_window_dropped == 0
+    assert len(r.events) == 3
+
+
+def test_recorder_drops_events_inside_window_bounds_when_enabled():
+    """显式开启窗口过滤时才丢弃落在窗口内的鼠标事件，键盘不受影响。"""
+    from core.recorder import Recorder
+    rec = Recorder(window_bounds=(90, 50, 1100, 720), drop_in_window=True)
+    rec._accept(MacroEvent(ts_ms=0, kind="move", x=500, y=400))      # 窗口内 → 丢
+    rec._accept(MacroEvent(ts_ms=1, kind="mouse", x=1000, y=400, button="left", pressed=True))  # 内 → 丢
+    rec._accept(MacroEvent(ts_ms=2, kind="move", x=1300, y=400))     # 外 → 留
+    rec._accept(MacroEvent(ts_ms=3, kind="mouse", x=1300, y=400, button="left", pressed=True))
     rec._accept(MacroEvent(ts_ms=4, kind="key", key="a", pressed=True))  # 键盘不受边界影响
-    rec._accept(MacroEvent(ts_ms=5, kind="wheel", x=200, y=200, wheel_dy=1))  # 窗口内滚轮
-    rec.stop()
+    rec._accept(MacroEvent(ts_ms=5, kind="wheel", x=200, y=200, wheel_dy=1))  # 内 → 丢
     r = rec.result()
     kinds = [(e.kind, e.x, e.y) for e in r.events]
     assert ("move", 1300, 400) in kinds and ("mouse", 1300, 400) in kinds
-    mouse_moves = [(x, y) for k, x, y in kinds if k in ("move", "mouse", "wheel")]
-    assert all(not (90 <= x < 1190 and 50 <= y < 770) for x, y in mouse_moves)
+    assert not any(k == "wheel" for k, _, _ in kinds)
     assert any(e.kind == "key" for e in r.events)
+    assert r.n_window_dropped == 3
+
+
+def test_recorder_keeps_drag_trajectory_without_decimation():
+    """拖拽期间永不降采样，且每条移动带 dragged 标记。
+
+    回归：v2 把 pynput 回调的第三个参数（实为 injected）误当成 dragged 并丢弃，
+    拖拽信息从未入库，回放只能发 MouseMoved → 所有拖拽操作失效。
+    """
+    from core.recorder import Recorder
+    rec = Recorder()
+    # 每步只有 1px（低于 MOVE_MIN_PX=2），若是普通移动会被降采样丢弃
+    for i in range(1, 6):
+        rec._accept(MacroEvent(ts_ms=i, kind="move", x=100 + i, y=200, dragged=True))
+    r = rec.result()
+    assert len(r.events) == 5
+    assert all(e.dragged for e in r.events)
+    assert r.n_decimated == 0
+
+
+def test_recorder_decimates_redundant_moves_but_not_information():
+    """非拖拽的冗余微移动被降采样，但超过时间间隔阈值时必留一条。"""
+    from core.recorder import Recorder
+    rec = Recorder()
+    rec._accept(MacroEvent(ts_ms=0, kind="move", x=100, y=100))
+    rec._accept(MacroEvent(ts_ms=1, kind="move", x=101, y=100))    # 1px 且 1ms → 降采样
+    rec._accept(MacroEvent(ts_ms=2, kind="move", x=100, y=101))    # 仍在原地附近 → 降采样
+    rec._accept(MacroEvent(ts_ms=100, kind="move", x=100, y=101))  # 距上次保留 100ms → 必留
+    r = rec.result()
+    assert len(r.events) == 2
+    assert r.n_decimated == 2
+
+
+def test_recorder_flushes_last_decimated_position():
+    """停止时补回最后一个被降采样的位置——否则"移过去就停手"的终点会停在中段。"""
+    from core.recorder import Recorder
+    rec = Recorder()
+    rec._accept(MacroEvent(ts_ms=0, kind="move", x=100, y=100))
+    rec._accept(MacroEvent(ts_ms=1, kind="move", x=101, y=100))    # 被降采样
+    rec._flush_pending_move()
+    r = rec.result()
+    assert [(e.x, e.y) for e in r.events] == [(100, 100), (101, 100)]
+
+
+def test_recorder_merges_double_click_sequence():
+    """相邻快速按下归并为 clicks=2/3，回放才能写入 ClickState。"""
+    from core.recorder import Recorder
+    rec = Recorder()
+    for ts in (0, 30, 90, 900):
+        rec._accept(MacroEvent(ts_ms=ts, kind="mouse", x=10, y=10, button="left",
+                               pressed=True, clicks=rec._next_clicks("left", 10, 10, ts)))
+    r = rec.result()
+    assert [e.clicks for e in r.events] == [1, 2, 3, 1]
+
+
+def test_recorder_next_clicks_resets_when_position_moves():
+    """位置明显变化时重新计数，避免把两次独立点击并成双击。"""
+    from core.recorder import Recorder
+    rec = Recorder()
+    assert rec._next_clicks("left", 10, 10, 0) == 1
+    assert rec._next_clicks("left", 10, 10, 50) == 2
+    assert rec._next_clicks("left", 80, 80, 100) == 1
+
+
+def test_trim_stop_interaction_uses_window_bounds():
+    """按钮停止时裁掉"点停止按钮"那次点击及其前移向按钮的移动。"""
+    from core.recorder import trim_stop_interaction
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    events = [
+        ev(ts_ms=0, kind="move", x=300, y=300),
+        ev(ts_ms=10, kind="mouse", x=300, y=300, button="left", pressed=True),
+        ev(ts_ms=20, kind="mouse", x=300, y=300, button="left", pressed=False),
+        ev(ts_ms=30, kind="move", x=900, y=400),          # 移向窗口
+        ev(ts_ms=40, kind="mouse", x=1000, y=400, button="left", pressed=True),   # 点停止
+        ev(ts_ms=45, kind="mouse", x=1000, y=400, button="left", pressed=False),
+    ]
+    out = trim_stop_interaction(events, (900, 300, 400, 300))
+    assert [e.ts_ms for e in out] == [0, 10, 20]          # 尾部交互整体裁掉
+
+
+def test_trim_never_destroys_real_work_without_window_hit():
+    """识别不到停止点击时一律不裁——宁可多点一下，也不删掉真实拖拽。"""
+    from core.recorder import trim_stop_interaction
+    ev = lambda **kw: MacroEvent(**kw)  # noqa: E731
+    events = [
+        ev(ts_ms=0, kind="mouse", x=100, y=100, button="left", pressed=True),
+        ev(ts_ms=10, kind="move", x=120, y=120, dragged=True),
+        ev(ts_ms=20, kind="mouse", x=120, y=120, button="left", pressed=False),
+        ev(ts_ms=30, kind="move", x=140, y=140, dragged=True),
+    ]
+    assert trim_stop_interaction(events, (900, 300, 400, 300)) == events
+    assert trim_stop_interaction(events, None) == events
+
+
+# ---------- 回放 v3 ----------
+def test_player_sends_dragged_event_type(monkeypatch):
+    """按键保持期间的移动必须以 Dragged 类型投递。
+
+    回归：v2 的 position setter 永远发 MouseMoved，拖拽在应用侧等同于
+    "光标在动但没按住"，所有拖放操作无效。
+    """
+    p, fm, fk = make_player(monkeypatch)
+    events = [
+        MacroEvent(ts_ms=0, kind="move", x=100, y=100),
+        MacroEvent(ts_ms=10, kind="mouse", x=100, y=100, button="left", pressed=True),
+        MacroEvent(ts_ms=30, kind="move", x=140, y=100, dragged=True),
+        MacroEvent(ts_ms=50, kind="mouse", x=140, y=100, button="left", pressed=False),
+    ]
+    p.play(events, PlayOptions())
+    dragged = [m for m in fm.moves if m[2] == "left"]
+    assert dragged, "拖拽期间应投递带按键的移动事件"
+    assert fm.presses == [("down", "left", 1)]
+    assert fm.releases == [("up", "left", 1)]
+
+
+def test_player_passes_click_sequence_state(monkeypatch):
+    """双击/三击的序列号必须透传到输出层（否则被应用识别成多次单击）。"""
+    p, fm, fk = make_player(monkeypatch)
+    events = [
+        MacroEvent(ts_ms=0, kind="mouse", x=10, y=10, button="left", pressed=True, clicks=2),
+        MacroEvent(ts_ms=40, kind="mouse", x=10, y=10, button="left", pressed=False, clicks=2),
+    ]
+    p.play(events, PlayOptions())
+    assert fm.presses == [("down", "left", 2)]
+    assert fm.releases == [("up", "left", 2)]
+
+
+def test_player_wheel_uses_recorded_unit(monkeypatch):
+    """滚轮按录制单位投递——v2 一律按 pixel 投递"行"增量，量级差一个数量级。"""
+    p, fm, fk = make_player(monkeypatch)
+    events = [
+        MacroEvent(ts_ms=0, kind="wheel", x=10, y=10, wheel_dy=3, wheel_dx=-1,
+                   wheel_unit="line"),
+        MacroEvent(ts_ms=10, kind="wheel", x=10, y=10, wheel_dy=20, wheel_unit="pixel"),
+    ]
+    p.play(events, PlayOptions())
+    assert fm.scrolls == [(-1, 3, "line"), (0, 20, "pixel")]
+
+
+def test_player_catches_up_by_skipping_instead_of_bursting(monkeypatch):
+    """落后时只跳帧投递目标点，绝不把剩余事件瞬时连发（时间线塌缩）。
+
+    构造一段"计划时刻早已过去"的序列：v2 会因为预算转负而把全部事件挤在
+    同一瞬间发出；v3 每个事件仍有各自的位置投递，且 skipped 计数可观测。
+    """
+    p, fm, fk = make_player(monkeypatch)
+    events = [MacroEvent(ts_ms=0, kind="move", x=0, y=0)]
+    events += [MacroEvent(ts_ms=i + 1, kind="move", x=(i + 1) * 30, y=0) for i in range(60)]
+    stats = p.play(events, PlayOptions())
+    assert stats["total"] == 61
+    assert stats["skipped"] > 0                 # 确实发生了跳帧
+    assert fm.moves[-1][0] == 60 * 30           # 落点仍然精确
+    assert len(fm.moves) >= 61                  # 没有"整段塌缩成一次投递"
+
+
+def test_player_slow_move_is_sampled_over_time(monkeypatch):
+    """慢速移动按时间采样铺点，不因固定像素步长而跳变。"""
+    p, fm, fk = make_player(monkeypatch)
+    events = [MacroEvent(ts_ms=0, kind="move", x=0, y=0),
+              MacroEvent(ts_ms=200, kind="move", x=12, y=0)]
+    p.play(events, PlayOptions())
+    assert fm.moves[-1][0] == 12
+    # 12px 位移若按"10px 一步"只会有一点；按时间采样应铺出多个采样点
+    assert len(fm.moves) > 3
+
 
