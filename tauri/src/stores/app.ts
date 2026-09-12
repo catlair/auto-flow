@@ -347,7 +347,12 @@ export const useAppStore = defineStore("app", {
       await rpc.request("template.snip");
     },
     async probeInput() {
-      return (await rpc.request("input.probe")) as { alive: boolean };
+      // alive: tap 收得到合成事件；text_alive: 收得到 Unicode 文本提交。
+      // 两者要分开看——见 RecordPanel 的「文本链路自检」。
+      return (await rpc.request("input.probe")) as {
+        alive: boolean;
+        text_alive?: boolean;
+      };
     },
 
     // ---- 节点 CRUD（均调后端，结构变更经 workflow.changed 回写） ----

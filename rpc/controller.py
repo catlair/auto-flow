@@ -33,6 +33,11 @@ _HOTKEY_KEYS = ["F9", "F10", "F11"]
 _HOTKEY_ACTIONS = {"record", "run", "pick"}
 _VALID_SCHEDULE_MODES = {"每天时刻", "固定间隔"}
 
+# 文本链路自检的探针载荷：零宽空格。
+# 选它是因为**非 ASCII**——会被 is_text_commit 判为文本提交，正是要验证的分支；
+# 同时它在任何应用里都不显示任何内容，投递到当前焦点窗口没有可见副作用。
+_PROBE_TEXT = "\u200b"
+
 
 class ControllerError(Exception):
     """业务错误，携带 JSON-RPC 错误码。"""
@@ -77,6 +82,7 @@ class AppController:
         self._last_hotkey_at = 0.0
         self._snipping = False         # screencapture -i 框选中
         self._probing = False          # 输入监控自检进行中
+        self._probe_text_hit = False   # 自检的文本段命中标记（见 input_probe）
         self._probe_hit = False
         self._picking_once = False     # 「取点」armed：下一个按键即基点
 
@@ -580,8 +586,19 @@ class AppController:
         """确保全局键盘监听线程存活（CGEventTap 失败则返回，线程随即结束）。"""
         if self._key_listener is None or not self._key_listener.is_alive():
             from core.maclistener import MacKeyboardListener
-            self._key_listener = MacKeyboardListener(self._on_key)
+            self._key_listener = MacKeyboardListener(self._on_key, self._on_text)
             self._key_listener.start()
+
+    def _on_text(self, text: str, x: int = 0, y: int = 0) -> None:
+        """单一 listener 的文本回调：文本链路自检的命中标记。
+
+        这个 listener 服务于热键/取点，文本提交本身对它没有语义——只有自检期间
+        才关心（见 `input_probe`）。必须校验探针载荷，否则自检过程中用户自己敲的
+        中文也会把标记点亮，让"链路通"的结论变成假阳性。
+        """
+        with self._lock:
+            if self._probing and _PROBE_TEXT in (text or ""):
+                self._probe_text_hit = True
 
     def _stop_key_listener(self) -> None:
         lis = self._key_listener
@@ -718,36 +735,55 @@ class AppController:
         return {"started": True}
 
     def input_probe(self) -> dict:
-        """输入监控「实际可收性」自检。
+        """输入监控「实际可收性」自检：两段回环，缺一不可。
 
         CGEventTapCreate 对未授权进程也可能成功（事件静默不投递），预检 API 不可靠，
         权限快照全是 true 但热键/录制无效正是这种状态。做法：确保 tap 后由本进程
         post 一对 F18 合成键（几乎无应用响应、无副作用），300ms 内 tap 收到即链路通。
+
+        **文本段**（零宽空格）：验证「投递出去的 Unicode 文本能否被 tap 读回来」。
+        中文/emoji 录制完全依赖这条链路，而本地造一个事件读得出来**不代表** tap 收到的
+        也读得出来——必须真投递一次才算数。两段结论要分开看：
+
+        - `alive=false`：tap 根本收不到合成事件，先修输入监控权限。
+        - `alive=true, text_alive=false`：tap 活着但收不到文本提交，本实现覆盖不了。
+        - 两者皆 true：**本实现的链路完好**。此时若录中文仍只见拼音字母，就说明
+          该输入法走的是 `insertText:` 通道（不经事件层），需要另做方案。
+
+        录制/运行期间拒绝：自检会投递真实输入，不能污染正在录的事件序列，
+        也不能把字符打进正在回放的工作流。
         """
+        if self.recording or self.running:
+            raise ControllerError(-32002, "busy")
         self._ensure_key_listener()
         with self._lock:
             self._probe_hit = False
+            self._probe_text_hit = False
             self._probing = True
         try:
             from pynput.keyboard import Controller as Kb, Key
             kb = Kb()
             kb.press(Key.f18)
             kb.release(Key.f18)
+            from core.mactype import type_text
+            type_text(_PROBE_TEXT)
         except Exception as e:  # noqa: BLE001
             with self._lock:
                 self._probing = False
-            return {"alive": False, "error": str(e)}
-        deadline = time.monotonic() + 0.5
+            return {"alive": False, "text_alive": False, "error": str(e)}
+        deadline = time.monotonic() + 0.6
         while time.monotonic() < deadline:
             with self._lock:
-                if self._probe_hit:
+                if self._probe_hit and self._probe_text_hit:
                     break
             time.sleep(0.03)
         with self._lock:
             alive = self._probe_hit
+            text_alive = self._probe_text_hit
             self._probing = False
-        self._notify("permission.probe", {"inputAlive": bool(alive)})
-        return {"alive": bool(alive)}
+        self._notify("permission.probe",
+                     {"inputAlive": bool(alive), "textAlive": bool(text_alive)})
+        return {"alive": bool(alive), "text_alive": bool(text_alive)}
 
     def _probe_maybe_hit(self, name: str) -> None:
         """_on_key 早期调用：F18 自检键命中标记（仅在探测进行中生效）。"""

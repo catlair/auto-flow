@@ -114,6 +114,27 @@ async function onApplyText() {
   await edit("record.setText", { index: selected.value, text: textDraft.value });
 }
 
+// ---- 文本链路自检 ----
+// 输入法提交中文有两条通道：① 事件层（keycode=0 带 Unicode，本实现覆盖）；
+// ② insertText:（IME 在客户端内部直接插入文本，**不经事件层**，被动 tap 看不到）。
+// 自检**只能证明①的链路是好的**：两段都通却依然录不到中文时，才轮到怀疑②。
+// 反过来，若 text_alive 为 false，则中文录制一定是坏的（连我们自己投递的都收不到）。
+const textProbe = ref<"" | "ok" | "noTap" | "noText">("");
+let probing = false;
+async function onProbeText() {
+  if (probing) return;
+  probing = true;
+  textProbe.value = "";
+  try {
+    const r = await store.probeInput();
+    textProbe.value = !r.alive ? "noTap" : r.text_alive ? "ok" : "noText";
+  } catch {
+    textProbe.value = "noTap";
+  } finally {
+    probing = false;
+  }
+}
+
 /** Delete / Backspace 删除选中行（事件流聚焦时）。 */
 function onStreamKey(e: KeyboardEvent) {
   if (e.key === "Delete" || e.key === "Backspace") {
@@ -291,6 +312,22 @@ async function onToNode() {
         · <span style="color:#e34d59">窗口过滤丢弃 {{ store.lastRecordInfo.window_dropped }} 条</span></template>
       <template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
         · <span style="color:#e34d59">监听中断</span></template>
+    </div>
+    <div class="af-textprobe">
+      <button class="af-chip" :disabled="store.recording" @click="onProbeText">
+        文本链路自检
+      </button>
+      <span v-if="textProbe === 'ok'" class="af-probe ok">✓ 文本捕获链路可用</span>
+      <span v-else-if="textProbe === 'noText'" class="af-probe bad">
+        ✗ 收不到 Unicode 文本提交：中文/emoji 录制不可用
+      </span>
+      <span v-else-if="textProbe === 'noTap'" class="af-probe bad">
+        ✗ 收不到合成事件：请检查输入监控权限
+      </span>
+    </div>
+    <div v-if="textProbe === 'ok'" class="af-probe-hint">
+      链路正常。若录中文后「文本」过滤下仍为空、只有一串字母按键，
+      说明该输入法不经过事件层——中文请改用「键盘输入」节点填写。
     </div>
     <div v-if="store.recordBuffer.length" class="af-filters">
       <button
@@ -471,6 +508,28 @@ async function onToNode() {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+.af-textprobe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.af-probe {
+  font-size: 11px;
+}
+.af-probe.ok {
+  color: #059669;
+}
+.af-probe.bad {
+  color: #e34d59;
+}
+.af-probe-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #888;
 }
 .af-chip {
   border: 1px solid #d5d8dd;

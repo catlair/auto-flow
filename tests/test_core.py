@@ -1057,6 +1057,58 @@ def test_record_set_text_edits_only_text_events():
     ctrl.shutdown()
 
 
+def test_input_probe_refuses_while_busy():
+    """自检会投递真实输入：录制中/运行中必须拒绝。
+
+    录制中投递会污染正在录的事件序列（凭空多一条文本事件），运行中投递会把字符
+    打进正在回放的流程里。
+    """
+    from rpc.controller import AppController
+    ctrl = AppController()
+    for attr in ("recording", "running"):
+        setattr(ctrl, attr, True)
+        try:
+            ctrl.input_probe()
+            raise AssertionError(f"{attr} 期间应拒绝自检")
+        except Exception as e:  # noqa: BLE001
+            assert "busy" in str(e)
+        setattr(ctrl, attr, False)
+    ctrl.shutdown()
+
+
+def test_probe_text_callback_requires_marker():
+    """自检的文本段必须校验探针载荷。
+
+    否则自检那零点几秒里用户自己敲的中文也会把标记点亮，"链路通"变成假阳性——
+    而这正是最需要判断准的一次结论。
+    """
+    from rpc.controller import AppController, _PROBE_TEXT
+    ctrl = AppController()
+    ctrl._probing = True
+    ctrl._on_text("你好", 0, 0)                 # 用户自己打的 → 不算命中
+    assert ctrl._probe_text_hit is False
+    ctrl._on_text(f"x{_PROBE_TEXT}y", 0, 0)     # 探针载荷 → 命中
+    assert ctrl._probe_text_hit is True
+
+    ctrl._probing = False
+    ctrl._probe_text_hit = False
+    ctrl._on_text(_PROBE_TEXT, 0, 0)            # 非自检期间一律忽略
+    assert ctrl._probe_text_hit is False
+    ctrl.shutdown()
+
+
+def test_input_probe_keeps_key_listener_wired_to_text():
+    """自检用的热键 listener 必须接上文本回调，否则文本段永远不命中。"""
+    from rpc.controller import AppController
+    from core.maclistener import MacKeyboardListener
+    ctrl = AppController()
+    ctrl._ensure_key_listener()
+    assert isinstance(ctrl._key_listener, MacKeyboardListener)
+    assert ctrl._key_listener._on_text == ctrl._on_text
+    ctrl._key_listener.stop()
+    ctrl.shutdown()
+
+
 def test_record_to_node_keeps_text_events():
     """文本事件必须原样写进节点（含 text 字段），否则回放时中文整段消失。"""
     from rpc.controller import AppController

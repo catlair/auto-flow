@@ -37,7 +37,7 @@
 | run.start / run.stop | base_x/base_y | {running}；stop 已 join 运行线程 |
 | record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/监听器存活） |
 | template.snip | — | {started}，完成走通知 |
-| input.probe | — | {alive}（F18 回环） |
+| input.probe | — | {alive, text_alive}（F18 + 零宽空格两段回环） |
 | hotkey.set / clear | actions | 绑定快照 |
 | key.capture / key.capture.stop | — | {capturing} |
 | base.pick | — | {armed}，结果走通知 |
