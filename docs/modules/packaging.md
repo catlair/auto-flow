@@ -45,6 +45,9 @@
 4. **旧版进废纸篓**：sync_app 用 mv 到 ~/.Trash 而非 rm -rf，防路径写错不可恢复。
 5. **⚠️ 修完必须部署**：代码修复不重跑 build+sync 不生效——曾致 /Applications
    旧包带病运行 6 天（用户报的「运行中按钮不变化、F10 不能停止」即旧包问题）。
+6. **pynput Controller 在 frozen sidecar 里静默失效**：press/release 不抛异常但
+   事件不出现——回放引擎的鼠标输出必须用 Quartz 直发（kCGSessionEventTap）。
+   键盘 Controller 同样有静默丢失风险（中文已改 CGEvent Unicode 通道）。
 
 ## 已知问题
 
