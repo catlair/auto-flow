@@ -59,6 +59,21 @@ else
   codesign --force --deep --sign - "$SIDECAR"
 fi
 
+# 暂存进 Tauri 资源目录。tauri.conf.json 的 bundle.resources 是
+# ["autoflow-sidecar/**/*"]（相对 src-tauri/），只跑 PyInstaller 而漏掉这一步的话，
+# Tauri 打包进去的仍是**上一次**的 sidecar——表现为"改了 Python 代码却毫无变化"，
+# 排查成本极高（曾因此让旧构建跑了好几天）。故此处一并完成。
+# 旧目录同样走同卷 rename，避免触发批量删除确认。
+STAGE="tauri/src-tauri/autoflow-sidecar"
+if [ -d "$STAGE" ]; then
+  mv "$STAGE" "$STAGE.old.$(date +%Y%m%d-%H%M%S)"
+fi
+cp -R "dist/autoflow-sidecar" "$STAGE"
+if security find-identity -v -p codesigning | grep -q "MacDev"; then
+  codesign --force --deep --sign "MacDev" "$STAGE/autoflow-sidecar"
+fi
+echo "已暂存到 Tauri 资源目录: $STAGE"
+
 echo "=== 体积基线 ==="
 du -sh dist/autoflow-sidecar
 echo "可执行: $SIDECAR"
