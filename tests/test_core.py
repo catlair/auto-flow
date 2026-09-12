@@ -15,6 +15,7 @@ from core.player import PlayOptions, Player
 from core import keymap
 import tasks.builtin  # noqa: F401
 from tasks.base import all_definitions, get_task
+import tasks.base as tb
 
 
 # ---------- events ----------
@@ -329,6 +330,98 @@ def test_all_nodes_have_definitions():
 def test_node_defaults_applied():
     task = get_task("delay")
     assert task.defaults()["ms"] == 500
+
+
+# §9.4：菜单顺序 = 鼠标 → 键盘 → 延时 → 录制回放 → 图像 → OCR → YOLO → 条件 → 注释
+BUILTIN_MENU_ORDER = [
+    "mouse", "keyboard", "delay", "record_replay",
+    "image_click", "ocr_click", "yolo_click", "condition", "note",
+]
+
+
+def test_node_menu_order_is_explicit():
+    """内置节点的菜单顺序 = §9.4 规定顺序（产品需求的回归护栏）。
+
+    注意：**这条用例无法区分「按 order 排」与「按注册顺序排」**——给 9 个类都
+    补上 @register 之后，源码里的定义顺序恰好就等于期望顺序，两种机制结果相同，
+    删掉排序它照样通过（实测假绿）。真正验证「顺序由 order 决定」的是下面
+    test_order_overrides_registration_order。
+    """
+    defs = all_definitions()
+    orders = [d["order"] for d in defs]
+    assert orders == sorted(orders), "all_definitions() 必须按 order 升序返回"
+    assert all(isinstance(o, int) for o in orders)
+
+    n = len(BUILTIN_MENU_ORDER)
+    assert [d["type"] for d in defs[:n]] == BUILTIN_MENU_ORDER
+    # order 撞车会让菜单顺序退化成注册顺序，必须唯一
+    builtin_orders = orders[:n]
+    assert len(set(builtin_orders)) == n, f"order 重复：{builtin_orders}"
+
+
+def test_order_overrides_registration_order():
+    """注册顺序与 order 相反时按 order 排——这条才真正锁住排序机制。
+
+    两个探针节点的 order 与注册先后**故意相反**：只有 all_definitions() 真的
+    按 order 排序，结果才会是 early 在前。去掉排序即失败（已反向验证）。
+    """
+
+    class _Late(tb.BaseTask):
+        type = "_test_order_late"
+        name = "late"
+        order = 200
+
+    class _Early(tb.BaseTask):
+        type = "_test_order_early"
+        name = "early"
+        order = 190
+
+    tb.register(_Late)   # 先注册 order 大的
+    tb.register(_Early)  # 后注册 order 小的
+    try:
+        types = [d["type"] for d in all_definitions()]
+        assert types.index("_test_order_early") < types.index("_test_order_late")
+    finally:
+        tb._REGISTRY.pop("_test_order_late", None)
+        tb._REGISTRY.pop("_test_order_early", None)
+
+
+def test_every_builtin_declares_its_own_order():
+    """内置节点必须显式声明 order；默认 100 是留给第三方/测试节点的兜底。"""
+    for t in BUILTIN_MENU_ORDER:
+        task = get_task(t)
+        assert task is not None, f"节点未注册：{t}"
+        assert task.order < 100, f"{t} 未声明 order，会落到菜单末尾"
+
+
+def test_register_accepts_class_and_instance():
+    """`@register` 装饰器拿到的永远是**类**，注册表必须只存实例。
+
+    历史坑：装饰器把类对象直接塞进 _REGISTRY，靠 builtin.py 末尾 9 行
+    `register(实例)` 覆盖回实例——所以那 9 行删掉后 all_definitions() 立刻炸
+    `TypeError: definition() missing 1 required positional argument: 'self'`。
+    """
+    class _ByClass(tb.BaseTask):
+        type = "_test_reg_by_class"
+        name = "by class"
+        order = 100
+
+    returned = tb.register(_ByClass)
+    assert returned is _ByClass, "装饰器必须返回类本身，否则类名会被换成实例"
+    assert isinstance(tb.get_task("_test_reg_by_class"), _ByClass)
+
+    class _ByInstance(tb.BaseTask):
+        type = "_test_reg_by_instance"
+        name = "by instance"
+
+    inst = _ByInstance()
+    assert tb.register(inst) is inst
+    assert tb.get_task("_test_reg_by_instance") is inst
+    try:
+        assert all(not isinstance(o, type) for o in tb._REGISTRY.values())
+    finally:
+        tb._REGISTRY.pop("_test_reg_by_class", None)
+        tb._REGISTRY.pop("_test_reg_by_instance", None)
 
 
 def test_runcontext_stopping_property():

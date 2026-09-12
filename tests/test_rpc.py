@@ -217,11 +217,16 @@ def test_workflow_new_and_node_crud() -> None:
         wf = up["result"]["workflow"]
         assert wf["name"] == "测试流" and wf["speed"] == 1.5 and wf["repeat"] == 3
 
-        # nodes.definitions 含 common_params 且按 §9.4 顺序排列
+        # nodes.definitions 含 common_params，且顺序严格等于 §9.4 的菜单顺序
         defs = _call(p, "nodes.definitions", req_id=9)
         assert defs["id"] == 9
-        order = [d["type"] for d in defs["result"]]
-        assert order.index("mouse") < order.index("keyboard") < order.index("delay") < order.index("record_replay") < order.index("image_click") < order.index("ocr_click") < order.index("yolo_click")
+        assert [d["type"] for d in defs["result"]] == [
+            "mouse", "keyboard", "delay", "record_replay",
+            "image_click", "ocr_click", "yolo_click", "condition", "note",
+        ]
+        # 顺序由 definition()['order'] 提供，前端不再自己排
+        assert [d["order"] for d in defs["result"]] == sorted(
+            d["order"] for d in defs["result"])
         assert all("common_params" in d and any(c["key"] == "run_when" for c in d["common_params"]) for d in defs["result"])
     finally:
         _rpc(p, "app.shutdown")

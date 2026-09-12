@@ -75,6 +75,8 @@ export interface ParamDef {
 export interface NodeDefinition {
   type: string;
   name: string;
+  /** 菜单排序键（§9.4）：后端已按此升序返回，前端照单渲染即可，不要再排。 */
+  order: number;
   params: ParamDef[];
   common_params: ParamDef[];
 }

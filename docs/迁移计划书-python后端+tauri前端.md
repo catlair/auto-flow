@@ -253,7 +253,7 @@ Tauri: tauri build → Auto Flow.app（embedded sidecar）
 
 前端把 `common_params` 渲染在参数表单末尾，语义与现状完全一致。
 
-### 9.4 节点菜单顺序要显式化
+### 9.4 节点菜单顺序要显式化 ✅ 已完成
 
 `tasks/builtin.py` 中 5 个节点用了 `@register` 类装饰器（注册的是**类对象**）、又在文件末尾
 `register(实例)` 覆盖，导致 `_REGISTRY` 插入顺序为「先被装饰的 5 个、后末尾的 4 个」，
@@ -261,6 +261,21 @@ Tauri: tauri build → Auto Flow.app（embedded sidecar）
 
 **做法**：`definition()` 增加 `order: int`，`all_definitions()` 按 order 排序；顺带清掉
 「装饰器 + 末尾重复注册」的双注册。菜单顺序定为：鼠标、键盘、延时、录制回放、图像、OCR、YOLO、条件、注释。
+
+**实施记录**（2026-09-12，commit `见 git log`）：
+
+- `BaseTask` 增 `order: int = 100`（默认值 = 菜单末尾兜底），`definition()` 输出 `order`，
+  `all_definitions()` 改为 `sorted(_REGISTRY.values(), key=lambda t: t.order)`（稳定排序，
+  同 order 保持注册顺序）。内置节点按 10 递增：mouse 10 … note 90。
+- 9 个内置类统一改成 `@register` 装饰器，末尾 9 行 `register(实例)` 已删。
+- **修正本节的判断**：末尾那 9 行不只是「重复注册」——`@register` 装饰器传给 `register()`
+  的是**类对象**，`_REGISTRY` 里因此存的是类；末尾的 `register(实例)` 实际承担了
+  「类 → 实例」的规范化。删掉它必须同时让 `register()` 自己处理类：
+  `inst = task() if isinstance(task, type) else task`，返回值仍透传原参数
+  （否则 `@register` 会把类名替换成实例）。漏掉这步的后果是
+  `all_definitions()` 抛 `TypeError: definition() missing 1 required positional argument: 'self'`。
+- `rpc/controller.py::_NODE_ORDER` 已删；`nodes_definitions()` 不再自己排序，直接沿用
+  `all_definitions()`。`tauri/src/rpc/types.ts` 的 `NodeDefinition` 补了 `order: number`。
 
 ### 9.5 错误码约定
 
@@ -429,7 +444,7 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 | `ui/params_panel.py::_snip_template` | 用了 `os` 与 `QTimer`，但文件顶部只 import 了 `QtCore.Signal` 和若干 `QtWidgets`，两个名字都未导入 | 参数面板「截取模板」按钮一点就 `NameError`，功能实际不可用 | ✅ 已修 |
 | `ui/scheduler.py` 第 79 行 | 用 `QTime(hh, mm)`，但 `QtCore` 只导入了 `Qt, QTimer, Signal, QObject` | 「定时运行」对话框点确定即 `NameError`，定时功能实际不可用 | ✅ 已修 |
 | `ui/scheduler.py::_apply` | 未选工作流时 `path_edit.text()` 是占位文本「（未选择）」，为 truthy 会绕过 `bool(workflow_path)` 校验 | 定时器被启用但路径非法，到点触发必然 `Workflow.load` 失败 | ✅ 已修 |
-| `tasks/builtin.py` | 5 个节点同时用 `@register` 类装饰器与末尾 `register(实例)`，注册两次 | 无害但冗余，且决定菜单顺序（见 §9.4） | ⬜ 待办 |
+| `tasks/builtin.py` | 5 个节点同时用 `@register` 类装饰器与末尾 `register(实例)`，注册两次 | 菜单顺序错误（`_REGISTRY` 插入顺序 ≠ §9.4）；**末尾那 9 行还承担了「类→实例」规范化**，不是纯冗余 | ✅ 已修（2026-09-12，见 §9.4） |
 | `core/vision.py::grab_screen_bgr` | 只取 `sct.monitors[1]`（主屏），scale 也只按主屏算 | 多屏环境下图像/OCR/YOLO 只在主屏生效，副屏坐标还会点歪 | ✅ 已修（多屏，2026-09-11，见 §15.5） |
 | `tasks/builtin.py::KeyboardInputTask` | `pynput` 的 `kb.type()` 只支持 ASCII | 「键盘输入-文本」填中文静默无效 | ✅ 已修（2026-09-12，见 §15.6） |
 | `ui/main_window.py` | `self.use_rel_check = None`、`EventsEditMixin` 空类 | 死代码，清理 |
@@ -451,8 +466,8 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 取消时不覆盖原值；定时对话框断言构造成功、`_apply` 在空路径时拒绝启用、正常路径下
 `nextFire` 计算正确。10 项断言全部通过；`pytest tests/` 24 例全通过（未回归）。
 
-**未做**：节点双注册与菜单顺序（§9.4）——属行为变更，放在 P0.5/P4 与迁移一并处理。
-**多屏支持已于 2026-09-11 完成（§15.5）；中文输入已于 2026-09-12 完成（§15.6）。**
+**未做**：无。原「节点双注册与菜单顺序（§9.4）」已于 2026-09-12 完成，详见 §9.4 实施记录。
+**多屏支持已于 2026-09-11 完成（§15.5）；中文输入与节点顺序已于 2026-09-12 完成（§15.6 / §9.4）。**
 
 ### 15.2 授权持久性 spike（P0-S）构建与状态（2026-09-01）
 
@@ -757,18 +772,19 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 | --- | --- | --- |
 | **P0-S 验证** | sidecar onedir + MacDev 签名 + 固定路径的**授权持久性 spike**；sidecar 体积基线测量；`app.info` hello world | 0.5 天（**阻塞后续**） |
 | P0 | rpc/server.py（NDJSON 帧、stdout 洁净性、错误码、通知队列）+ Tauri 脚手架 + sidecar 拉起与半包切分 | 0.5 天 |
-| ~~P0.5~~ | ~~修 §15 两个功能故障（截取模板、定时运行）+ 死代码清理 + 节点顺序~~ | ✅ 已完成（§15.1）；剩余「节点顺序 + 死代码清理」并入 P4 |
+| ~~P0.5~~ | ~~修 §15 两个功能故障（截取模板、定时运行）+ 死代码清理 + 节点顺序~~ | ✅ 已完成（§15.1）；「节点顺序」已于 2026-09-12 完成（§9.4），「死代码清理」随 `ui/` 删除一并消失 |
 | P1 | 后端服务化：§9 全部方法 + 工作流真源迁后端（§10）+ 三项权限（§11）+ 调度器 + 按键/模板捕获 | 1.5 天 |
 | P2 | 前端 7 组件 + RPC client + Pinia + 动态表单（含 `common_params`） | 1 天 |
 | ~~P3~~ | ~~打包：resources 方案 + deep 签名 + notary 流程 + sync_app.sh 更新 + 权限引导页~~ | ✅ 已完成（resources 方案 P1-5 已落地；MacDev 双签 + 强化运行时 + `sync_app.sh` + `docs/权限引导.md` 已提交 `8caf38b`）；notary 需用户提供 Apple 凭证后实跑 |
-| P4 | 打磨：拖拽排序、事件流虚拟滚动、中文输入改进、诊断面板、崩溃重连提示；节点顺序修正（§9.4）+ 死代码清理 | 0.5~1 天（可裁剪） |
+| P4 | 打磨：拖拽排序、事件流虚拟滚动、诊断面板、崩溃重连提示（~~中文输入改进~~ ✅ §15.6、~~节点顺序修正 §9.4~~ ✅、~~死代码清理~~ 随 `ui/` 删除消失） | 0.5~1 天（可裁剪） |
 
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
 
 > **2026-09-11 补充**：§15.1 划入 P4 的「多屏支持」已完成（见 §15.5）；**2026-09-12：
-> 「中文输入改进」已完成（见 §15.6）**。P4 余下项（拖拽排序、事件流虚拟滚动、诊断面板、
-> 崩溃重连提示、节点顺序 §9.4、死代码清理）未动。
+> 「中文输入改进」（§15.6）与「节点顺序修正」（§9.4）均已完成**。P4 余下项（拖拽排序、
+> 事件流虚拟滚动、诊断面板、崩溃重连提示）未动；「死代码清理」因目标都在待删的 `ui/` 里，
+> 随 `ui/` 删除自然消失，不再单列。
 
 **进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
 P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。P3 签名基础设施已落地并提交 `8caf38b`：`scripts/sign_tauri_app.sh` 对 `.app` 做 MacDev 双签 + 强化运行时（`--options runtime`）+ 安全时间戳，自底向上先签 sidecar 再签 `.app` 外壳（已实跑验证主二进制与 sidecar 均 `flags=0x10000(runtime)`、`Authority=MacDev`、整体 `valid on disk`）；`scripts/sync_app.sh` 改指 Tauri 产物、签名自检后 `cp -R` 到 `/Applications` 并去 quarantine、`open`；`docs/权限引导.md` 写就三项隐私权限作用与授予方式。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview，前端↔Rust↔sidecar 三方需双击 `.app` 或 `npm run tauri dev` 验证）；② 可选 notarization——提供 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` 后 `bash scripts/sign_tauri_app.sh` 实跑 `notarytool submit --wait` + `stapler staple`，即可免手动授权弹窗直接分发。

@@ -18,12 +18,9 @@ from typing import Any, Callable, Optional
 from core.events import Node, Workflow
 from core import executor as _executor_mod  # 仅类型/构造；真正运行在 P1-2
 
-# 节点菜单顺序（§9.4）：鼠标、键盘、延时、录制回放、图像、OCR、YOLO、条件、注释。
-# 类型字符串以 tasks/builtin.py 实际注册为准（image_click/ocr_click/yolo_click）。
-_NODE_ORDER = {
-    "mouse": 0, "keyboard": 1, "delay": 2, "record_replay": 3,
-    "image_click": 4, "ocr_click": 5, "yolo_click": 6, "condition": 7, "note": 8,
-}
+# 节点菜单顺序（§9.4）**不再在这里维护**：唯一真源是各节点的 order
+# （tasks/base.py::all_definitions）。此前这里有一份 _NODE_ORDER 映射，
+# 正好把 tasks/ 里错误的注册顺序掩盖住了。
 
 # 通用参数「执行条件」（§9.3），所有节点尾部都渲染，后端为真源。
 COMMON_PARAMS = [
@@ -240,17 +237,20 @@ class AppController:
         self._broadcast_workflow()
         return self.workflow_current()
 
-    # ---- nodes.definitions（含 common_params + 顺序，§9.3/§9.4） ----
+    # ---- nodes.definitions（含 common_params，顺序见 §9.3/§9.4） ----
     def nodes_definitions(self) -> list:
+        """节点定义列表，顺序直接沿用 `all_definitions()`（已按 order 排好）。
+
+        这里**不再**自己排一次：菜单顺序的唯一真源是各节点的 `order`（§9.4），
+        后端再维护一份映射只会和 tasks/ 悄悄不一致。
+        """
         import tasks.builtin  # 确保节点已注册
         from tasks.base import all_definitions
-        defs = all_definitions()
         out = []
-        for d in defs:
+        for d in all_definitions():
             d = dict(d)
             d["common_params"] = list(COMMON_PARAMS)
             out.append(d)
-        out.sort(key=lambda d: _NODE_ORDER.get(d.get("type", ""), 999))
         return out
 
     # ---- run.*（Executor 包装，§5/§9.5） ----

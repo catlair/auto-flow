@@ -1,4 +1,9 @@
-"""内置任务节点：鼠标、键盘、延时、录制回放、图像/文字/YOLO 查找、条件、注释。"""
+"""内置任务节点：鼠标、键盘、延时、录制回放、图像/文字/YOLO 查找、条件、注释。
+
+每个类用 `@register` 注册，并用 `order` 声明它在「添加节点」菜单里的位置
+（§9.4）。菜单顺序是：鼠标 → 键盘 → 延时 → 录制回放 → 图像 → OCR → YOLO
+→ 条件 → 注释。新增节点请给一个 order 值，否则会落到菜单末尾。
+"""
 from __future__ import annotations
 
 from pynput.mouse import Button
@@ -45,9 +50,11 @@ def detect_on_all_screens(engine, conf: float) -> list:
     return dets
 
 
+@register
 class MouseActionTask(BaseTask):
     type = "mouse"
     name = "鼠标操作"
+    order = 10
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,9 +86,11 @@ class MouseActionTask(BaseTask):
             m.click(btn, 1)
 
 
+@register
 class KeyboardInputTask(BaseTask):
     type = "keyboard"
     name = "键盘输入"
+    order = 20
 
     def __init__(self) -> None:
         super().__init__()
@@ -113,9 +122,11 @@ class KeyboardInputTask(BaseTask):
                 kb.release(k)
 
 
+@register
 class DelayTask(BaseTask):
     type = "delay"
     name = "延时等待"
+    order = 30
 
     def __init__(self) -> None:
         super().__init__()
@@ -129,6 +140,7 @@ class DelayTask(BaseTask):
 class RecordReplayTask(BaseTask):
     type = "record_replay"
     name = "录制回放"
+    order = 40
 
     def __init__(self) -> None:
         super().__init__()
@@ -160,6 +172,7 @@ class RecordReplayTask(BaseTask):
 class ImageClickTask(BaseTask):
     type = "image_click"
     name = "图像匹配点击"
+    order = 50
 
     def __init__(self) -> None:
         super().__init__()
@@ -205,6 +218,7 @@ class ImageClickTask(BaseTask):
 class OcrClickTask(BaseTask):
     type = "ocr_click"
     name = "找文字点击"
+    order = 60
 
     def __init__(self) -> None:
         super().__init__()
@@ -247,6 +261,7 @@ class OcrClickTask(BaseTask):
 class YoloClickTask(BaseTask):
     type = "yolo_click"
     name = "YOLO 找目标点击"
+    order = 70
 
     def __init__(self) -> None:
         super().__init__()
@@ -302,6 +317,7 @@ class ConditionTask(BaseTask):
     """检测条件并把结果写入执行状态，供后续节点的「执行条件」使用。"""
     type = "condition"
     name = "条件判断"
+    order = 80
 
     def __init__(self) -> None:
         super().__init__()
@@ -355,9 +371,11 @@ class ConditionTask(BaseTask):
             ctx.player.wait(0.3)
 
 
+@register
 class NoteTask(BaseTask):
     type = "note"
     name = "注释"
+    order = 90
 
     def __init__(self) -> None:
         super().__init__()
@@ -367,12 +385,7 @@ class NoteTask(BaseTask):
         pass
 
 
-register(MouseActionTask())
-register(KeyboardInputTask())
-register(DelayTask())
-register(RecordReplayTask())
-register(ImageClickTask())
-register(OcrClickTask())
-register(YoloClickTask())
-register(ConditionTask())
-register(NoteTask())
+# 菜单顺序由各类的 `order` 决定（§9.4），见 tasks/base.py::all_definitions。
+# 这里此前还有 9 行 `register(实例)`：对已被 @register 装饰的类是**空操作**
+# （dict 重复赋值保留原位置），只对没装饰的那几个真正生效——既误导，又让菜单
+# 顺序变成「先装饰的几个、后补的几个」。现在全部改用装饰器 + order。
