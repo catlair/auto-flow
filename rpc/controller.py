@@ -763,8 +763,14 @@ class AppController:
 
         - `alive=false`：tap 根本收不到合成事件，先修输入监控权限。
         - `alive=true, text_alive=false`：tap 活着但收不到文本提交，本实现覆盖不了。
-        - 两者皆 true：**本实现的链路完好**。此时若录中文仍只见拼音字母，就说明
-          该输入法走的是 `insertText:` 通道（不经事件层），需要另做方案。
+        - 两者皆 true：**本实现的链路完好**。
+
+        ⚠️ `text_alive=true` **不等于"中文能录"**。2026-09-12 实测确认：系统拼音
+        （`com.apple.inputmethod.SCIM.ITABC`）上屏走 `insertText:`，全程不投递任何
+        CGEvent——它录不到，而本自检照样全绿地通过（自检投递的是我们自己合成的
+        Unicode 事件，与输入法无关）。所以这里把**当前输入源**一并报出来，
+        并标注该输入源是否已实测确认不经过事件层，避免"自检通过 ⇒ 中文没问题"
+        这个错误的推论。
 
         录制/运行期间拒绝：自检会投递真实输入，不能污染正在录的事件序列，
         也不能把字符打进正在回放的工作流。
@@ -786,7 +792,8 @@ class AppController:
         except Exception as e:  # noqa: BLE001
             with self._lock:
                 self._probing = False
-            return {"alive": False, "text_alive": False, "error": str(e)}
+            return {"alive": False, "text_alive": False,
+                    "input_source": self._input_source_info(), "error": str(e)}
         deadline = time.monotonic() + 0.6
         while time.monotonic() < deadline:
             with self._lock:
@@ -799,7 +806,20 @@ class AppController:
             self._probing = False
         self._notify("permission.probe",
                      {"inputAlive": bool(alive), "textAlive": bool(text_alive)})
-        return {"alive": bool(alive), "text_alive": bool(text_alive)}
+        return {"alive": bool(alive), "text_alive": bool(text_alive),
+                "input_source": self._input_source_info()}
+
+    @staticmethod
+    def _input_source_info() -> dict:
+        """当前输入源 + 它是否已实测确认不经过事件层（探测失败则为空，不影响自检）。"""
+        from core.inputsource import current_input_source, event_channel_unsupported
+        src = current_input_source()
+        if not src:
+            return {}
+        unsupported = event_channel_unsupported(src.get("id"))
+        return {"id": src.get("id", ""), "name": src.get("name", ""),
+                "event_channel_unsupported": unsupported}
+
 
     def _probe_maybe_hit(self, name: str) -> None:
         """_on_key 早期调用：F18 自检键命中标记（仅在探测进行中生效）。"""

@@ -815,7 +815,9 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 
 **验证**：Python **123 passed**（+12）；`vue-tsc --noEmit` 零错误。
 
-**⚠️ 未验证的关键前提**：输入法提交在 macOS 上有两条通道——
+**⚠️ 关键前提：已在真机定性（2026-09-12）**
+
+输入法提交在 macOS 上有两条通道：
 
 1. **事件通道**：IME 用 `CGEventKeyboardSetUnicodeString` 投递合成事件
    （keycode=0 + Unicode）。被动 tap 能看到，本实现覆盖。
@@ -823,9 +825,27 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
    内部直接插入文本，**不投递任何 CGEvent**。被动 tap 只能看到被 IME 吞掉的
    原始按键（拼音字母）。
 
-系统拼音输入法走哪条**尚未在真机确认**。判据很简单：录一段中文，看事件表
-「文本」过滤下有没有内容——有则走通道 1，只有连续字母则是通道 2，
-后者需要另一套方案（如 AX 轮询 `kAXValueAttribute` 差分）。
+**实测结论：系统简体拼音（`com.apple.inputmethod.SCIM.ITABC`）走通道 2。**
+方法：自建 NSWindow + NSTextField（焦点在自己窗口，不碰用户应用），给生产代码
+用的 `_unicode_of` 打桩记录每条 keyDown 的原始读数，投递 `nihao` + 空格：
+
+```
+输入框内容: '你好'                                    ← 阳性对照成立：确实上屏了
+keycode 45/34/4/0/31/49 读作 'n','i','h','a','o',' '  ← 事件通道只有拼音字母
+含 CJK 的事件数: 0；带 Unicode 的上屏事件: 0
+```
+
+（顺带再次印证：keycode=0 的事件读出来是 `'a'` 而不是空串——`is_text_commit`
+必须按内容判定。）
+
+因此：**事件通道方案对系统拼音无效**，文本聚合只在通道 1 的输入法下生效。
+回放中文正常（`type_text` 走 Unicode 通道），是"录不到、放得出"。
+
+- 务实做法：中文用「**键盘输入**」节点（`mode="text"`）直接填，不依赖录制。
+- 若要做录制侧中文，唯一可行方向是 AX 轮询 `kAXValueAttribute` 差分；但它对
+  终端/画布类应用不适用、也无法知道插入位置，需单独评估后再决定。
+- `input.probe` 已补 `input_source`（含 `event_channel_unsupported`）：
+  `text_alive=true` 只说明"我们的接收链路是好的"，**不说明中文能录**。
 
 ---
 

@@ -1145,6 +1145,50 @@ def test_input_probe_keeps_key_listener_wired_to_text():
     ctrl.shutdown()
 
 
+def test_event_channel_unsupported_only_covers_verified_ime():
+    """只有**实测确认**的输入法才被判为"不经过事件层"。
+
+    2026-09-12 实测：系统拼音（SCIM）上屏走 insertText:，不投递任何 CGEvent。
+    但"不在名单里"**不等于**"支持"——UI 必须把"未知"和"确认不支持"分开说，
+    否则又会造出一个"看起来有答案"的假结论。
+    """
+    from core.inputsource import event_channel_unsupported as unsup
+    assert unsup("com.apple.inputmethod.SCIM.ITABC") is True    # 系统拼音：已实测
+    assert unsup("com.apple.inputmethod.SCIM") is True
+    assert unsup("com.apple.keylayout.ABC") is False            # 未实测，只能说"不在名单"
+    assert unsup("com.thirdparty.unknown.IME") is False
+    assert unsup(None) is None and unsup("") is None            # 未知
+
+
+def test_input_probe_reports_input_source_and_never_dies_on_it():
+    """自检要一并报出当前输入法（并标注是否确认不支持事件通道）。
+
+    只报 text_alive=true 会被读成"中文能录"，而系统拼音下它恒为 true、中文却恒
+    录不到。输入源探测只是诊断信息，**失败也不能让自检整体失败**。
+    """
+    from rpc.controller import AppController
+    import core.inputsource as ins
+
+    ctrl = AppController()
+    orig_src = ins.current_input_source
+    try:
+        ins.current_input_source = lambda: {
+            "id": "com.apple.inputmethod.SCIM.ITABC", "name": "Pinyin – Simplified"}
+        got = ctrl._input_source_info()
+        assert got["id"].endswith("ITABC") and got["name"]
+        assert got["event_channel_unsupported"] is True
+        # 未在名单里的输入法：报 False（= 未经实测），不能报 True
+        ins.current_input_source = lambda: {
+            "id": "com.apple.keylayout.ABC", "name": "ABC"}
+        assert ctrl._input_source_info()["event_channel_unsupported"] is False
+        # 探测失败 → 空 dict，且不抛
+        ins.current_input_source = lambda: None
+        assert ctrl._input_source_info() == {}
+    finally:
+        ins.current_input_source = orig_src
+        ctrl.shutdown()
+
+
 def test_record_stop_unaccounted_is_zero_after_trim():
     """按钮停止（trim 为真）裁掉停止点击后，一致性等式仍必须配平。
 

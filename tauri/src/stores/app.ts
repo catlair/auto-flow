@@ -348,10 +348,17 @@ export const useAppStore = defineStore("app", {
     },
     async probeInput() {
       // alive: tap 收得到合成事件；text_alive: 收得到 Unicode 文本提交。
-      // 两者要分开看——见 RecordPanel 的「文本链路自检」。
+      // input_source: 当前输入法，以及它是否**已实测确认**不经过事件层
+      //   （系统拼音就是这种：上屏走 insertText:，事件通道原理上覆盖不到）。
+      // 三者要分开看——见 RecordPanel 的「文本链路自检」。
       return (await rpc.request("input.probe")) as {
         alive: boolean;
         text_alive?: boolean;
+        input_source?: {
+          id: string;
+          name: string;
+          event_channel_unsupported: boolean | null;
+        };
       };
     },
 

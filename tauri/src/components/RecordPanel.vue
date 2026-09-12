@@ -120,14 +120,29 @@ async function onApplyText() {
 // 自检**只能证明①的链路是好的**：两段都通却依然录不到中文时，才轮到怀疑②。
 // 反过来，若 text_alive 为 false，则中文录制一定是坏的（连我们自己投递的都收不到）。
 const textProbe = ref<"" | "ok" | "noTap" | "noText">("");
+// 自检同时报出当前输入法，以及它是否**已实测确认**不经过事件层。
+// 没有这一项，`text_alive=true` 会被读成"中文能录"——而系统拼音下它恒为 true，
+// 中文却恒录不到（见 core/inputsource.py 的实测记录）。
+const probeSource = ref<{
+  name: string;
+  unsupported: boolean | null;
+} | null>(null);
 let probing = false;
 async function onProbeText() {
   if (probing) return;
   probing = true;
   textProbe.value = "";
+  probeSource.value = null;
   try {
     const r = await store.probeInput();
     textProbe.value = !r.alive ? "noTap" : r.text_alive ? "ok" : "noText";
+    const s = r.input_source;
+    if (s) {
+      probeSource.value = {
+        name: s.name || s.id || "未知",
+        unsupported: s.event_channel_unsupported ?? null,
+      };
+    }
   } catch {
     textProbe.value = "noTap";
   } finally {
@@ -316,17 +331,30 @@ async function onToNode() {
       <button class="af-chip" :disabled="store.recording" @click="onProbeText">
         文本链路自检
       </button>
-      <span v-if="textProbe === 'ok'" class="af-probe ok">✓ 文本捕获链路可用</span>
+      <span v-if="textProbe === 'ok'" class="af-probe ok">✓ 事件通道文本捕获可用</span>
       <span v-else-if="textProbe === 'noText'" class="af-probe bad">
         ✗ 收不到 Unicode 文本提交：中文/emoji 录制不可用
       </span>
       <span v-else-if="textProbe === 'noTap'" class="af-probe bad">
         ✗ 收不到合成事件：请检查输入监控权限
       </span>
+      <span v-if="textProbe === 'ok' && probeSource?.unsupported === true" class="af-probe bad">
+        ⚠️ 但当前输入法录不到中文
+      </span>
     </div>
-    <div v-if="textProbe === 'ok'" class="af-probe-hint">
-      链路正常。若录中文后「文本」过滤下仍为空、只有一串字母按键，
-      说明该输入法不经过事件层——中文请改用「键盘输入」节点填写。
+    <div v-if="textProbe === 'ok' && probeSource?.unsupported === true" class="af-probe-hint">
+      <b>「{{ probeSource.name }}」已实测不经过事件层</b>：上屏走 insertText:，
+      不投递任何键盘事件，事件通道原理上覆盖不到——用它录中文只会得到一串拼音字母。
+      中文请改用「<b>键盘输入</b>」节点直接填写（回放走 Unicode 通道，中文正常）。
+    </div>
+    <div v-else-if="textProbe === 'ok' && probeSource" class="af-probe-hint">
+      当前输入法「{{ probeSource.name }}」不在已知不支持名单里，但<b>未经实测</b>。
+      若录中文后「文本」过滤下为空、只有一串字母按键，说明它同样不经过事件层——
+      中文请改用「键盘输入」节点填写。
+    </div>
+    <div v-else-if="textProbe === 'ok'" class="af-probe-hint">
+      链路正常，但未能识别当前输入法。若录中文后「文本」过滤下为空、只有一串字母按键，
+      中文请改用「键盘输入」节点填写。
     </div>
     <div v-if="store.recordBuffer.length" class="af-filters">
       <button

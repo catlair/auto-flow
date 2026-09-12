@@ -37,7 +37,7 @@
 | run.start / run.stop | base_x/base_y | {running}；stop 已 join 运行线程 |
 | record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/text_merged/trimmed/**unaccounted**/监听器存活） |
 | template.snip | — | {started}，完成走通知 |
-| input.probe | — | {alive, text_alive}（F18 + 零宽空格两段回环） |
+| input.probe | — | {alive, text_alive, input_source{id,name,event_channel_unsupported}}（F18 + 零宽空格两段回环） |
 | hotkey.set / clear | actions | 绑定快照 |
 | key.capture / key.capture.stop | — | {capturing} |
 | base.pick | — | {armed}，结果走通知 |
@@ -92,3 +92,5 @@
 
 - 2026-09-12 写锁、events 摘要、node.rename、template.snip、input.probe
 - 2026-09-12 `record.stop` 增加 `unaccounted`，一致性等式从前端收回后端（假警报修复）
+- 2026-09-12 `input.probe` 增加 `input_source`——`text_alive=true` 不等于"中文能录"，
+  必须按当前输入法给结论（见 recorder.md 已知问题）
