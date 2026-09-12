@@ -70,6 +70,8 @@ function setup(request) {
   }, module, module.exports);
   return {
     store: module.exports.useAppStore(createPinia()),
+    // 模块导出（如 RECORD_BUFFER_LIMIT），便于断言「实现与常量同源」
+    mod: module.exports,
     calls,
     emitStatus: (up, detail = "") => statusHandlers.forEach((h) => h(up, detail)),
     methods: () => calls.map((c) => c.method),
@@ -255,4 +257,148 @@ test("重连握手会用后端状态覆盖运行/录制态", async () => {
   // 新后端没有在跑任何东西，前端不得继续显示「运行中」
   assert.equal(store.running, false);
   assert.equal(store.recording, false);
+});
+
+// ---------- §18 P4：拖拽排序 / 崩溃重连 / 诊断面板 ----------
+
+const threeNodes = () => [
+  { type: "mouse", params: {}, enabled: true, uid: "a", name: "" },
+  { type: "keyboard", params: {}, enabled: true, uid: "b", name: "" },
+  { type: "delay", params: {}, enabled: true, uid: "c", name: "" },
+];
+
+/** 只补上基础握手，其余方法交给传入的 handler。 */
+const baseHandler = (nodes, extra) => async (method, params) => {
+  if (method === "app.info") return { appVersion: "0.1.0", protocolVersion: 1, permissions: {} };
+  if (method === "nodes.definitions") return [];
+  if (method === "workflow.current") return { workflow: workflow(nodes), running: false, recording: false };
+  if (method === "schedule.get") return { schedule: null, nextFire: "" };
+  return extra ? extra(method, params) : {};
+};
+
+test("拖拽排序：moveNode 透传 (index,to) 并以响应刷新工作流", async () => {
+  const nodes = threeNodes();
+  const seen = [];
+  const { store } = setup(
+    baseHandler(nodes, (method, params) => {
+      if (method !== "node.move") return {};
+      seen.push(params);
+      // 复刻后端语义：pop(index) 再 insert(to)（to 是最终位置）
+      const arr = nodes.slice();
+      arr.splice(params.to, 0, arr.splice(params.index, 1)[0]);
+      return { workflow: workflow(arr), running: false, recording: false };
+    })
+  );
+  await store.init();
+
+  await store.moveNode(0, 2); // 把第一项拖到最后
+  assert.deepEqual(seen, [{ index: 0, to: 2 }]);
+  assert.deepEqual(store.workflow.nodes.map((n) => n.uid), ["b", "c", "a"]);
+});
+
+test("拖拽失败：moveNode 抛出（供 UI 回滚），真源不被乐观修改", async () => {
+  const nodes = threeNodes();
+  const { store } = setup(
+    baseHandler(nodes, (method) => {
+      if (method === "node.move") throw new Error("目标索引越界");
+      return {};
+    })
+  );
+  await store.init();
+  const before = store.workflow.nodes.map((n) => n.uid);
+
+  await assert.rejects(() => store.moveNode(0, 2), /越界/);
+  // store 只在 RPC 成功后写入，所以失败时本来就干净——NodeList 需要靠这个
+  // 异常把本地镜像拉回来（vuedraggable 已经乐观改过 items）。
+  assert.deepEqual(store.workflow.nodes.map((n) => n.uid), before);
+});
+
+test("断线显示原因与「正在重连」，恢复后给出恢复提示且 banner 清空", async () => {
+  const { store, emitStatus } = setup();
+  await store.init();
+  assert.equal(store.reconnectNotice, "", "首次连接不应有恢复提示");
+  assert.equal(store.rpcDownCount, 0);
+
+  emitStatus(false, "sidecar 崩溃：boom\n更多细节第二行");
+  assert.equal(store.connected, false);
+  assert.match(store.banner, /正在重连/);
+  assert.match(store.banner, /boom/);
+  assert.ok(!store.banner.includes("第二行"), "横幅只放首行，换行会撑坏布局");
+  assert.equal(store.rpcDownCount, 1);
+  assert.ok(store.rpcDownAt > 0);
+
+  emitStatus(true, "");
+  await settle();
+  assert.equal(store.connected, true);
+  assert.equal(store.banner, "");
+  assert.match(store.reconnectNotice, /已重新连接/);
+  assert.match(store.reconnectNotice, /1 次/);
+  assert.ok(store.lastRecoveredAt > 0);
+
+  store.dismissReconnect();
+  assert.equal(store.reconnectNotice, "");
+});
+
+test("诊断信息汇总连接/权限/节点数，且后端已挂时仍可读", async () => {
+  const { store, emitStatus, mod } = setup(baseHandler(threeNodes()));
+  await store.init();
+  notify(store, "permission.changed", {
+    accessibility: false, inputMonitoring: true, screenRecording: true,
+  });
+  notify(store, "workflow.changed", workflow([
+    { type: "delay", params: {}, enabled: true, uid: "a", name: "" },
+    { type: "note", params: {}, enabled: false, uid: "b", name: "" },
+  ]));
+  emitStatus(false, "sidecar 未找到\n搜索路径：/Applications/x");
+
+  const d = store.diagnostics;
+  assert.equal(d.connected, false);
+  assert.equal(d.protocolOk, true);
+  assert.equal(d.nodeCount, 2);
+  assert.equal(d.enabledNodeCount, 1);
+  assert.equal(d.permissions.inputMonitoring, true);
+  assert.equal(d.permissions.accessibility, false);
+  assert.equal(d.rpcDownCount, 1);
+  assert.ok(d.rpcDownDetail.includes("搜索路径：/Applications/x"), "详情全文要保留");
+  assert.equal(d.recordBufferLimit, mod.RECORD_BUFFER_LIMIT);
+  // 诊断面板的硬约束：不发任何 RPC（后端已挂时打开也不能卡住）
+  const before = store.diagnostics;
+  assert.ok(before);
+});
+
+test("诊断面板不触发 RPC：断开后取值不新增请求", async () => {
+  const { store, emitStatus, methods } = setup(baseHandler(threeNodes()));
+  await store.init();
+  emitStatus(false, "断开");
+  const n = methods().length;
+  void store.diagnostics;
+  void store.diagnostics;
+  assert.equal(methods().length, n);
+});
+
+test("录制事件缓冲超上限时丢最旧的，且上限与导出常量同源", () => {
+  const { store, mod } = setup();
+  const limit = mod.RECORD_BUFFER_LIMIT;
+  assert.ok(limit > 0 && limit <= 20000, `上限量级不合理：${limit}`);
+
+  notify(store, "record.event", {
+    events: Array.from({ length: limit + 50 }, (_, i) => ({ kind: "move", ts_ms: i })),
+  });
+  assert.equal(store.recordBuffer.length, limit);
+  assert.equal(store.recordBuffer[0].ts_ms, 50, "应丢最旧的");
+  assert.equal(store.diagnostics.recordBufferCount, limit);
+  // 这条不是同义反复：若 handler 里硬编码一个与导出常量不同的数字，
+  // 缓冲长度就会与 diagnostics 报出的上限对不上。
+  assert.equal(store.recordBuffer.length, store.diagnostics.recordBufferLimit);
+});
+
+test("error 级提示记入 lastError，后续 ok/warn 不覆盖它", () => {
+  const { store } = setup();
+  store.setBanner("运行出错：boom", "error");
+  assert.equal(store.lastError, "运行出错：boom");
+  store.setBanner("定时触发：x", "ok");
+  store.setBanner("后端 sidecar 断开，正在重连…", "warn");
+  assert.equal(store.banner, "后端 sidecar 断开，正在重连…");
+  assert.equal(store.lastError, "运行出错：boom", "诊断要能看到最近一次真正的错误");
+  assert.equal(store.diagnostics.lastError, "运行出错：boom");
 });

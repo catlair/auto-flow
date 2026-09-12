@@ -8,10 +8,12 @@ import ParamsPanel from "@/components/ParamsPanel.vue";
 import RunPanel from "@/components/RunPanel.vue";
 import RecordPanel from "@/components/RecordPanel.vue";
 import ScheduleDialog from "@/components/ScheduleDialog.vue";
+import DiagnosticsPanel from "@/components/DiagnosticsPanel.vue";
 
 import { computed } from "vue";
 const store = useAppStore();
 const scheduleOpen = ref(false);
+const diagOpen = ref(false);
 const selectedTitle = computed(() => {
   const n = store.selectedNode;
   if (!n) return "未选择节点";
@@ -33,18 +35,36 @@ onMounted(() => store.init());
     <span v-if="store.appVersion" class="af-ver">v{{ store.appVersion }}</span>
     <span style="flex: 1" />
     <span class="af-hk">F9 录制 · F10 运行 · F11 取点</span>
+    <t-button size="small" variant="outline" @click="diagOpen = true">诊断</t-button>
     <t-button size="small" variant="outline" @click="scheduleOpen = true">定时运行</t-button>
   </header>
 
   <PermissionBanner />
 
+  <!-- 后端断连/恢复：与下方 banner 分开。banner 只放「待处理的问题」，
+       恢复提示放这里，否则「已恢复」会把真正需要用户处理的错误顶掉。 -->
+  <div v-if="store.reconnectNotice" class="af-reconnect">
+    <span>{{ store.reconnectNotice }}</span>
+    <button class="af-link" @click="diagOpen = true">查看诊断</button>
+    <span style="flex: 1" />
+    <button class="af-link" @click="store.dismissReconnect()">知道了</button>
+  </div>
+
   <div v-if="store.banner" :class="['af-banner', store.bannerKind]">
     {{ store.banner }}
+    <button
+      v-if="store.rpcDownDetail"
+      class="af-link"
+      style="margin-left: 8px"
+      @click="diagOpen = true"
+    >
+      查看详情
+    </button>
   </div>
 
   <div class="af-layout">
     <section class="af-col">
-      <div class="af-panel-head"><b>工作流</b><span class="af-hint">拖拽排序 · 双击节点改名</span></div>
+      <div class="af-panel-head"><b>工作流</b><span class="af-hint">拖动 ⋮⋮ 排序 · 双击节点改名</span></div>
       <NodeList />
     </section>
     <section class="af-col">
@@ -68,6 +88,7 @@ onMounted(() => store.init());
   </footer>
 
   <ScheduleDialog v-model:visible="scheduleOpen" />
+  <DiagnosticsPanel v-model:visible="diagOpen" />
 </template>
 
 <style scoped>
@@ -143,5 +164,25 @@ onMounted(() => store.init());
 .af-proto-warn {
   color: #ed7b2f;
   font-size: 12px;
+}
+.af-reconnect {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: #eaf7ef;
+  color: #057a4a;
+  font-size: 12px;
+  border-bottom: 1px solid #cdebd9;
+}
+.af-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
 }
 </style>

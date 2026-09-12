@@ -11,6 +11,12 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * 录制事件缓冲上限。超出后丢最旧的——完整数据在后端内存树里，
+ * 前端这份只用于实时预览，不参与回放/保存。
+ */
+export const RECORD_BUFFER_LIMIT = 5000;
+
 type CapturedKeyHandler = (name: string) => void;
 
 export const useAppStore = defineStore("app", {
@@ -18,6 +24,15 @@ export const useAppStore = defineStore("app", {
     connected: false,
     // Rust 侧最近一次断连原因（含查找路径 / sidecar stderr），用于给出可读提示。
     rpcDownDetail: "",
+    // 崩溃重连状态：断开时刻/累计断连次数/恢复提示。
+    // 恢复提示刻意**不塞进 banner**——banner 只放「有问题」的信息，
+    // 否则「已恢复」会把真正需要用户处理的错误顶掉。
+    rpcDownAt: 0,
+    rpcDownCount: 0,
+    lastRecoveredAt: 0,
+    reconnectNotice: "",
+    // 最近一次以 error 级别上报的信息，诊断面板用。
+    lastError: "",
     protocolOk: true,
     appVersion: "",
     running: false,
@@ -50,14 +65,58 @@ export const useAppStore = defineStore("app", {
       for (const d of state.definitions) m[d.type] = d;
       return m;
     },
+    /**
+     * 诊断信息汇总（§18 P4「诊断面板」）。
+     *
+     * 刻意返回**纯数据**而非让组件各取各的：一是组件只负责渲染，二是这里能直接
+     * 单测（组件渲染在无 WebView 的环境里测不到）。
+     * 不在这里做任何 RPC——诊断面板必须能在「后端已挂」时打开。
+     */
+    diagnostics(state) {
+      const p = state.permissions ?? ({} as Permissions);
+      const nodes = state.workflow?.nodes ?? [];
+      return {
+        appVersion: state.appVersion || "(未知)",
+        protocolExpected: PROTOCOL_VERSION,
+        protocolOk: state.protocolOk,
+        connected: state.connected,
+        rpcDownCount: state.rpcDownCount,
+        rpcDownAt: state.rpcDownAt,
+        lastRecoveredAt: state.lastRecoveredAt,
+        rpcDownDetail: state.rpcDownDetail,
+        lastError: state.lastError,
+        permissions: {
+          accessibility: !!p.accessibility,
+          inputMonitoring: !!p.inputMonitoring,
+          screenRecording: !!p.screenRecording,
+        },
+        workflowName: state.workflow?.name ?? "",
+        nodeCount: nodes.length,
+        enabledNodeCount: nodes.filter((n) => n?.enabled).length,
+        definitionCount: state.definitions.length,
+        base: { x: state.base?.x ?? 0, y: state.base?.y ?? 0 },
+        scheduleMode: state.schedule?.mode ?? "",
+        nextFire: state.nextFire,
+        recordBufferCount: state.recordBuffer.length,
+        recordBufferLimit: RECORD_BUFFER_LIMIT,
+        lastRecordInfo: state.lastRecordInfo,
+        running: state.running,
+        recording: state.recording,
+      };
+    },
   },
   actions: {
     setBanner(msg: string, kind: "ok" | "warn" | "error" = "error") {
       this.banner = msg;
       this.bannerKind = kind;
+      // 诊断面板要能看到「最近一次出错」，而 banner 会被后续的 ok/warn 覆盖掉。
+      if (kind === "error") this.lastError = msg;
     },
     clearBanner() {
       this.banner = "";
+    },
+    dismissReconnect() {
+      this.reconnectNotice = "";
     },
     isInputFocused(): boolean {
       const el = document.activeElement as HTMLElement | null;
@@ -82,13 +141,31 @@ export const useAppStore = defineStore("app", {
           this.clearBanner();
           // Rust 会在 sidecar 崩溃后重启它，而新进程的工作流是空的。
           // 不重新握手的话界面会继续显示旧数据——看起来一切正常，实际后端已换人。
-          if (!wasConnected) void this.handshake();
+          if (!wasConnected) {
+            // 断线过又回来：明确告诉用户「已恢复」。此前只是把横幅清掉，
+            // 用户可能根本没察觉后端崩过一次（而它其实已经重启、状态被重置）。
+            if (this.rpcDownAt) {
+              this.lastRecoveredAt = Date.now();
+              this.reconnectNotice =
+                `后端 sidecar 已重新连接（本次会话累计断连 ${this.rpcDownCount} 次）`;
+            }
+            // Rust 会在 sidecar 崩溃后重启它，而新进程的工作流是空的。
+            // 不重新握手的话界面会继续显示旧数据——看起来一切正常，实际后端已换人。
+            void this.handshake();
+          }
         } else {
           this.rpcDownDetail = detail || "";
-          // detail 可能含查找路径 + sidecar 最近 stderr：横幅只显示首行，全文进 console。
-          const first =
-            (detail || "").split("\n")[0] || "后端 sidecar 断开，正在重连…";
-          this.setBanner(first, "warn");
+          this.rpcDownAt = Date.now();
+          this.rpcDownCount += 1;
+          // detail 可能含查找路径 + sidecar 最近 stderr：横幅只显示首行，全文留给
+          // console 与诊断面板（横幅放不下，且换行会撑坏布局）。
+          const first = (detail || "").split("\n")[0].trim();
+          this.setBanner(
+            first
+              ? `后端 sidecar 断开，正在重连…（${first}）`
+              : "后端 sidecar 断开，正在重连…",
+            "warn"
+          );
           if (detail) console.error("[rpc_down]", detail);
         }
       });
@@ -207,8 +284,8 @@ export const useAppStore = defineStore("app", {
           break;
         case "record.event":
           this.recordBuffer.push(...(n.params.events ?? []));
-          if (this.recordBuffer.length > 5000) {
-            this.recordBuffer.splice(0, this.recordBuffer.length - 5000);
+          if (this.recordBuffer.length > RECORD_BUFFER_LIMIT) {
+            this.recordBuffer.splice(0, this.recordBuffer.length - RECORD_BUFFER_LIMIT);
           }
           break;
         case "record.stopped":

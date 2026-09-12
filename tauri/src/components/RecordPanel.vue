@@ -1,9 +1,72 @@
 <script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
+import { computeWindow } from "@/utils/vlist";
 
 import { errMessage } from "@/rpc/client";
 const store = useAppStore();
+
+// ---- 事件流虚拟滚动 ----
+// 缓冲上限 5000 条，全量 v-for 会让 DOM 节点数随事件数增长（录制中每秒可能上百条）。
+// 只渲染视口内的行，行高固定所以窗口边界是纯算术（见 utils/vlist.ts）。
+const ITEM_H = 15; // 必须与 .af-ev 的 line-height/height 一致，否则滚动会跳
+const FOLLOW_SLACK = 24; // 距底部多少像素内算「跟随最新」
+
+const streamEl = ref<HTMLElement | null>(null);
+const scrollTop = ref(0);
+const viewportH = ref(0);
+// 是否跟随最新。用户往上翻看历史时不要把他拽回底部。
+const follow = ref(true);
+
+const total = computed(() => store.recordBuffer.length);
+const win = computed(() =>
+  computeWindow({
+    count: total.value,
+    itemH: ITEM_H,
+    viewportH: viewportH.value,
+    scrollTop: scrollTop.value,
+  })
+);
+const visible = computed(() => store.recordBuffer.slice(win.value.start, win.value.end));
+
+function onScroll() {
+  const el = streamEl.value;
+  if (!el) return;
+  scrollTop.value = el.scrollTop;
+  follow.value = el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK;
+}
+
+function scrollToBottom() {
+  const el = streamEl.value;
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+  scrollTop.value = el.scrollTop;
+  follow.value = true;
+}
+
+// 新事件到达时，只有原本就贴在底部才继续跟随。
+watch(total, () => {
+  if (!follow.value) return;
+  void nextTick(scrollToBottom);
+});
+
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  const el = streamEl.value;
+  if (!el) return;
+  viewportH.value = el.clientHeight;
+  if (typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(() => {
+      viewportH.value = el.clientHeight;
+    });
+    ro.observe(el);
+  }
+});
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
+});
 
 async function onToggleRecord() {
   try {
@@ -63,15 +126,34 @@ async function onToNode() {
         · 超限丢弃 {{ store.lastRecordInfo.limit_dropped }} 条</template><template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
         · <span style="color:#e34d59">监听中断</span></template>
     </div>
-    <div class="af-stream" :class="{ live: store.recording }">
-      <div v-if="store.recordBuffer.length > 200" class="af-more">
-        共 {{ store.recordBuffer.length }} 条，仅显示最近 200 条（回放以完整数据为准）
+    <div v-if="total" class="af-stream-bar">
+      <span>共 {{ total }} 条</span>
+      <span v-if="total > win.end || win.start > 0" class="af-range">
+        显示 {{ win.start + 1 }}–{{ win.end }}
+      </span>
+      <span style="flex: 1" />
+      <button v-if="!follow" class="af-jump" @click="scrollToBottom">↓ 回到最新</button>
+    </div>
+    <div
+      ref="streamEl"
+      class="af-stream"
+      :class="{ live: store.recording }"
+      @scroll.passive="onScroll"
+    >
+      <div class="af-vlist" :style="{ height: win.totalH + 'px' }">
+        <div class="af-vwin" :style="{ transform: `translateY(${win.offsetY}px)` }">
+          <div
+            v-for="(ev, i) in visible"
+            :key="win.start + i"
+            class="af-ev"
+            :style="{ height: ITEM_H + 'px' }"
+          >
+            {{ ev.kind }} @ {{ ev.x ?? "-" }},{{ ev.y ?? "-" }} {{ ev.button ? ev.button : "" }}
+            {{ ev.ts_ms }}ms
+          </div>
+        </div>
       </div>
-      <div v-for="(ev, i) in store.recordBuffer.slice(-200)" :key="i" class="af-ev">
-        {{ ev.kind }} @ {{ ev.x ?? "-" }},{{ ev.y ?? "-" }} {{ ev.button ? ev.button : "" }}
-        {{ ev.ts_ms }}ms
-      </div>
-      <div v-if="!store.recordBuffer.length" class="af-empty">暂无事件</div>
+      <div v-if="!total" class="af-empty">暂无事件</div>
     </div>
   </div>
 </template>
@@ -112,9 +194,21 @@ async function onToNode() {
   color: #444;
 }
 .af-ev {
+  /* 高度与行高必须都等于脚本里的 ITEM_H，否则虚拟窗口与实际渲染错位、滚动会跳 */
+  line-height: 15px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 撑出完整滚动高度，再由 .af-vwin 平移到当前窗口位置 */
+.af-vlist {
+  position: relative;
+}
+.af-vwin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
 }
 .af-empty {
   color: #999;
@@ -124,11 +218,27 @@ async function onToNode() {
   font-size: 11px;
   color: #666;
 }
-.af-more {
-  color: #999;
-  font-size: 10px;
-  padding-bottom: 2px;
-  border-bottom: 1px dashed #e7e7e7;
-  margin-bottom: 2px;
+.af-stream-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #888;
+}
+.af-range {
+  color: #aaa;
+}
+.af-jump {
+  border: 1px solid #d5d8dd;
+  background: #fff;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: #0052d9;
+  cursor: pointer;
+}
+.af-jump:hover {
+  background: #f0f4ff;
 }
 </style>
