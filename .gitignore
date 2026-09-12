@@ -26,6 +26,7 @@ tests/__pycache__/
 # 迁移期垃圾
 .af-sidecar-old-*/
 .autoflow-sidecar.old.*/
+tauri/dist.old.*/
 tauri/vite.config.ts.timestamp-*.mjs
 tauri/src-tauri/autoflow-sidecar/
 build/
