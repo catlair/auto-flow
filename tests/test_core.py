@@ -520,37 +520,6 @@ def test_maclistener_callback_error_is_logged_once(monkeypatch, caplog):
     assert caplog.text.count("键盘 tap 回调异常") == 1  # 只记首次，不刷屏
 
 
-def test_qt_hotkey_callbacks_accept_listener_arity():
-    """旧 Qt 入口的热键/捕获回调必须能收满监听器的 4 个参数。
-
-    回归：两者曾只声明 (name, pressed)，被以 4 参数调用时抛 TypeError，
-    叠加监听器的静默 except —— 表现为「F9/F10/F11 与按键捕获全部无效」。
-    """
-    pytest.importorskip("PySide6")
-    from ui import main_window as mw
-
-    emitted = []
-
-    class _FakeSignals:
-        class hotkey:
-            @staticmethod
-            def emit(v):
-                emitted.append(v)
-
-    win = mw.MainWindow.__new__(mw.MainWindow)  # 不跑 __init__，避免创建真实窗口
-    win.signals = _FakeSignals()
-    win._capturing_widget = None
-    win._capture_listener = None
-
-    # 监听器的实际调用方式：4 个位置参数
-    win._on_global_key("F10", True, 12, 34)
-    win._on_global_key("F1", True, 0, 0)      # 非热键 → 空动作
-    win._on_global_key("F9", False, 0, 0)     # 抬起不触发
-    win._on_capture_key("a", True, 5, 6)
-    win._on_capture_key("a", False, 5, 6)     # 抬起不处理
-    assert emitted == ["run", ""]
-
-
 def test_paths_dirs(tmp_path, monkeypatch):
     from core import paths
     monkeypatch.setattr(paths, "app_dir", lambda: str(tmp_path))

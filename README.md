@@ -3,11 +3,9 @@
 本地键鼠录制 / 回放 / 工作流工具（macOS 优先）。
 架构参考 [LCA](https://github.com/wuzhijing88/LCA)（Windows 版），砍掉 Windows 专属能力后的精简核心版。
 
-> **界面：现行是 Tauri 版**（`tauri/`）——Vue 3 + Pinia + TDesign 前端 + Rust 外壳，
+> **界面：Tauri 版**（`tauri/`）——Vue 3 + Pinia + TDesign 前端 + Rust 外壳，
 > 经 stdio（NDJSON JSON-RPC 2.0）调用 Python 后端 `rpc/`。
-> `main.py` + `ui/`（PySide6）是迁移前的旧入口，按
-> `docs/迁移计划书-python后端+tauri前端.md` §8「迁移期保留作对照、P2 完成后删除」。
-> **新功能不要往 `ui/` 加**；两套共用同一份 `core/` 与 `tasks/`。
+> 旧 PySide6 界面（`ui/`、`main.py`）已于 2026-09-12 删除，见 `docs/modules/frontend.md`。
 
 ## 功能
 
@@ -32,12 +30,6 @@ npm --prefix tauri run tauri dev   # 开发；跑的是已打包 sidecar，改 P
 ./scripts/build_sidecar.sh         # 改过 rpc/ 或 core/ 后重新打包 Python 后端
 ```
 
-**旧 PySide6 入口**（对照用，迁移期保留）：
-
-```bash
-./run.sh          # 首次会自动创建 venv 并按 requirements.txt 安装依赖
-```
-
 依赖清单见 `requirements.txt`（运行）与 `requirements-dev.txt`（测试 / 打包）。
 手动装：
 
@@ -60,28 +52,39 @@ pip install -r requirements.txt -r requirements-dev.txt
 ## 项目结构
 
 ```
-core/            # 全部界面共用
+core/            # 后端核心（无界面依赖）
   events.py      # MacroEvent / Node / Workflow 数据模型与 JSON 序列化
-  recorder.py    # pynput 监听录制（移动阈值过滤、原点记录、10 万事件上限自停）
-  player.py      # 插值回放引擎（速度倍率、相对偏移、停止标志）
-  executor.py    # 工作流执行器（整体循环、单节点重复、热停）
-  vision.py      # mss 截屏 + OpenCV 模板匹配（Retina 坐标换算）
-  permissions.py # 辅助功能权限检测与系统设置跳转
-  keymap.py      # 键名映射
-tasks/           # 全部界面共用
-  base.py        # 节点基类 + 注册表（节点自描述参数，UI 通用渲染）
-  builtin.py     # 内置节点：mouse / keyboard / delay / record_replay / note
-rpc/             # Tauri 版后端：协议层 + 控制器（工作流真源）
-  server.py      # NDJSON JSON-RPC 2.0 帧解析/分发/通知队列
-  controller.py  # AppController：工作流树、运行/录制状态、调度器
-tauri/           # Tauri 版前端（现行界面）
-  src/           # Vue 3：rpc/ 客户端 + Pinia store + 8 个组件 + utils/
-  src-tauri/     # Rust 外壳：拉起 sidecar、逐行转发 stdout、守护重启
-ui/              # ⚠️ 旧 PySide6 界面（迁移期保留作对照，P2 后删除）
-  main_window.py # 主窗口（节点列表 / 参数面板 / 运行控制 / 录制面板 / 热键）
-  params_panel.py# 依据节点定义通用渲染的参数表单
-workflows/       # 工作流 JSON 存放处
+  recorder.py    # 录制：pynput 鼠标 + 自建 CGEventTap 键盘（阈值过滤/统计）
+  player.py      # 插值回放引擎（速度倍率、相对偏移、热停安全）
+  executor.py    # 工作流执行器（整体循环、单节点重复、条件门控、热停）
+  maclistener.py # 自建只读 CGEventTap 键盘监听（macOS 15 兼容）
+  mackeys.py     # 虚拟键码表 + 修饰键边沿
+  vision.py      # mss/Quartz 截屏 + OpenCV 模板匹配（Retina 换算）
+  ocr.py         # Vision 框架离线 OCR
+  yolo.py        # onnxruntime/CoreML 目标检测
+  permissions.py # 权限检测 / 设置跳转
+  keymap.py paths.py
+tasks/           # 节点插件
+  base.py        # 节点基类 + 注册表（自描述参数，UI 动态渲染）
+  builtin.py     # 九种内置节点
+rpc/             # 后端协议层
+  server.py      # NDJSON JSON-RPC 2.0 帧解析/分发/通知队列（写锁）
+  controller.py  # AppController：工作流真源、运行/录制/热键/定时
+tauri/           # 前端 + Rust 外壳
+  src/           # Vue 3：rpc 客户端 + Pinia store + 8 组件
+  src-tauri/     # sidecar 管理、事件转发、守护重启
+models/          # yolo11n.onnx
+workflows/       # 工作流 JSON
+docs/            # 功能模块文档系统（见 docs/README.md）
 ```
+
+## 功能模块文档
+
+功能的设计、完成情况与验收记录统一存放在 `docs/`：
+
+- `docs/STATUS.md` — 全模块状态总览
+- `docs/modules/<模块>.md` — 各模块的功能清单 / 验收记录 / 设计要点
+- 新增或修改功能时**同步更新对应模块文档**（规则见 `docs/README.md`）
 
 ## 开发
 

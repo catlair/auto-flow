@@ -8,11 +8,9 @@
 #   core/player.py 等   → pynput
 #   core/maclistener.py → Quartz
 #   core/permissions.py → ApplicationServices
-#   ui/ + main.py       → PySide6（旧版 Qt 界面）
 #
 # 注意：PyInstaller 打包 Python 后端还需要额外工具，见 requirements-dev.txt。
 
-PySide6>=6.11,<7
 pynput>=1.8,<2
 
 # pyobjc：Cocoa 提供 AppKit/Foundation，其余为具体框架
