@@ -164,7 +164,12 @@ class Recorder:
                                 kb_listener_died=self._kb_died)
 
 
-def trim_stop_interaction(events: list[MacroEvent]) -> list[MacroEvent]:
+def trim_stop_interaction(events: list[MacroEvent]) -> tuple[list[MacroEvent], int]:
+    """返回 (裁剪后事件, 裁掉数量)。"""
+    return _trim(events), len(events) - len(_trim(events))
+
+
+def _trim(events: list[MacroEvent]) -> list[MacroEvent]:
     """裁掉「停止录制」交互本身（仅按钮停止时调用）。
 
     用鼠标点「停止录制」时，这次点击（和移向按钮的移动）已在事件序列里——

@@ -578,12 +578,12 @@ def test_trim_stop_interaction():
         E(ts_ms=700, kind="mouse", x=950, y=430, button="left", pressed=True),   # 停止点击
         E(ts_ms=800, kind="mouse", x=950, y=430, button="left", pressed=False),
     ]
-    out = trim_stop_interaction(events)
+    out, _ = trim_stop_interaction(events)
     # 回放终止于「关闭应用」点击；移向停止按钮的路径与停止点击一并移除
     assert len(out) == 5 and out[-1].pressed is False and out[-1].x == 300
     # 热键停止（F9 已被 skip_keys 过滤）不应误裁：末次点击是实质动作
     hotkey_stop = events[:-2]  # 假设 F9 停止：无停止点击，尾部是移动
-    out2 = trim_stop_interaction(hotkey_stop)
+    out2, _ = trim_stop_interaction(hotkey_stop)
     # 无 trim 标志时调用方不会调用；但函数自身对「末尾无按下」的情形裁移动——
     # 热键路径根本不调用本函数，这里仅验证纯函数行为可预期
     assert len(out2) <= len(hotkey_stop)
@@ -591,4 +591,4 @@ def test_trim_stop_interaction():
     only_moves = [E(ts_ms=0, kind="move", x=1, y=1),
                   E(ts_ms=100, kind="mouse", x=2, y=2, button="left", pressed=True),
                   E(ts_ms=150, kind="mouse", x=2, y=2, button="left", pressed=False)]
-    assert trim_stop_interaction(only_moves) == []
+    assert trim_stop_interaction(only_moves)[0] == []

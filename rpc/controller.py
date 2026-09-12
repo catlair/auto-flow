@@ -345,16 +345,19 @@ class AppController:
         result = rec.stop()
         if trim:
             from core.recorder import trim_stop_interaction
-            result.events = trim_stop_interaction(result.events)
+            result.events, trimmed = trim_stop_interaction(result.events)
+            self._last_trimmed = trimmed
         self._last_record = result
         # 丢帧定位计量一并上报：captured=系统投递数；count=captured-filtered-limit 后入库数。
         # count << captured 且 filtered 也小 → 系统层（CGEventTap）丢事件，需要另查。
+        trimmed = getattr(self, "_last_trimmed", 0)
         stats = {
             "count": len(result.events),
             "origin": [result.origin_x, result.origin_y],
             "stopped_by_limit": result.stopped_by_limit,
             "captured": result.n_captured,
-            "filtered": result.n_filtered,
+            "filtered": result.n_filtered + trimmed,  # 裁掉的停止交互计入过滤
+            "trimmed": trimmed,
             "limit_dropped": result.n_limit_dropped,
             "mouse_died": result.mouse_listener_died,
             "kb_died": result.kb_listener_died,

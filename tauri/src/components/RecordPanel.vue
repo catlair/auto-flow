@@ -122,7 +122,7 @@ async function onToNode() {
     </div>
     <div v-if="store.lastRecordInfo" class="af-rec-stats">
       已录 {{ store.lastRecordInfo.count }} 条事件<template v-if="store.lastRecordInfo.filtered">
-        · 阈值过滤微移动 {{ store.lastRecordInfo.filtered }} 条</template><template v-if="store.lastRecordInfo.limit_dropped">
+        · 过滤微移动/停止交互 {{ store.lastRecordInfo.filtered }} 条</template><template v-if="store.lastRecordInfo.limit_dropped">
         · 超限丢弃 {{ store.lastRecordInfo.limit_dropped }} 条</template><template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
         · <span style="color:#e34d59">监听中断</span></template>
     </div>
