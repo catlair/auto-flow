@@ -11,10 +11,82 @@ import threading
 import time
 from typing import Callable, Optional
 
-from pynput.mouse import Button, Controller as MouseController
+from pynput.keyboard import Controller as KeyboardController
 
 from core.events import MacroEvent
 from core.keymap import name_to_key
+
+import logging
+
+import Quartz as _Q
+
+logger = logging.getLogger("autoflow.player")
+
+_BTN_TYPE = {"left": _Q.kCGMouseButtonLeft, "right": _Q.kCGMouseButtonRight,
+             "middle": _Q.kCGMouseButtonCenter}
+
+
+class QuartzMouse:
+    """Quartz 直发的鼠标输出（post 到 kCGHIDEventTap）。
+
+    为什么不用 pynput 的 Controller：PyInstaller frozen sidecar 里
+    pynput 鼠标 press/release 会【静默失效】（不抛异常、事件不出现），
+    表现为「回放移动正常但点击无效果」。post 目标用 HID 层。
+    """
+
+    def __init__(self) -> None:
+        self._pos = _current_pos()
+
+    @property
+    def position(self) -> tuple:
+        return _current_pos()
+
+    @position.setter
+    def position(self, xy) -> None:
+        x, y = int(xy[0]), int(xy[1])
+        ev = _Q.CGEventCreateMouseEvent(None, _Q.kCGEventMouseMoved, (x, y),
+                                        _Q.kCGMouseButtonLeft)
+        _Q.CGEventPost(_Q.kCGSessionEventTap, ev)
+        self._pos = (x, y)
+
+    def _post_button(self, etype, button: str, clicks: int) -> None:
+        x, y = self.position
+        ev = _Q.CGEventCreateMouseEvent(None, etype, (x, y),
+                                        _BTN_TYPE.get(button, _Q.kCGMouseButtonLeft))
+        _Q.CGEventSetIntegerValueField(ev, _Q.kCGMouseEventClickState, clicks)
+        _Q.CGEventPost(_Q.kCGSessionEventTap, ev)
+        logger.info("mouse post: %s btn=%s at (%d,%d) clicks=%d",
+                    etype, button, x, y, clicks)
+
+    def press(self, button: str = "left") -> None:
+        self._post_button(_Q.kCGEventLeftMouseDown if button == "left"
+                          else _Q.kCGEventRightMouseDown if button == "right"
+                          else _Q.kCGEventOtherMouseDown, button, 1)
+
+    def release(self, button: str = "left") -> None:
+        self._post_button(_Q.kCGEventLeftMouseUp if button == "left"
+                          else _Q.kCGEventRightMouseUp if button == "right"
+                          else _Q.kCGEventOtherMouseUp, button, 1)
+
+    def click(self, button: str = "left", count: int = 1) -> None:
+        for i in range(1, count + 1):
+            self._post_button(_Q.kCGEventLeftMouseDown if button == "left"
+                              else _Q.kCGEventRightMouseDown if button == "right"
+                              else _Q.kCGEventOtherMouseDown, button, i)
+            self._post_button(_Q.kCGEventLeftMouseUp if button == "left"
+                              else _Q.kCGEventRightMouseUp if button == "right"
+                              else _Q.kCGEventOtherMouseUp, button, i)
+
+    def scroll(self, dx: int, dy: int) -> None:
+        x, y = self.position
+        ev = _Q.CGEventCreateScrollWheelEvent(None, _Q.kCGScrollEventUnitPixel, 1, int(dy))
+        _Q.CGEventSetIntegerValueField(ev, _Q.kCGScrollWheelEventDeltaAxis2, int(dx))
+        _Q.CGEventPost(_Q.kCGSessionEventTap, ev)
+
+
+def _current_pos() -> tuple:
+    loc = _Q.CGEventGetLocation(_Q.CGEventCreate(None))
+    return (loc.x, loc.y)
 from core.mactype import MacKeyboardController as KeyboardController
 
 STEP_PX = 10.0
@@ -39,7 +111,7 @@ class PlayOptions:
 class Player:
     def __init__(self) -> None:
         self._stop = threading.Event()
-        self.mouse = MouseController()
+        self.mouse = QuartzMouse()
         self.kb = KeyboardController()
         self._t0 = 0.0
 
@@ -75,7 +147,7 @@ class Player:
         self._t0 = time.monotonic()
 
         pos = start
-        held_button: Optional[Button] = None
+        held_button: Optional[str] = None
         pressed_keys: list = []
         total = len(events)
         try:
@@ -140,9 +212,8 @@ class Player:
         return (opt.base_x, opt.base_y)
 
     @staticmethod
-    def _button(name: Optional[str]) -> Button:
-        return {"left": Button.left, "right": Button.right, "middle": Button.middle}.get(
-            name or "left", Button.left)
+    def _button(name: Optional[str]) -> str:
+        return name if name in ("left", "right", "middle") else "left"
 
     def _wait(self, seconds: float) -> None:
         """等待到事件的计划时间点，随时响应停止。"""

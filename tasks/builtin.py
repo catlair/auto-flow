@@ -74,8 +74,7 @@ class MouseActionTask(BaseTask):
             ctx.player.glide_now((dx, dy))
             return
         ctx.player.glide_now((dx, dy))
-        btn = {"left": Button.left, "right": Button.right, "middle": Button.middle}.get(
-            p.get("button", "left"), Button.left)
+        btn = str(p.get("button", "left"))
         if p.get("action") == "double_click":
             m.click(btn, 2)
         elif p.get("action") == "press":
@@ -204,8 +203,7 @@ class ImageClickTask(BaseTask):
                 action = p.get("action", "click")
                 if action == "move":
                     return
-                btn = Button.left
-                ctx.player.mouse.click(btn, 2 if action == "double_click" else 1)
+                ctx.player.mouse.click("left", 2 if action == "double_click" else 1)
                 return
             if _time.monotonic() >= deadline:
                 if p.get("not_found", "跳过") == "停止工作流":
@@ -247,8 +245,7 @@ class OcrClickTask(BaseTask):
                 action = p.get("action", "click")
                 if action == "move":
                     return
-                btn = Button.left
-                ctx.player.mouse.click(btn, 2 if action == "double_click" else 1)
+                ctx.player.mouse.click("left", 2 if action == "double_click" else 1)
                 return
             if _time.monotonic() >= deadline:
                 if p.get("not_found", "跳过") == "停止工作流":
@@ -302,8 +299,7 @@ class YoloClickTask(BaseTask):
                 action = p.get("action", "click")
                 if action == "move":
                     return
-                btn = Button.left
-                ctx.player.mouse.click(btn, 2 if action == "double_click" else 1)
+                ctx.player.mouse.click("left", 2 if action == "double_click" else 1)
                 return
             if _time.monotonic() >= deadline:
                 if p.get("not_found", "跳过") == "停止工作流":

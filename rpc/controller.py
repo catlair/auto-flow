@@ -299,20 +299,38 @@ class AppController:
         return {"running": self.running}
 
     # ---- record.*（Recorder 包装，100ms 批量推 record.event，§5 节流） ----
-    def record_start(self) -> dict:
+    def record_start(self, window_bounds: Any = None) -> dict:
         from core.recorder import Recorder
         with self._lock:
             if self.recording:
                 raise ControllerError(-32001, "already_running")
             if self.running:
                 raise ControllerError(-32002, "busy_recording")
-            self.recorder = Recorder(skip_keys=set(self._hotkey_map.keys()))
+            self.recorder = Recorder(skip_keys=set(self._hotkey_map.keys()),
+                                     window_bounds=self._parse_bounds(window_bounds))
             self.recorder.start()
             self.recording = True
             self._rec_poller_rec = self.recorder
         self._rec_poller = threading.Thread(target=self._record_poll, name="rec-poll", daemon=True)
         self._rec_poller.start()
         return {"recording": True}
+
+    @staticmethod
+    def _parse_bounds(b: Any) -> Optional[tuple]:
+        """窗口边界 [x,y,w,h]（逻辑点）。非法输入返回 None（不过滤）。"""
+        try:
+            if isinstance(b, (list, tuple)) and len(b) == 4:
+                return tuple(int(v) for v in b)
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    def record_bounds(self, bounds: Any) -> dict:
+        """录制期间窗口移动/缩放时更新边界。"""
+        with self._lock:
+            if self.recorder is not None:
+                self.recorder.set_window_bounds(self._parse_bounds(bounds))
+        return {"ok": True}
 
     def record_subscribe(self, on: bool) -> dict:
         """§3.2：仅当录制面板订阅时才向 stdout 推送 record.event，避免高频事件打爆管道。"""
@@ -343,21 +361,21 @@ class AppController:
             self.recorder = None
             self.recording = False
         result = rec.stop()
-        if trim:
-            from core.recorder import trim_stop_interaction
-            result.events, trimmed = trim_stop_interaction(result.events)
-            self._last_trimmed = trimmed
+        # 尾部停留补时：最后一个事件是移动时，把录制结束前的停留时长补进其
+        # 时间戳——「移过去并停留十秒」的时序在回放中被完整保留。
+        if result.events and result.events[-1].kind == "move":
+            elapsed = rec.elapsed_ms()
+            if elapsed > result.events[-1].ts_ms:
+                result.events[-1].ts_ms = elapsed
         self._last_record = result
         # 丢帧定位计量一并上报：captured=系统投递数；count=captured-filtered-limit 后入库数。
         # count << captured 且 filtered 也小 → 系统层（CGEventTap）丢事件，需要另查。
-        trimmed = getattr(self, "_last_trimmed", 0)
         stats = {
             "count": len(result.events),
             "origin": [result.origin_x, result.origin_y],
             "stopped_by_limit": result.stopped_by_limit,
             "captured": result.n_captured,
-            "filtered": result.n_filtered + trimmed,  # 裁掉的停止交互计入过滤
-            "trimmed": trimmed,
+            "filtered": result.n_filtered,
             "limit_dropped": result.n_limit_dropped,
             "mouse_died": result.mouse_listener_died,
             "kb_died": result.kb_listener_died,

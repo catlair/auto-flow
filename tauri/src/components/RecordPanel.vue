@@ -70,7 +70,7 @@ onBeforeUnmount(() => {
 
 async function onToggleRecord() {
   try {
-    await store.toggleRecord("button");
+    await store.toggleRecord();
     const s = store.lastRecordInfo;
     if (s?.mouse_died || s?.kb_died) {
       MessagePlugin.warning(

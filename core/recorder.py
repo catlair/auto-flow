@@ -45,7 +45,8 @@ ButtonName = {"left": "left", "right": "right", "middle": "middle"}
 class Recorder:
     """调用 start() 后台监听；poll() 取增量事件；stop() 结束并返回 RecordResult。"""
 
-    def __init__(self, skip_keys: Optional[set] = None) -> None:
+    def __init__(self, skip_keys: Optional[set] = None,
+                 window_bounds: Optional[tuple] = None) -> None:
         self._q: queue.Queue[Optional[MacroEvent]] = queue.Queue()
         self._events: list[MacroEvent] = []
         self._start_ms = 0
@@ -63,6 +64,10 @@ class Recorder:
         self._n_limit_dropped = 0
         self._mouse_died = False
         self._kb_died = False
+        # Auto Flow 自身窗口边界（逻辑坐标 x,y,w,h）：录制时丢弃落在窗口内的
+        # 鼠标事件——点「停止录制」按钮、移动到按钮等操作天然不入库（确定性，
+        # 无需猜测式裁剪）。边界由前端在 record.start/窗口移动时下发。
+        self._win_bounds = window_bounds
         self._lock = threading.Lock()
 
     # ---- 监听回调（监听线程里执行，只入队） ----
@@ -124,6 +129,20 @@ class Recorder:
             self._accept(ev)
         return self.result()
 
+    def elapsed_ms(self) -> int:
+        """录制已进行时长（毫秒），用于把尾部停留补进最后一个事件。"""
+        return now_ms() - self._start_ms if self._start_ms else 0
+
+    def set_window_bounds(self, bounds: Optional[tuple]) -> None:
+        self._win_bounds = bounds
+
+    def _in_window(self, x: int, y: int) -> bool:
+        b = self._win_bounds
+        if not b:
+            return False
+        bx, by, bw, bh = b
+        return bx <= x < bx + bw and by <= y < by + bh
+
     def poll(self) -> list[MacroEvent]:
         out = []
         while True:
@@ -140,6 +159,9 @@ class Recorder:
             if len(self._events) >= MAX_RECORD_EVENTS:
                 self._stopped_by_limit = True
                 self._n_limit_dropped += 1
+                return
+            if ev.kind in ("move", "mouse", "wheel") and self._in_window(ev.x, ev.y):
+                self._n_filtered += 1  # 落在 Auto Flow 窗口内的交互不录制
                 return
             if ev.kind == "move":
                 if self._last_pos is not None and abs(ev.x - self._last_pos[0]) < MOVE_THRESHOLD_PX \
@@ -163,10 +185,6 @@ class Recorder:
                                 mouse_listener_died=self._mouse_died,
                                 kb_listener_died=self._kb_died)
 
-
-def trim_stop_interaction(events: list[MacroEvent]) -> tuple[list[MacroEvent], int]:
-    """返回 (裁剪后事件, 裁掉数量)。"""
-    return _trim(events), len(events) - len(_trim(events))
 
 
 def _trim(events: list[MacroEvent]) -> list[MacroEvent]:

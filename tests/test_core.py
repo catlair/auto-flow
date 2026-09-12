@@ -564,31 +564,23 @@ def test_broadcast_summary_never_mutates_tree(tmp_path):
     ctrl.shutdown()
 
 
-def test_trim_stop_interaction():
-    """按钮停止时必须裁掉停止交互：末次点击 + 移向按钮的移动。"""
-    from core.recorder import trim_stop_interaction
-    E = lambda **kw: MacroEvent(**kw)
-    events = [
-        E(ts_ms=0, kind="move", x=100, y=100),
-        E(ts_ms=200, kind="mouse", x=200, y=200, button="left", pressed=True),   # 打开 dock
-        E(ts_ms=300, kind="mouse", x=200, y=200, button="left", pressed=False),
-        E(ts_ms=400, kind="mouse", x=300, y=300, button="left", pressed=True),   # 关闭应用
-        E(ts_ms=500, kind="mouse", x=300, y=300, button="left", pressed=False),
-        E(ts_ms=600, kind="move", x=900, y=420),                                 # 移向停止按钮
-        E(ts_ms=700, kind="mouse", x=950, y=430, button="left", pressed=True),   # 停止点击
-        E(ts_ms=800, kind="mouse", x=950, y=430, button="left", pressed=False),
-    ]
-    out, _ = trim_stop_interaction(events)
-    # 回放终止于「关闭应用」点击；移向停止按钮的路径与停止点击一并移除
-    assert len(out) == 5 and out[-1].pressed is False and out[-1].x == 300
-    # 热键停止（F9 已被 skip_keys 过滤）不应误裁：末次点击是实质动作
-    hotkey_stop = events[:-2]  # 假设 F9 停止：无停止点击，尾部是移动
-    out2, _ = trim_stop_interaction(hotkey_stop)
-    # 无 trim 标志时调用方不会调用；但函数自身对「末尾无按下」的情形裁移动——
-    # 热键路径根本不调用本函数，这里仅验证纯函数行为可预期
-    assert len(out2) <= len(hotkey_stop)
-    # 全移动序列：末次按下为停止点击，裁后为空
-    only_moves = [E(ts_ms=0, kind="move", x=1, y=1),
-                  E(ts_ms=100, kind="mouse", x=2, y=2, button="left", pressed=True),
-                  E(ts_ms=150, kind="mouse", x=2, y=2, button="left", pressed=False)]
-    assert trim_stop_interaction(only_moves)[0] == []
+def test_recorder_drops_events_inside_window_bounds():
+    """录制时落在 Auto Flow 自身窗口内的鼠标事件不录制（确定性替代猜测式裁剪）：
+    用户点「停止录制」按钮、移向按钮的移动天然不入事件序列。"""
+    from core.recorder import Recorder
+    rec = Recorder(window_bounds=(90, 50, 1100, 720))
+    rec.start()
+    rec._accept(MacroEvent(ts_ms=0, kind="move", x=500, y=400))      # 窗口内
+    rec._accept(MacroEvent(ts_ms=1, kind="mouse", x=1000, y=400, button="left", pressed=True))   # 窗口内
+    rec._accept(MacroEvent(ts_ms=2, kind="move", x=1300, y=400))     # 窗口外
+    rec._accept(MacroEvent(ts_ms=3, kind="mouse", x=1300, y=400, button="left", pressed=True))   # 窗口外
+    rec._accept(MacroEvent(ts_ms=4, kind="key", key="a", pressed=True))  # 键盘不受边界影响
+    rec._accept(MacroEvent(ts_ms=5, kind="wheel", x=200, y=200, wheel_dy=1))  # 窗口内滚轮
+    rec.stop()
+    r = rec.result()
+    kinds = [(e.kind, e.x, e.y) for e in r.events]
+    assert ("move", 1300, 400) in kinds and ("mouse", 1300, 400) in kinds
+    mouse_moves = [(x, y) for k, x, y in kinds if k in ("move", "mouse", "wheel")]
+    assert all(not (90 <= x < 1190 and 50 <= y < 770) for x, y in mouse_moves)
+    assert any(e.kind == "key" for e in r.events)
+

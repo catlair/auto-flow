@@ -213,6 +213,26 @@ fn send_rpc(app: tauri::AppHandle, line: String) -> Result<(), String> {
     }
 }
 
+/// 主窗边界（逻辑点 x,y,w,h）。前端在录制开始/窗口移动时下发给后端做
+/// 窗口内事件过滤。为什么不走前端 window API：outerPosition/scaleFactor
+/// 需要 core:window capability，缺权限时静默失败 → 后端收不到边界，
+/// 「点停止按钮被录进事件」的过滤完全失效。Rust 侧无权限问题。
+#[tauri::command]
+fn window_bounds(app: tauri::AppHandle) -> Result<(f64, f64, f64, f64), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    Ok((
+        pos.x as f64 / scale,
+        pos.y as f64 / scale,
+        size.width as f64 / scale,
+        size.height as f64 / scale,
+    ))
+}
+
 /// 回放防误触：运行期间主窗开启鼠标穿透（点击落到窗下方的目标上），
 /// 运行结束由前端关闭。录制时保持可点（用户要点停止按钮）。
 #[tauri::command]
@@ -255,7 +275,7 @@ pub fn run() {
             spawn_and_watch(&handle, &state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![send_rpc, rpc_status, set_click_through])
+        .invoke_handler(tauri::generate_handler![send_rpc, rpc_status, set_click_through, window_bounds])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -70,7 +70,7 @@ def isolate_desktop_and_schedule(monkeypatch, tmp_path):
     from rpc.controller import AppController
 
     monkeypatch.setenv("AUTOFLOW_DATA_DIR", str(tmp_path / "appdata"))
-    monkeypatch.setattr(player, "MouseController", FakeMouse)
+    monkeypatch.setattr(player, "QuartzMouse", FakeMouse)
     monkeypatch.setattr(player, "KeyboardController", FakeKeyboard)
     # 不读取、也不写回用户真实 config.json（定时配置）
     monkeypatch.setattr(AppController, "_schedule_load", lambda self: {})

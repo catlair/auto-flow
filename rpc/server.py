@@ -284,10 +284,11 @@ _HANDLERS = {
     # --- 运行 / 录制（§5/§9.5，P1-2） ---
     "run.start": _ctl(lambda p: _CTRL.run_start(p.get("base_x", 0), p.get("base_y", 0))),
     "run.stop": _ctl(lambda p: _CTRL.run_stop()),
-    "record.start": _ctl(lambda p: _CTRL.record_start()),
-    "record.stop": _ctl(lambda p: _CTRL.record_stop(bool((p or {}).get("trim", False)))),
+    "record.start": _ctl(lambda p: _CTRL.record_start(p.get("window_bounds"))),
+    "record.stop": _ctl(lambda p: _CTRL.record_stop()),
     "record.toNode": _ctl(lambda p: _CTRL.record_to_node()),
     "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
+    "record.bounds": _ctl(lambda p: _CTRL.record_bounds(p.get("bounds"))),
     # --- 模板截取（screencapture -i 框选，异步回填 template.snipped） ---
     "template.snip": _ctl(lambda p: _CTRL.template_snip()),
     # --- 输入监控实际可收性自检（F18 合成键回环） ---
