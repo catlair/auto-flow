@@ -431,7 +431,7 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 | `ui/scheduler.py::_apply` | 未选工作流时 `path_edit.text()` 是占位文本「（未选择）」，为 truthy 会绕过 `bool(workflow_path)` 校验 | 定时器被启用但路径非法，到点触发必然 `Workflow.load` 失败 | ✅ 已修 |
 | `tasks/builtin.py` | 5 个节点同时用 `@register` 类装饰器与末尾 `register(实例)`，注册两次 | 无害但冗余，且决定菜单顺序（见 §9.4） | ⬜ 待办 |
 | `core/vision.py::grab_screen_bgr` | 只取 `sct.monitors[1]`（主屏），scale 也只按主屏算 | 多屏环境下图像/OCR/YOLO 只在主屏生效，副屏坐标还会点歪 | ✅ 已修（多屏，2026-09-11，见 §15.5） |
-| `tasks/builtin.py::KeyboardInputTask` | `pynput` 的 `kb.type()` 只支持 ASCII | 「键盘输入-文本」填中文会失败；改进方案：走 `CGEventKeyboardSetUnicodeString` 或剪贴板粘贴 |
+| `tasks/builtin.py::KeyboardInputTask` | `pynput` 的 `kb.type()` 只支持 ASCII | 「键盘输入-文本」填中文静默无效 | ✅ 已修（2026-09-12，见 §15.6） |
 | `ui/main_window.py` | `self.use_rel_check = None`、`EventsEditMixin` 空类 | 死代码，清理 |
 
 > 前两项是**用户可见的功能性故障**，优先级高于迁移本身，建议先修。
@@ -451,8 +451,8 @@ onnxruntime / OpenCV / CoreML 的 C++ 层告警。任一字节混入都会让前
 取消时不覆盖原值；定时对话框断言构造成功、`_apply` 在空路径时拒绝启用、正常路径下
 `nextFire` 计算正确。10 项断言全部通过；`pytest tests/` 24 例全通过（未回归）。
 
-**未做**：`pynput kb.type()` 中文输入、节点双注册与菜单顺序（§9.4）——这两项属行为变更，
-放在 P0.5/P4 与迁移一并处理。**多屏支持已于 2026-09-11 完成，见 §15.5。**
+**未做**：节点双注册与菜单顺序（§9.4）——属行为变更，放在 P0.5/P4 与迁移一并处理。
+**多屏支持已于 2026-09-11 完成（§15.5）；中文输入已于 2026-09-12 完成（§15.6）。**
 
 ### 15.2 授权持久性 spike（P0-S）构建与状态（2026-09-01）
 
@@ -664,6 +664,44 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 因为退化输出不确定，「删掉防护会不会让用例失败」本身不可靠，所以测试分两层：
 谓词与诊断各有一个**确定性**用例（删防护必然失败），行为用例只作兜底。
 
+### 15.6 中文输入（原 §15.1 划入 P4 的项，2026-09-12 完成）
+
+`pynput` 的 `Controller.type()` 走「字符 → 虚拟键码」映射，只覆盖 ASCII；填中文时
+它**静默跳过**——节点看起来执行了，目标框里什么都没有，也不报错。
+
+**改法**：新增 `core/mactype.py`，用 `CGEventKeyboardSetUnicodeString` 把文本直接
+挂在键盘事件上投递，绕开键码映射。`core/player.py` 改用它提供的
+`MacKeyboardController`——只覆盖 `type()`，`press()` / `release()` 仍走 pynput
+（组合键、单键本来就是键码语义，那条路径是验证过的）。
+
+`tasks/builtin.py::KeyboardInputTask` 那行 `kb.type(...)` **不用改**，换控制器即生效；
+`ui/` 也自动受益。
+
+三个实测踩到的点：
+
+1. `CGEventKeyboardSetUnicodeString(event, length, text)` 的 `length` 是 **UTF-16
+   码元数**，不是 Python 字符数：`len("emoji 🎯")` 是 8，UTF-16 要 9（代理对占 2）。
+   传错会**静默截断**，甚至把代理对劈成半个字符。用 `u16_len()` 算。
+2. 事件层实测**没有** 20 码元上限（36 码元也能完整往返），但接收方普遍只处理每个
+   事件的前若干字符，故仍按 20 码元切块，且切块绝不切开代理对。
+3. 控制字符仍按**真实按键**投递：旧行为是 `\n` → Return、`\t` → Tab；用 Unicode
+   通道发字面换行符多数应用不认，属行为回退，故保持旧语义（`\r\n` 归一成单个 Return）。
+
+**验证**（`tests/test_mactype.py`，12 例，全部注入假投递器，不产生真实键盘输入）
+
+- 反向验证：① `player.py` 退回 `pynput.keyboard.Controller` → 接线用例失败；
+  ② 长度参数退回 `len(chunk)` → 星平面用例失败，并如实显示截断结果
+  （`emoji 🎯 𝕏 混排` → `emoji 🎯 𝕏`）。
+- 一个测试坑：`CGEventKeyboardGetUnicodeString` 对**没挂字符串**的事件返回的是
+  未定义垃圾值（实测 `(1, '\r')`），不是 `(0, '')`——不能拿它断言「该事件不带文本」。
+- `tests/conftest.py` 新增 autouse fixture `block_real_text_typing`：默认禁止真实
+  键盘投递（`CGEventPost` 会把字符打进用户**当前聚焦**的窗口）。
+- 全量：Python **87 passed**。
+
+**未做端到端验证**：投递序列（keyDown 带串 + 空 keyUp）按 CGEvent 惯用写法实现，
+但**没有**在真实聚焦的输入框里跑过——那需要往用户当前窗口打字。人工验证：
+新建「键盘输入-文本」节点填中文，对着一个文本框运行。
+
 ---
 
 ## 16. 持久化与配置分工
@@ -728,8 +766,9 @@ stdout 仅含 compact NDJSON（§13 洁净性成立）。另已接齐 §9 全部
 合计 **4.5~5.5 个工作日**（原估 2.5~3 天；§15.1 的缺陷修复已完成，从排期中扣除 0.5）。
 增加主要来自：授权 spike（0.5）、工作流真源后端化（0.5）、第三项权限（0.3）、打包方案修正（0.5）。
 
-> **2026-09-11 补充**：§15.1 划入 P4 的「多屏支持」已完成（见 §15.5）。P4 余下项
-> （拖拽排序、事件流虚拟滚动、中文输入改进、诊断面板、崩溃重连提示、节点顺序、死代码清理）未动。
+> **2026-09-11 补充**：§15.1 划入 P4 的「多屏支持」已完成（见 §15.5）；**2026-09-12：
+> 「中文输入改进」已完成（见 §15.6）**。P4 余下项（拖拽排序、事件流虚拟滚动、诊断面板、
+> 崩溃重连提示、节点顺序 §9.4、死代码清理）未动。
 
 **进度（2026-09-01）**：P0-S 已收口；P1 后端 RPC 面（§9）全部接齐并 12 例 pytest 通过（§15.3），含 §3.2 `record.subscribe` 订阅门控（未订阅时 `_record_poll` 不推送 `record.event`，前端 `toggleRecord` 在录制开始/停止时订阅/退订）；
 P1-5 Tauri 2 脚手架已**真正编译通过并打包**：Rust（`~/.cargo/bin`，rustup stable aarch64）`cargo build`/`cargo build --release` 均通过，`npm run tauri build` 产出 `Auto Flow.app` + `.dmg`，sidecar onedir 落点校正为 `Contents/Resources/autoflow-sidecar/`（与 §12 / `lib.rs` 一致），嵌入 sidecar 冒烟测试 `app.info` 返回合法帧。P3 签名基础设施已落地并提交 `8caf38b`：`scripts/sign_tauri_app.sh` 对 `.app` 做 MacDev 双签 + 强化运行时（`--options runtime`）+ 安全时间戳，自底向上先签 sidecar 再签 `.app` 外壳（已实跑验证主二进制与 sidecar 均 `flags=0x10000(runtime)`、`Authority=MacDev`、整体 `valid on disk`）；`scripts/sync_app.sh` 改指 Tauri 产物、签名自检后 `cp -R` 到 `/Applications` 并去 quarantine、`open`；`docs/权限引导.md` 写就三项隐私权限作用与授予方式。剩余：① 用户 Aqua 会话里真机窗体联调（headless 环境无法渲染 webview，前端↔Rust↔sidecar 三方需双击 `.app` 或 `npm run tauri dev` 验证）；② 可选 notarization——提供 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` 后 `bash scripts/sign_tauri_app.sh` 实跑 `notarytool submit --wait` + `stapler staple`，即可免手动授权弹窗直接分发。

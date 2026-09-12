@@ -99,3 +99,21 @@ def block_real_screen_capture(monkeypatch):
     monkeypatch.setattr(vision, "_quartz_capture", blocked)
 
 
+@pytest.fixture(autouse=True)
+def block_real_text_typing(monkeypatch):
+    """默认禁止真实键盘投递。
+
+    `CGEventPost` 会把字符打进**用户当前聚焦的窗口**——跑测试时那可能是他的
+    编辑器或聊天框。文本输入的用例请注入 `mactype.type_text(text, post=记录器)`
+    收集事件，不要真投递。
+    """
+    from core import mactype
+
+    def blocked(*_args, **_kwargs):
+        raise RuntimeError(
+            "测试环境禁止真实键盘投递：请用 mactype.type_text(text, post=记录器)"
+            " 或直接断言事件构造，不要 CGEventPost")
+
+    monkeypatch.setattr(mactype, "_default_post", blocked)
+
+

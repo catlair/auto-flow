@@ -12,10 +12,10 @@ import time
 from typing import Callable, Optional
 
 from pynput.mouse import Button, Controller as MouseController
-from pynput.keyboard import Controller as KeyboardController
 
 from core.events import MacroEvent
 from core.keymap import name_to_key
+from core.mactype import MacKeyboardController as KeyboardController
 
 STEP_PX = 10.0
 MAX_STEPS = 120
