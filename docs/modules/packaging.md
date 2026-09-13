@@ -72,11 +72,14 @@
    - 判断「某函数里还有没有 `pop`」要取**该函数自身**的 code object 看
      `co_names`，不能扫全模块（模块里别处可能合法地 pop）；
    - `record.stop` 把统计**直接当 result 返回**，不嵌套在 `stats` 里。
-8. **残留清理的跨卷坑**：项目在独立 APFS 卷上时，`mv` 到 `~/.Trash` 是跨设备
-   rename，报 `EXDEV` 后**一份都移不走**；Finder/AppleScript 删除会被宿主沙箱
+8. **残留清理的跨卷坑**：项目在独立 APFS 卷上时，`mv` 到 `~/.Trash` 可能是跨设备
+   rename，报 `EXDEV` 后一份都移不走；Finder/AppleScript 删除会被宿主沙箱
    以「权限违例」挡掉。`clean_old_builds.sh` 因此在 `mv` 失败时退化为直接删除
    （`.old.*` 全是可再生构建产物）。dist/ 里的一次性遗留（旧版 .app/.dmg）
    不带 `.old` 后缀，为防误删不纳入脚本，需手动清。
+   **2026-09-13 实测补充**：在 `/Users/catlair/mobile` 这个卷上跑 `--apply`，
+   4 份残留（约 0.5GB）**全部成功移入 `~/.Trash`**，没走删除兜底。所以这条路径
+   至少现在是通的、可反悔的——清理前不必预设「不可恢复」。
 
 ## 已知问题
 
