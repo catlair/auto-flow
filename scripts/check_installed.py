@@ -54,7 +54,7 @@ def _sub_code(code, fname):
     return None
 
 
-def _artifact_checks(recorder, inputsource, controller, server) -> list:
+def _artifact_checks(recorder, inputsource, controller, server, vision) -> list:
     out = []
     if recorder is None:
         return [("core.recorder 没打进 PYZ（打包不完整？）", False)]
@@ -85,6 +85,16 @@ def _artifact_checks(recorder, inputsource, controller, server) -> list:
     # 入口脚本 rpc.server：方法表里的注册名（漏了就是方法不存在，调用报 -32601）
     out.append(("rpc.server 注册了 record.keysToText",
                 server is not None and "record.keysToText" in _all_consts(server)))
+
+    # core.vision：截屏必须请求**物理像素**（2026-09-13 修「截图识别没有效果」）。
+    # 这条最容易静默失效——不去掉那个标志位也不报错，只是匹配分数整体砍半，
+    # 从外面看和「屏上没有目标」一模一样。两个符号是 getattr 的字符串实参，
+    # 所以查函数自身的常量表，不查 co_names。
+    prefer = _sub_code(vision, "_prefer_physical_resolution") if vision else None
+    consts = _all_consts(prefer) if prefer is not None else set()
+    out.append(("core.vision 去掉 mss 的 NominalResolution（截屏取物理像素）",
+                "kCGWindowImageNominalResolution" in consts
+                and "IMAGE_OPTIONS" in consts))
     return out
 
 
@@ -116,7 +126,7 @@ def _load_pyz(exe: str) -> dict:
         f.write(car.extract("PYZ.pyz"))
     zar = ZlibArchiveReader(pyz_path)
     mods = {}
-    for name in ("core.recorder", "core.inputsource", "rpc.controller"):
+    for name in ("core.recorder", "core.inputsource", "rpc.controller", "core.vision"):
         try:
             mods[name] = zar.extract(name)      # 直接返回 code object，不是 bytes
         except Exception:
@@ -219,7 +229,8 @@ def main() -> int:
         results += _artifact_checks(mods["core.recorder"],
                                     mods["core.inputsource"],
                                     mods["rpc.controller"],
-                                    mods["rpc.server"])
+                                    mods["rpc.server"],
+                                    mods.get("core.vision"))
     except Exception as e:  # noqa: BLE001
         results.append((f"读 PYZ 失败：{e}", False))
     for desc, ok in results:
