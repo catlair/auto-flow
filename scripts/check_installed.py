@@ -95,6 +95,15 @@ def _artifact_checks(recorder, inputsource, controller, server, vision) -> list:
     out.append(("core.vision 去掉 mss 的 NominalResolution（截屏取物理像素）",
                 "kCGWindowImageNominalResolution" in consts
                 and "IMAGE_OPTIONS" in consts))
+
+    # core.vision：跨密度组要**自动缩放模板**（2026-09-13 F-VIS-10）。
+    # 同属「不生效也不报错」的一类：密度不一致时分数只是整体偏低，
+    # 从外面看和「屏上确实没有」一模一样。查 find_template 有没有真的调用它。
+    find = _sub_code(vision, "find_template") if vision else None
+    out.append(("core.vision 按屏幕密度自动重采样模板（跨密度组不必重截）",
+                _sub_code(vision, "_resampled_template") is not None
+                and find is not None
+                and "_resampled_template" in _co_names_recursive(find)))
     return out
 
 

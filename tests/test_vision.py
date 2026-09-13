@@ -343,8 +343,8 @@ def test_yolo_detections_sorted_by_confidence_across_screens(monkeypatch):
 # 模板于是比屏上目标大一倍，分数从 1.0 掉到 0.5 上下、永远过不了阈值，
 # 而且全程无日志。实测：2x 模板对 1x 屏 = 0.53；缩到同密度 = 0.9998。
 # --------------------------------------------------------------------------- #
-def _png_with_dpi(path, ppm: int | None) -> str:
-    """写一张真实可解码的最小 PNG；`ppm=None` 时不写 pHYs（未声明密度）。
+def _write_png(path, img: np.ndarray, ppm: int | None) -> str:
+    """把给定图像写成 PNG；`ppm=None` 时不写 pHYs（未声明密度）。
 
     144dpi 对应 ppm=5669、72dpi 对应 ppm=2835（`screencapture` 就按这两种写）。
     """
@@ -355,16 +355,25 @@ def _png_with_dpi(path, ppm: int | None) -> str:
         crc = zlib.crc32(ctype + data) & 0xFFFFFFFF
         return struct.pack(">I", len(data)) + ctype + data + struct.pack(">I", crc)
 
-    size = 64
-    raw = b"".join(b"\x00" + bytes((x * 4) % 256 for x in range(size * 3))
-                   for _ in range(size))
-    body = chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+    h, w = img.shape[:2]
+    # PNG 的颜色类型 2 是 **RGB**，而 numpy 图是 BGR：必须翻一下通道再写，
+    # 否则 cv2.imread 读回来会把 R/B 对调，自匹配分数从 1.0 掉到 0.33。
+    raw = b"".join(b"\x00" + img[y][:, ::-1].tobytes() for y in range(h))
+    body = chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
     if ppm is not None:
         body += chunk(b"pHYs", struct.pack(">IIB", ppm, ppm, 1))
     body += chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
     with open(path, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n" + body)
     return str(path)
+
+
+def _png_with_dpi(path, ppm: int | None) -> str:
+    """写一张 64x64 的最小 PNG；`ppm=None` 时不写 pHYs（未声明密度）。"""
+    size = 64
+    flat = np.array([(x * 4) % 256 for x in range(size * 3)], np.uint8)
+    img = np.tile(flat.reshape(size, 3), (size, 1, 1))
+    return _write_png(path, img, ppm)
 
 
 def _one_plain_screen(seed: int = 21):
@@ -449,3 +458,150 @@ def test_flat_template_is_reported(monkeypatch, caplog):
         assert not vision.find_template(0.8, template_bgr=flat).found
     assert any("近似纯色" in r.getMessage() and "模板" in r.getMessage()
                for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# 模板密度自动对齐（2026-09-13 真机实测后加）
+#
+# 背景：屏幕分辨率换到另一个**密度组**（2.0x ↔ 1.0x）时，原模板与截屏密度差
+# 一倍。真机实测 2x 模板对 1x 屏最高分 **0.7738**，而且落在**错误位置**
+# （屏幕中部），只比默认阈值 0.8 低一点点——用户把置信度调到 0.77 就会点错
+# 地方且不报错。修法是按 `屏幕 scale / 模板密度` 自动缩放模板再匹配。
+#
+# 真机验证：跨组从 False 0.7738 → True 0.9354（位置经放大截图肉眼确认）；
+# 同组 factor=1.0，结果与不重采样完全一致（0.9590），无回归。
+# --------------------------------------------------------------------------- #
+def _one_1x_screen_with_target(patch_seed: int, top: int = 100, left: int = 200):
+    """一块 1280x832 的 1x 假屏，在 (left, top) 贴一个 40x20 的图案目标。"""
+    screen = _pattern(1280, 832, seed=31)
+    screen[top:top + 20, left:left + 40] = _pattern(40, 20, seed=patch_seed)
+    raws = [({"left": 0, "top": 0, "width": 1280, "height": 832}, screen)]
+    return screen, raws
+
+
+def _template_2x(screen, top=100, left=200):
+    """把屏上那块目标放大一倍、并声明 144dpi，模拟「在 2x 屏上截的模板」。
+
+    用 INTER_NEAREST 放大：每个像素变成 2x2 的同值块，于是按 0.5x
+    INTER_AREA 缩回来是**逐像素无损**的，分数应接近满分。
+    """
+    import cv2
+
+    patch = screen[top:top + 20, left:left + 40]
+    return cv2.resize(patch, (80, 40), interpolation=cv2.INTER_NEAREST)
+
+
+def test_density_mismatch_is_auto_resampled_and_matches(monkeypatch, tmp_path):
+    """跨密度组的核心保证：模板是 2x、屏幕是 1x 时，自动缩放后应该能匹配上。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    screen, raws = _one_1x_screen_with_target(patch_seed=32)
+    monkeypatch.setattr(vision, "_raw_screens", lambda: raws)
+    path = _write_png(tmp_path / "tpl2x.png", _template_2x(screen), 5669)
+
+    m = vision.find_template(0.9, template_path=path)
+    assert m.found, "密度不一致时应自动缩放后匹配成功"
+    assert m.adjusted == pytest.approx(0.5), "缩放系数 = 屏幕 1.0x / 模板 2.0x"
+    assert (m.x, m.y) == (220, 110), "坐标仍要落在目标中心"
+    assert m.score > 0.99, "往返缩放无损，分数应接近满分"
+
+
+def test_without_alignment_a_2x_template_would_miss(monkeypatch, tmp_path):
+    """反向验证上面那条：同一组数据、关掉密度识别，就必须匹配不上。
+
+    没有这条对照，`test_density_mismatch_is_auto_resampled_and_matches`
+    可能只是碰巧通过，无法证明「自动缩放」真的起了作用。
+    """
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    screen, raws = _one_1x_screen_with_target(patch_seed=32)
+    monkeypatch.setattr(vision, "_raw_screens", lambda: raws)
+    path = _write_png(tmp_path / "tpl2x.png", _template_2x(screen), 5669)
+    # 假装模板没声明密度 → 不做缩放，退回修复前的行为
+    monkeypatch.setattr(vision, "_png_density", lambda p: None)
+
+    m = vision.find_template(0.9, template_path=path)
+    assert not m.found
+    assert m.score < 0.9
+    assert m.adjusted is None
+
+
+def test_density_agreement_uses_the_template_as_is(monkeypatch, tmp_path):
+    """密度一致时不得重采样——白做功，还会引入插值误差。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    screen, raws = _one_1x_screen_with_target(patch_seed=33, top=300, left=400)
+    monkeypatch.setattr(vision, "_raw_screens", lambda: raws)
+    path = _write_png(tmp_path / "tpl1x.png",
+                      screen[300:320, 400:440], 2835)      # 1x 模板对 1x 屏
+
+    m = vision.find_template(0.9, template_path=path)
+    assert m.found and m.adjusted is None
+    assert (m.x, m.y) == (420, 310)
+    assert vision._resampled == {}, "密度一致时不该产生重采样缓存"
+
+
+def test_resampled_template_is_cached(monkeypatch, tmp_path):
+    """重采样结果必须缓存：匹配在重试循环里每 400ms 一轮，每轮都 resize 是浪费。"""
+    import cv2
+
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    screen, raws = _one_1x_screen_with_target(patch_seed=34)
+    monkeypatch.setattr(vision, "_raw_screens", lambda: raws)
+    path = _write_png(tmp_path / "tpl2x.png", _template_2x(screen), 5669)
+
+    calls = []
+    real_resize = cv2.resize
+    monkeypatch.setattr(cv2, "resize",
+                        lambda *a, **k: (calls.append(1), real_resize(*a, **k))[1])
+    for _ in range(3):
+        assert vision.find_template(0.9, template_path=path).found
+    assert len(calls) == 1, "三轮回调只该真正 resize 一次"
+
+
+def test_resampled_but_absent_reports_density_reason(monkeypatch, caplog, tmp_path):
+    """缩放后仍找不到时，reason 要点明密度不一致，免得用户以为缩放没生效。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    monkeypatch.setattr(vision, "_raw_screens", lambda: _one_plain_screen())
+    absent = _pattern(80, 40, seed=37)                      # 屏上根本没有这个图案
+    path = _write_png(tmp_path / "absent2x.png", absent, 5669)
+
+    with caplog.at_level("WARNING", logger="core.vision"):
+        m = vision.find_template(0.9, template_path=path)
+    assert not m.found
+    assert m.adjusted == pytest.approx(0.5)
+    assert "密度" in m.reason
+    assert any("像素密度" in r.getMessage() for r in caplog.records)
+
+
+def test_in_memory_template_is_never_resampled(monkeypatch):
+    """内存模板没有 pHYs，密度无从得知 ⇒ 不做缩放（调用方自己保证密度一致）。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    tpl = _pattern(40, 20, seed=38)
+    screen = _blank(1280, 832)
+    screen[50:70, 60:100] = tpl
+    monkeypatch.setattr(vision, "_raw_screens",
+                        lambda: [({"left": 0, "top": 0, "width": 1280, "height": 832}, screen)])
+
+    m = vision.find_template(0.9, template_bgr=tpl)
+    assert m.found and m.adjusted is None
+    assert vision._resampled == {}
+
+
+def test_auto_resample_is_announced_once(monkeypatch, caplog, tmp_path):
+    """自动缩放成功后要留一句 INFO 说明，否则「换了分辨率居然还能用」像玄学。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_resampled", {})
+    screen, raws = _one_1x_screen_with_target(patch_seed=39)
+    monkeypatch.setattr(vision, "_raw_screens", lambda: raws)
+    path = _write_png(tmp_path / "tpl2x.png", _template_2x(screen), 5669)
+
+    with caplog.at_level("INFO", logger="core.vision"):
+        for _ in range(3):
+            assert vision.find_template(0.9, template_path=path).found
+    hits = [r for r in caplog.records if "自动缩放" in r.getMessage()]
+    assert len(hits) == 1, "同一张模板只说明一次，不能每轮刷屏"
+    assert hits[0].levelname == "INFO", "这是说明不是告警，别标成 WARNING"

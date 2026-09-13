@@ -4,17 +4,17 @@
 
 | 模块 | 文档 | 状态 | 验收 | 备注 |
 | --- | --- | --- | --- | --- |
-| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 141 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
-| 回放引擎 | [player.md](modules/player.md) | ✅ | 141 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
+| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 148 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
+| 回放引擎 | [player.md](modules/player.md) | ✅ | 148 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
 | 工作流执行器 | [executor.md](modules/executor.md) | ✅ | 测试 | 异常兜底 + 条件门控 + 热停 |
 | 节点体系 | [nodes.md](modules/nodes.md) | ✅ | 测试 + 真机 | 9 种内置节点，自描述参数 |
-| 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | 截屏取物理像素，与 screencapture 模板同密度；「找不到」可诊断 |
+| 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | 截屏取物理像素；模板密度自动对齐，改分辨率不必重截模板 |
 | 全局热键/取点 | [hotkeys.md](modules/hotkeys.md) | ✅ | 真机 | 取点用按键事件坐标（CLI 读不到光标） |
 | 定时运行 | [schedule.md](modules/schedule.md) | ✅ | 测试 | 后端到点真跑，非仅通知 |
 | macOS 权限 | [permissions.md](modules/permissions.md) | ✅ | 真机 | TCC 按二进制授权；F18 回环自检 |
 | RPC 协议 | [rpc-protocol.md](modules/rpc-protocol.md) | ✅ | 91 测试 | 写锁防交错；广播 events 摘要化 |
 | 前端界面 | [frontend.md](modules/frontend.md) | ✅ | 真机 | 响应驱动刷新；通知仅广播冗余 |
-| 打包/签名/部署 | [packaging.md](modules/packaging.md) | ✅ | 11 项产物断言 | ⚠️ 修复后必须重打包部署；第 5 步 `check_installed.py` 收口 |
+| 打包/签名/部署 | [packaging.md](modules/packaging.md) | ✅ | 13 项产物断言 | ⚠️ 修复后必须重打包部署；第 5 步 `check_installed.py` 收口 |
 | 旧 PySide6 UI | — | ⛔ | — | 2026-09-12 删除（ui/、main.py、旧脚本、PySide6 依赖） |
 
 ## 近期计划（无主次排序）

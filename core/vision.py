@@ -19,6 +19,11 @@ Retina/非 Retina 的双屏下两块屏比例不同，用错就整体点偏。
 `screencapture` 也是物理像素，两者天然对齐；但 mss 默认会请求「名义分辨率」
 （逻辑尺寸），一旦如此，模板就比屏上目标大一倍、分数整体砍半——见
 `_prefer_physical_resolution()`。
+
+屏幕分辨率换到**另一个密度组**时（如 2.0x → 1.0x）也会出现同样的密度错配。
+`find_template` 会读模板 PNG 的 `pHYs` 密度、按 `屏幕 scale / 模板密度`
+自动缩放模板再匹配，所以跨密度组也能直接匹配、不必重新截模板；
+缩放后仍不达阈值才算「真的没找到」，并在 `MatchResult.reason` 里说明。
 """
 from __future__ import annotations
 
@@ -93,6 +98,14 @@ class MatchResult:
     x: int = 0          # 全局逻辑坐标（点），目标中心
     y: int = 0
     score: float = 0.0  # 0~1 置信度
+    adjusted: float | None = None
+    """为对齐屏幕密度而给模板施加的缩放系数；None = 未调整。
+
+    例如模板是 2x 而屏幕是 1x 时为 0.5。**有值**就说明这张模板与屏幕密度
+    本来不一致，是自动缩放之后才匹配的（见 `find_template`）。
+    """
+    reason: str = ""
+    """没找到时的原因说明；找到了或原因不明时为空串。"""
 
 
 def _raw_screens() -> list[tuple[dict, np.ndarray]]:
@@ -137,6 +150,49 @@ def _warn_once(key: str, msg: str, *args) -> None:
         return
     _warned.add(key)
     logger.warning(msg, *args)
+
+
+def _note_once(key: str, msg: str, *args) -> None:
+    """和 `_warn_once` 共用同一套去重闸门，但按 INFO 记。
+
+    用于「不是问题、只是说明」的情况——比如模板密度与屏幕不一致、已自动
+    缩放后匹配成功。用 WARNING 会把正常运行也标成异常。
+    """
+    if key in _warned:
+        return
+    _warned.add(key)
+    logger.info(msg, *args)
+
+
+# 缩放系数与 1.0 相差在此以内，就认为模板与屏幕密度本来就一致，不做重采样。
+_RESAMPLE_TOL = 0.02
+
+# 重采样模板的缓存：键 (模板路径, 缩放系数)。
+# 必须缓存——匹配在重试循环里每 400ms 跑一轮，每轮都 resize 一张模板纯属浪费；
+# 而缩放系数只有「屏幕密度 / 模板密度」这几种取值，命中率接近 100%。
+# 上限设小，避免长时间运行后无界增长。
+_resampled: dict[tuple[str, float], np.ndarray] = {}
+_RESAMPLED_MAX = 8
+
+
+def _resampled_template(path: str, tpl: np.ndarray, factor: float) -> np.ndarray:
+    """把模板按 `factor` 缩放到屏幕密度，结果按 (路径, 系数) 缓存复用。"""
+    key = (path, round(factor, 4))
+    hit = _resampled.get(key)
+    if hit is not None:
+        return hit
+    h, w = tpl.shape[:2]
+    # 缩到 0 像素会让 matchTemplate 抛错，至少留 1 像素
+    nw = max(int(round(w * factor)), 1)
+    nh = max(int(round(h * factor)), 1)
+    # 缩小用 INTER_AREA（抗混叠，实测 0.5x 后对同密度屏能到 0.9354）；
+    # 放大没有更好的信息可用，用 INTER_LINEAR 即可。
+    interp = cv2.INTER_AREA if factor < 1.0 else cv2.INTER_LINEAR
+    out = cv2.resize(tpl, (nw, nh), interpolation=interp)
+    if len(_resampled) >= _RESAMPLED_MAX:
+        _resampled.pop(next(iter(_resampled)))
+    _resampled[key] = out
+    return out
 
 
 def _is_flat(img: np.ndarray) -> bool:
@@ -193,7 +249,12 @@ def _png_density(path: str) -> float | None:
                     ppm, _ppm_y, unit = struct.unpack(">IIB", data[:9])
                     if unit != 1 or ppm == 0:   # 1 = 单位是米；0 = 只给纵横比
                         return None
-                    return (ppm * 0.0254) / _PNG_DPI_BASE
+                    # pHYs 只能存整数「像素/米」，所以 144dpi 实存 5669 ppm，
+                    # 反算是 143.9926 → 1.9999 而不是 2.0。四舍五入到两位，
+                    # 让 1x/2x 还原成**精确**的 1.0/2.0：缩放系数才正好是
+                    # 0.5 或 2.0，而不是 0.5000257（后者会让 INTER_AREA 取到
+                    # 非整数采样格，把细节糊掉、分数虚低）。
+                    return round((ppm * 0.0254) / _PNG_DPI_BASE, 2)
                 if ctype == b"IDAT":        # 像素数据之前都没有 pHYs，即未声明密度
                     return None
                 f.seek(length + 4, 1)       # 跳过数据 + CRC
@@ -201,11 +262,16 @@ def _png_density(path: str) -> float | None:
         return None
 
 
-def _warn_density_mismatch(path: str, screen_scales: list[float]) -> None:
+def _warn_density_mismatch(path: str, screen_scales: list[float],
+                           adjusted: float | None = None) -> None:
     """匹配失败时，若模板密度与截屏密度不一致，点名这个原因。
 
     密度不一致属于**静默失败**：分数只是整体偏低，从外面看跟「屏上确实没有」
     一模一样（2026-09-13 的「截图识别没有效果」就是它，排查了很久）。
+
+    现在匹配前会**自动按屏幕密度缩放模板**（`adjusted`），所以走到这里说明
+    缩放之后仍然没匹配上——那才是真的「屏上没有」。但仍然要点明密度这件事，
+    免得用户以为自动缩放没生效、继续在错误方向上找原因。
     """
     if not screen_scales or path in _warned:
         return
@@ -214,9 +280,11 @@ def _warn_density_mismatch(path: str, screen_scales: list[float]) -> None:
         return
     _warn_once(
         "density:" + path,
-        "模板 %s 的像素密度是 %.2fx，而截屏是 %sx，两者不一致会让匹配分数整体"
-        "偏低（看起来像「找不到」）。请用参数面板上的「截取」按钮重新截模板。",
-        path, density, "/".join(f"{s:g}" for s in screen_scales))
+        "模板 %s 的像素密度是 %.2fx，而截屏是 %sx，两者不一致。已自动把模板"
+        "缩放到屏幕密度%s后重试，仍未匹配——请确认目标确实在屏上，"
+        "或用「截取」按钮重新截模板。",
+        path, density, "/".join(f"{s:g}" for s in screen_scales),
+        f"（{adjusted:.2f}x）" if adjusted is not None else "")
 
 
 def captures() -> list[ScreenCapture]:
@@ -352,10 +420,19 @@ def find_template(threshold: float = 0.8,
     逐块屏匹配、取最高分：目标在哪块屏上都能找到，且坐标已含该屏偏移。
     代价是每轮重试的匹配次数随屏数线性增长（双屏约 2 倍）。
 
-    **模板必须与截屏同像素密度**：截屏是物理像素（Retina 上 scale=2），
-    而「截取模板」用的 `screencapture` 产出的也是物理像素，两者天然对齐；
-    若手工塞进来一张别处下载的 1x 小图，密度差一倍会让分数整体偏低，
-    看起来和「找不到」一样（`_warn_density_mismatch` 会在这种情况下点名）。
+    **模板密度会自动对齐**：截屏是物理像素（Retina 上 scale=2），而「截取模板」
+    用的 `screencapture` 产出的也是物理像素，两者天然对齐；但屏幕分辨率一旦换到
+    另一个**密度组**（例如 2.0x → 1.0x），原模板就比屏上目标大一倍、分数整体偏低。
+    这里按 `屏幕 scale / 模板密度` 自动把模板缩放到该屏的密度再匹配，
+    缩放系数记在 `MatchResult.adjusted` 里。
+
+    模板密度只有 PNG 的 `pHYs` 块能告诉我们，所以**内存模板（`template_bgr`）
+    不做密度对齐**——调用方自己保证密度一致。
+
+    缩放后仍低于阈值就按「找不到」返回，并在 `reason` 里点明是密度不一致。
+    绝不用一个错位的低分冒充命中：真机实测 2x 模板对 1x 屏最高分 **0.7738**，
+    落在屏幕中部的**错误位置**，只比默认阈值 0.8 低一点点——用户一旦把置信度
+    调到 0.77 就会点错地方，而且不报错。
     """
     if template_bgr is None:
         tpl = cv2.imread(template_path, cv2.IMREAD_COLOR)
@@ -364,7 +441,7 @@ def find_template(threshold: float = 0.8,
             _warn_once("missing-template:" + template_path,
                        "模板图读不出来：%s。文件可能已被移动或删除，"
                        "该节点会一直按「找不到」处理。", template_path)
-            return MatchResult(found=False)
+            return MatchResult(found=False, reason="模板图读不出来")
     else:
         tpl = template_bgr
     if _is_flat(tpl):
@@ -372,27 +449,55 @@ def find_template(threshold: float = 0.8,
         _warn_once("flat-template",
                    "模板图近似纯色（多半是在没有「屏幕录制」权限时截出来的），"
                    "匹配无意义，已按「找不到」处理：%s", template_path or "(内存图)")
-        return MatchResult(found=False)
-    th, tw = tpl.shape[:2]
+        return MatchResult(found=False, reason="模板图近似纯色，匹配无意义")
+
+    # 模板声明的像素密度；内存模板无从得知，按 None 处理（不缩放）
+    density = _png_density(template_path) if template_path else None
+
     best = MatchResult(found=False)
     scales: list[float] = []
+    adjusted: float | None = None
     for cap in captures():
         screen = cap.image
-        scales.append(cap.scale or 1.0)
+        s = cap.scale or 1.0
+        scales.append(s)
+        # 按这块屏的密度缩放模板；密度一致（或未知）时 factor=1，直接用原图
+        factor = s / density if density else 1.0
+        if abs(factor - 1.0) < _RESAMPLE_TOL:
+            factor = 1.0
+        if factor != 1.0:
+            adjusted = factor
+        tpl_here = (_resampled_template(template_path, tpl, factor)
+                    if factor != 1.0 else tpl)
+        th, tw = tpl_here.shape[:2]
         # 模板不小于屏幕时 matchTemplate 会直接抛错，跳过这块屏
         if th >= screen.shape[0] or tw >= screen.shape[1]:
             continue
         if _is_flat(screen):
             _warn_flat_once()
             continue
-        res = cv2.matchTemplate(screen, tpl, cv2.TM_CCOEFF_NORMED)
+        res = cv2.matchTemplate(screen, tpl_here, cv2.TM_CCOEFF_NORMED)
         _min, max_val, _loc, max_loc = cv2.minMaxLoc(res)
         if max_val > best.score:
             x, y = cap.to_global(max_loc[0] + tw / 2, max_loc[1] + th / 2)
             best = MatchResult(found=bool(max_val >= threshold), x=x, y=y,
-                               score=float(max_val))
+                               score=float(max_val),
+                               adjusted=factor if factor != 1.0 else None)
         if best.found:
             break
-    if not best.found and template_path:
-        _warn_density_mismatch(template_path, scales)
+
+    if best.found:
+        if best.adjusted is not None:
+            # 成功但用过缩放：说明一句，免得用户以为「换了分辨率居然还能用」是玄学
+            _note_once("resampled:" + (template_path or "(内存图)"),
+                       "模板 %s 与屏幕像素密度不一致，已自动缩放 %.2fx 后匹配成功。",
+                       template_path or "(内存图)", best.adjusted)
+        return best
+
+    # 没找到：密度本就不一致时点名这个原因（缩放后仍不匹配，才是真「屏上没有」）
+    if template_path:
+        _warn_density_mismatch(template_path, scales, adjusted)
+    if density and adjusted is not None:
+        best.reason = (f"模板像素密度 {density:.2f}x 与屏幕不一致，"
+                       f"已自动缩放 {adjusted:.2f}x 后仍未匹配")
     return best
