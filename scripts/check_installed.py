@@ -10,7 +10,8 @@
 A. 产物级（静态，不解压运行）——直接读 frozen 二进制里的 PYZ，反编译出目标
    模块，断言本次改动引入的符号/常量确实在里面。这一层能抓到"没重新打包"。
 B. RPC 级（动态）——真起一次 sidecar，走 `app.info` / `input.probe` /
-   `record.start→stop`，断言协议面（字段、判据）与本次实现一致。
+   `record.start→stop` / 一个必定触发后端告警的条件节点，断言协议面（字段、判据、
+   通知投递）与本次实现一致。
 
 用法：
     ./.venv/bin/python scripts/check_installed.py            # 默认 /Applications/Auto Flow.app
@@ -25,6 +26,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 DEFAULT_APP = "/Applications/Auto Flow.app"
 
@@ -104,6 +107,21 @@ def _artifact_checks(recorder, inputsource, controller, server, vision) -> list:
                 _sub_code(vision, "_resampled_template") is not None
                 and find is not None
                 and "_resampled_template" in _co_names_recursive(find)))
+
+    # rpc.server：后端 WARNING 要**转发给界面**（2026-09-13）。
+    # 同属「不生效也不报错」的一类：少了它，core.vision 那些「点歪 / 找不到」
+    # 的诊断只进应用日志（那份日志是逐帧 RPC 流水，不含诊断字符串），
+    # 界面上依然什么都没有——从外面看和「压根没做这个功能」一模一样。
+    srv_names = _co_names_recursive(server) if server is not None else set()
+    out.append(("rpc.server 把 WARNING 转发成 log.warning 通知",
+                {"_UiLogHandler", "_install_ui_log_handler"} <= srv_names
+                and "log.warning" in _all_consts(server)))
+    # 防递归守卫（`emit` 里查线程本地的 busy）：少了它，队列满时
+    # `_send_notification` 自己那条 logger.warning 会自激 → 通知通道变死循环。
+    emit = _sub_code(server, "emit") if server is not None else None
+    out.append(("_UiLogHandler.emit 带线程本地防递归守卫",
+                emit is not None and "_local" in _co_names_recursive(emit)
+                and "busy" in _all_consts(emit)))
     return out
 
 
@@ -148,29 +166,71 @@ def _load_pyz(exe: str) -> dict:
 
 
 class Sidecar:
-    """最小 NDJSON 客户端：够用来发几帧请求即可。"""
+    """最小 NDJSON 客户端：够用来发几帧请求、并收通知即可。
+
+    读线程把响应与通知分流：响应进 `_responses` 按 id 配对，通知进
+    `notifications`。**必须分流**——`log.warning` 那条检查要等通知，
+    而通知与响应在同一条 stdout 上交错，同步 `readline` 很容易把通知吞掉。
+    """
 
     def __init__(self, path: str):
         self.p = subprocess.Popen(
             [path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        self._id = 0
+        self._responses: dict = {}
+        self.notifications: list = []
+        self._lock = threading.Lock()
+        threading.Thread(target=self._reader, daemon=True).start()
 
-    def call(self, method: str, params: dict | None = None) -> dict:
-        self._id = getattr(self, "_id", 0) + 1
-        req = {"jsonrpc": "2.0", "id": self._id, "method": method,
-               "params": params if params is not None else {}}
-        self.p.stdin.write(json.dumps(req) + "\n")
-        self.p.stdin.flush()
-        while True:
-            line = self.p.stdout.readline()
-            if not line:
-                raise RuntimeError(f"{method}: sidecar 提前退出")
+    def _reader(self) -> None:
+        for line in self.p.stdout:
             line = line.strip()
             if not line:
                 continue
-            msg = json.loads(line)
-            if msg.get("id") == self._id:
-                return msg
+            try:
+                msg = json.loads(line)
+            except Exception:  # noqa: BLE001 - 半包/杂音不该打死收尾校验
+                continue
+            with self._lock:
+                if "id" in msg:
+                    self._responses[msg["id"]] = msg
+                else:
+                    self.notifications.append(msg)
+
+    def call(self, method: str, params: dict | None = None,
+             timeout: float = 30.0) -> dict:
+        self._id += 1
+        mid = self._id
+        req = {"jsonrpc": "2.0", "id": mid, "method": method,
+               "params": params if params is not None else {}}
+        self.p.stdin.write(json.dumps(req) + "\n")
+        self.p.stdin.flush()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                hit = self._responses.pop(mid, None)
+            if hit is not None:
+                return hit
+            if self.p.poll() is not None:
+                raise RuntimeError(f"{method}: sidecar 提前退出")
+            time.sleep(0.02)
+        raise TimeoutError(f"{method} 无响应")
+
+    def clear_notifications(self) -> None:
+        with self._lock:
+            self.notifications.clear()
+
+    def wait_notification(self, method: str, timeout: float = 10.0) -> dict | None:
+        """等到某类通知出现并返回它；超时返回 None。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                for n in self.notifications:
+                    if n.get("method") == method:
+                        return n
+            time.sleep(0.05)
+        return None
 
     def close(self) -> None:
         for fn in (self.p.stdin.close, self.p.terminate):
@@ -216,6 +276,32 @@ def _live_checks(sidecar_path: str) -> list:
                        "unaccounted" in st))
             out.append((f"快捷键停止不裁剪（trimmed={st.get('trimmed')}）",
                        st.get("trimmed", 0) == 0))
+
+        # 后端告警真的能走通知线到界面（2026-09-13）。触发方式要**确定性**且
+        # 无副作用：条件节点指向一个不存在的模板 → find_template 在读屏之前就
+        # `_warn_once("missing-template:…")` 返回，不碰键鼠、不依赖屏幕录制权限。
+        # 少任何一环（handler 没装 / 通知没入队 / 方法名写错）这条都拿不到通知。
+        with tempfile.TemporaryDirectory(prefix="autoflow-logchk-") as td:
+            wf = os.path.join(td, "wf.json")
+            with open(wf, "w", encoding="utf-8") as f:
+                json.dump({"version": 2, "name": "log-check", "nodes": [
+                    {"type": "condition", "enabled": True, "params": {
+                        "check": "图像存在",
+                        "image_path": os.path.join(td, "no-such-template.png"),
+                        "timeout_s": 0.0}}]}, f, ensure_ascii=False)
+            load = s.call("workflow.load", {"path": wf})
+            if load.get("error"):
+                out.append(("后端 WARNING 经 log.warning 通知送达界面"
+                            f"（准备失败：{load['error'].get('message')}）", False))
+            else:
+                s.clear_notifications()
+                s.call("run.start")
+                note = s.wait_notification("log.warning", timeout=15.0)
+                p2 = (note or {}).get("params") or {}
+                detail = (f"（{p2.get('logger')}: "
+                          f"{str(p2.get('message'))[:36]}…）" if note else "")
+                out.append(("后端 WARNING 经 log.warning 通知送达界面" + detail,
+                            note is not None))
     finally:
         s.close()
     return out

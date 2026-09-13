@@ -7,6 +7,7 @@ API（仅查询，不弹窗）。
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -571,6 +572,107 @@ def test_notify_queue_backpressure_drops_only_droppable() -> None:
 
     # 3) 计数器配对：丢弃路径也要 task_done，否则 unfinished_tasks 只增不减
     assert q.unfinished_tasks == 0
+
+
+# --------------------------------------------------------------------------- #
+# 后端告警接到界面（log.warning 通知）
+#
+# 背景：core.vision 那些「不报错、只是点歪/找不到」的诊断（模板文件失效 /
+# 纯色模板 / 密度不一致）此前只进 stderr 与 ~/Library/Logs/autoflow-tauri.log。
+# 而那份日志是 5000+ 行的 RPC 帧流水（send_rpc / rpc_event），让用户去里面
+# grep 等于没有诊断。现在 WARNING 及以上会转发成 log.warning 通知。
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def ui_log():
+    """装上 UI 日志 handler，用例结束摘掉（它挂在 root logger 上，是全局副作用）。"""
+    from rpc import server
+
+    server._install_ui_log_handler()
+    yield server
+    root = logging.getLogger()
+    for h in [h for h in root.handlers if isinstance(h, server._UiLogHandler)]:
+        root.removeHandler(h)
+
+
+def test_backend_warning_is_forwarded_to_ui(ui_log) -> None:
+    """后端 WARNING 必须变成 log.warning 通知，否则用户只能去翻 5000 行日志。"""
+    server = ui_log
+    _drain(server._notify_queue)
+    logging.getLogger("core.vision").warning("模板读不出来：%s", "/tmp/x.png")
+
+    hits = [i for i in _drain(server._notify_queue) if i["method"] == "log.warning"]
+    assert len(hits) == 1
+    p = hits[0]["params"]
+    assert p["level"] == "WARNING"
+    assert p["logger"] == "core.vision"
+    assert p["message"] == "模板读不出来：/tmp/x.png"   # 占位符要已插值
+
+
+def test_backend_info_is_not_forwarded_to_ui(ui_log) -> None:
+    """INFO 是流水，不该进队列——否则队列会被当垃圾桶。
+
+    注意要把 root 调成 INFO，否则 INFO 记录根本走不到 handler，
+    这条用例就成了自说自话（假绿）。
+    """
+    server = ui_log
+    _drain(server._notify_queue)
+    root = logging.getLogger()
+    old = root.level
+    root.setLevel(logging.INFO)
+    try:
+        logging.getLogger("core.vision").info("这只是流水")
+    finally:
+        root.setLevel(old)
+    assert [i for i in _drain(server._notify_queue)
+            if i["method"] == "log.warning"] == []
+
+
+def test_ui_log_handler_does_not_recurse(ui_log, monkeypatch) -> None:
+    """防递归必须真的有效，而不是「碰巧走不到」。
+
+    队列满时 `_send_notification` 自己会 `logger.warning`，那条记录又会回到本
+    handler。但当前 `log.warning` 属于**可丢类**，队列满时走的是「直接 return」
+    分支、压根不会 logger.warning —— 不把这条路逼出来，防递归就是测不到的死代码
+    （典型的假绿）。所以这里刻意把可丢类清空。
+    """
+    server = ui_log
+    monkeypatch.setattr(server, "_DROPPABLE_NOTIFICATIONS", frozenset())
+    q = server._notify_queue
+    _drain(q)
+    for i in range(q.maxsize):
+        server._send_notification("run.progress", {"done": i, "total": 1})
+    assert q.full()
+
+    logging.getLogger("core.vision").warning("队列满时的告警")
+
+    # 没有防递归的话会深递归：每层都挤掉一条并再入队一条 log.warning，
+    # 直到 RecursionError 被 emit 里的 except 吞掉——表现为「悄悄放大上百条」。
+    hits = [i for i in _drain(q) if i["method"] == "log.warning"]
+    assert len(hits) == 1, f"防递归失效：一条告警被放大了 {len(hits)} 次"
+
+
+def test_ui_log_handler_install_is_idempotent(ui_log) -> None:
+    """重复安装不能挂两份，否则同一条告警会被转发两次。"""
+    server = ui_log
+    server._install_ui_log_handler()
+    root = logging.getLogger()
+    assert len([h for h in root.handlers
+                if isinstance(h, server._UiLogHandler)]) == 1
+
+
+def test_log_warning_is_droppable_so_it_never_evicts_state_notifications() -> None:
+    """log.warning 是**诊断**不是状态跃迁：队列满时该丢它，不能让它挤掉状态类。"""
+    from rpc import server
+
+    assert "log.warning" in server._DROPPABLE_NOTIFICATIONS
+    q = server._notify_queue
+    _drain(q)
+    for i in range(q.maxsize):
+        server._send_notification("run.progress", {"done": i, "total": 1})
+    server._send_notification("log.warning", {"level": "WARNING", "message": "x"})
+    items = _drain(q)
+    assert len(items) == q.maxsize
+    assert all(it["method"] == "run.progress" for it in items)   # 没挤掉任何一条
 
 
 def test_record_subscribe_gates_event_stream() -> None:

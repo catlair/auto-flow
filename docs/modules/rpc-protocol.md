@@ -14,11 +14,15 @@
 
 ## 传输要点
 
-- 帧 = 单行 compact JSON + `\n`；sidecar 的 `sys.stdout` 被重定向到 stderr，
-  协议只走 `os.fdopen(1, "wb", buffering=0)`。
+- 帧 = 单行 compact JSON + `\n`；**协议不走 fd 1**——`_init_output()` 先 `os.dup(1)`
+  拿到独立 fd 作协议通道，再把 fd 1 `dup2` 到 stderr。只重定向 `sys.stdout`
+  拦不住 C 层写入（opencv/onnxruntime 告警、printf），字节会混进 NDJSON 帧流。
 - **全局写锁**：响应（stdin 读线程直写）与通知（writer 线程）并发写同一 fd，
   无锁时大帧字节交错 → 前端随机解析失败（「丢帧」错觉的真凶，2026-09-12 修）。
-- 通知队列 maxsize=1024，满时丢最旧；后端进程退出前同步排空。
+- 通知队列 maxsize=1024；满时**只丢 `_DROPPABLE_NOTIFICATIONS` 里的可丢类**
+  （`record.event` / `run.progress` / `log.warning`），其余是状态跃迁、丢一条
+  前端可能永久停在旧状态，必须送达（挤掉最旧一条并 `logger.warning` 留痕）。
+  后端进程退出前同步排空。
 - Rust 壳逐行 `rpc_event` 转发（补 `\n`）；EOF 后清 stdin 句柄并发 rpc_down，
   2s 后守护重启。
 
@@ -60,6 +64,7 @@
 | permission.changed | 三项布尔 | 2s 轮询变化才发 |
 | permission.probe | {inputAlive} | 自检结果 |
 | schedule.fired | {path,ran,reason?} | 定时触发 |
+| log.warning | {level, logger, message} | **后端 WARNING+ 转发给界面**（见设计要点 5） |
 
 ## 验收记录
 
@@ -76,7 +81,18 @@
    保存/回放不经过前端。（首版摘要曾共享引用摧毁真源，见 controller._public_node 注释）
 3. **错误归一**：ControllerError 带业务码（-32001…-32004 等）；前端 errMessage
    兼容 string/Error/对象（Tauri invoke 的 Err 是裸字符串）。
-4. **丢帧判据只在后端算**：`record.stop` 返回的 `unaccounted` =
+4. **后端告警要能被界面看见**：`core.vision` 等模块的 WARNING/INFO 原本只进
+   `~/Library/Logs/autoflow-tauri.log`（那份日志是逐帧 RPC 收发记录，5396 行里
+   **一条诊断字符串都没有**），诊断面板看不到 → 用户只能自己翻日志。
+   现由 `_UiLogHandler` 挂在 root logger（级别 WARNING）转发成 `log.warning` 通知，
+   前端存进 `backendNotes`（最近 20 条）并在诊断面板成块显示。
+   两个必须的实现细节：
+   - **防递归**：`_send_notification` 在队列满时会自己 `logger.warning`，那条记录
+     又会回到本 handler → 无限放大。用线程本地标记（`_local.busy`）掐断。
+   - **`log.warning` 属可丢类**：它是诊断信息、不是状态跃迁，丢一条不会让界面
+     永久停在旧状态，因此加进 `_DROPPABLE_NOTIFICATIONS`。否则一次刷屏告警会把
+     `run.finished` 这类状态通知挤掉。
+5. **丢帧判据只在后端算**：`record.stop` 返回的 `unaccounted` =
    `captured − (count + filtered + limit_dropped + text_merged + trimmed)`，
    前端只判 `!= 0`。**等式绝不在前端重拼**——每新增一类「有意移除」就要多扣一项，
    前端重拼必然漏扣：`trimmed`（v3 重写时丢失）与 `text_merged`（新增文本聚合时）
@@ -98,3 +114,7 @@
 - 2026-09-12 新增 `record.keysToText`：把一段连续按键换成一条 text 事件，让
   IME 中文（事件层只录到拼音）能走 Unicode 通道确定性回放；同时补齐
   `record.current/remove/removeMovesBefore/setOrigin/setText/undo` 的接口记录
+- 2026-09-13 新增 `log.warning` 通知：后端 WARNING+ 日志转发给界面（诊断面板可见），
+  `_UiLogHandler` 带线程本地防递归守卫；`log.warning` 列入可丢类
+- 2026-09-13 修正本文件两处与实际实现不符的描述：协议通道是 `os.dup(1)` 而非
+  `fdopen(1)`；队列满时只丢可丢类而非无差别丢最旧

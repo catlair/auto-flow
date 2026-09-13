@@ -46,18 +46,61 @@ _shutdown = threading.Event()
 
 # 队列满时**可以丢弃**的通知（§13 背压）。
 #
-# 只有这两个是「高频且状态可被后一条覆盖」的：record.event 每 100ms 推一批事件，
+# 只有这几个是「高频且状态可被后一条覆盖」的：record.event 每 100ms 推一批事件，
 # run.progress 随回放进度频繁推送，丢一条不影响最终状态。
+# log.warning 是**诊断**不是状态跃迁——丢一条前端不会卡在旧状态，所以宁可丢它，
+# 也不能让它去挤掉下面的状态类通知。
 # 其余通知（run.finished / run.error / record.stopped / workflow.changed /
 # permission.changed / hotkey.triggered / schedule.fired …）都是**状态跃迁**，
 # 丢一条前端就可能永久停在旧状态——绝不能被高频洪水挤掉。
-_DROPPABLE_NOTIFICATIONS = frozenset({"record.event", "run.progress"})
+_DROPPABLE_NOTIFICATIONS = frozenset({"record.event", "run.progress", "log.warning"})
 
 # 权限状态缓存，用于检测变化后推送
 _last_perm: Optional[dict] = None
 
 # 后端应用控制器：持有 current_workflow 唯一真源（§10）
 _CTRL = AppController()
+
+
+class _UiLogHandler(logging.Handler):
+    """把 WARNING 及以上的后端日志转发成 `log.warning` 通知，让**界面**能看见。
+
+    存在的理由：`core.vision` 那些「不报错、只是点歪/找不到」的诊断
+    （模板文件失效 / 纯色模板 / 密度不一致 / 自动缩放说明）此前只进 stderr
+    与 `~/Library/Logs/autoflow-tauri.log`。而那份日志是 5000+ 行的 RPC 帧流水
+    （`send_rpc` / `rpc_event`），让用户去里面 grep 等于没有诊断。
+
+    只转发 WARNING 及以上：INFO 是流水，全转会把队列当垃圾桶。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        # 防递归：`_send_notification` 在队列满时自己会 `logger.warning`，
+        # 那条记录又会回到本 handler → 无限递归。用线程本地标记掐断。
+        self._local = threading.local()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(self._local, "busy", False):
+            return
+        self._local.busy = True
+        try:
+            _send_notification("log.warning", {
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            })
+        except Exception:  # noqa: BLE001 - 日志路径绝不能让主流程炸掉
+            pass
+        finally:
+            self._local.busy = False
+
+
+def _install_ui_log_handler() -> None:
+    """把 `_UiLogHandler` 挂到 root logger（幂等，重复调用不会挂两份）。"""
+    root = logging.getLogger()
+    if any(isinstance(h, _UiLogHandler) for h in root.handlers):
+        return
+    root.addHandler(_UiLogHandler())
 
 
 # --------------------------------------------------------------------------- #
@@ -359,6 +402,9 @@ def main() -> int:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
     logger.info("Auto Flow sidecar v%s protocol v%d 启动", APP_VERSION, PROTOCOL_VERSION)
+    # 把 WARNING 及以上的日志接到界面（`log.warning` 通知）。装在 basicConfig
+    # 之后、启动日志之前，这样启动期的告警（如权限快照异常）用户也能看到。
+    _install_ui_log_handler()
     # 把启动时的权限快照写进日志：权限检查归属"责任进程"，同一 sidecar 由 shell 拉起
     # 与由 App 拉起读到的值可能不同——排查「横幅全 ✗ 但 sidecar 明明活着」必须有这份记录
     try:

@@ -17,6 +17,12 @@ const emit = defineEmits<{ (e: "update:visible", v: boolean): void }>();
 const store = useAppStore();
 const d = computed(() => store.diagnostics as any);
 const report = computed(() => formatDiagnostics(d.value));
+/** 后端告警逐行渲染成一段文本；组件只管排版，格式规则与「复制报告」保持一致。 */
+const notesText = computed(() =>
+  (d.value.backendNotes ?? [])
+    .map((n: any) => `[${fmtTime(n.ts)}] ${n.level} ${n.logger}: ${n.message}`)
+    .join("\n")
+);
 const textarea = ref<HTMLTextAreaElement | null>(null);
 
 function yn(v: boolean): string {
@@ -122,6 +128,18 @@ function close() {
         <pre>{{ d.lastError }}</pre>
       </div>
 
+      <div v-if="d.backendNotes?.length" class="af-block warn">
+        <div class="af-block-head">
+          后端告警（{{ d.backendNotes.length }} 条，新的在前）
+        </div>
+        <pre>{{ notesText }}</pre>
+        <div class="af-dim">
+          这类告警是「不报错、只是点歪/找不到」的静默失败线索——例如模板图失效、
+          模板与屏幕像素密度不一致。完整日志见 ~/Library/Logs/autoflow-tauri.log。
+        </div>
+      </div>
+      <div v-else class="af-dim af-nodetail">暂无后端告警。</div>
+
       <div v-if="d.rpcDownDetail" class="af-block">
         <div class="af-block-head">最近断连详情（含查找路径与 sidecar stderr）</div>
         <pre>{{ d.rpcDownDetail }}</pre>
@@ -210,6 +228,10 @@ function close() {
 .af-block.err pre {
   background: #fdecee;
   border-color: #f7c9cd;
+}
+.af-block.warn pre {
+  background: #fdf6e6;
+  border-color: #f0dcb0;
 }
 .af-nodetail {
   margin-bottom: 8px;

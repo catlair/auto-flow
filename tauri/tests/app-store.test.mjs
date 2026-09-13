@@ -439,3 +439,65 @@ test("录制停止：只有按钮停止才裁停止点击，快捷键停止不�
   stop = calls.filter((c) => c.method === "record.stop").at(-1);
   assert.equal(stop.params.trim, true, "按钮停止要裁掉这次点击");
 });
+
+// --------------------------------------------------------------------------- //
+// 后端告警进界面（log.warning）
+//
+// 背景：core.vision 那些「不报错、只是点歪/找不到」的诊断此前只进
+// ~/Library/Logs/autoflow-tauri.log，而那是 5000+ 行的 RPC 帧流水，
+// 让用户去里面 grep 等于没有诊断。
+// --------------------------------------------------------------------------- //
+test("后端 log.warning 记入诊断面板，且新的在前", () => {
+  const { store } = setup();
+  notify(store, "log.warning", {
+    level: "WARNING", logger: "core.vision", message: "模板读不出来：/tmp/x.png",
+  });
+  notify(store, "log.warning", {
+    level: "WARNING", logger: "core.vision", message: "模板与屏幕像素密度不一致",
+  });
+
+  assert.equal(store.backendNotes.length, 2);
+  assert.equal(store.backendNotes[0].message, "模板与屏幕像素密度不一致", "新的应排前面");
+  assert.equal(store.backendNotes[0].logger, "core.vision");
+  assert.ok(store.backendNotes[0].ts > 0, "要带时间戳，否则面板里看不出先后");
+  assert.equal(store.diagnostics.backendNotes.length, 2);
+});
+
+test("后端告警有上限，且上限与导出常量同源", () => {
+  const { store, mod } = setup();
+  const limit = mod.BACKEND_NOTE_LIMIT;
+  assert.ok(limit > 0 && limit <= 100, `上限量级不合理：${limit}`);
+  for (let i = 0; i < limit + 5; i++) {
+    notify(store, "log.warning", {
+      level: "WARNING", logger: "core.vision", message: `w${i}`,
+    });
+  }
+  assert.equal(store.backendNotes.length, limit, "不能无限增长");
+  assert.equal(store.backendNotes[0].message, `w${limit + 4}`, "应保留最新的");
+});
+
+test("后端告警不顶掉正在显示的运行错误，但空横幅时会露脸", () => {
+  const { store } = setup();
+  store.setBanner("运行出错：boom", "error");
+  notify(store, "log.warning", {
+    level: "WARNING", logger: "core.vision", message: "模板失效",
+  });
+  assert.equal(store.banner, "运行出错：boom", "不能把正在显示的错误顶掉");
+  assert.equal(store.backendNotes.length, 1, "但仍要记进诊断面板");
+
+  const { store: s2 } = setup();
+  notify(s2, "log.warning", {
+    level: "WARNING", logger: "core.vision", message: "模板失效",
+  });
+  assert.ok(s2.banner.includes("模板失效"), "横幅空着时应露脸，否则用户不会想到去开面板");
+  assert.equal(s2.bannerKind, "warn");
+  assert.equal(s2.lastError, "", "告警不是错误，不该污染 lastError");
+});
+
+test("空 message 的 log.warning 不产生空条目、不动横幅", () => {
+  const { store } = setup();
+  notify(store, "log.warning", { level: "WARNING", logger: "x", message: "" });
+  notify(store, "log.warning", {});
+  assert.equal(store.backendNotes.length, 0);
+  assert.equal(store.banner, "");
+});

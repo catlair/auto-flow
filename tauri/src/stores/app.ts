@@ -18,6 +18,20 @@ export const PROTOCOL_VERSION = 1;
  */
 export const RECORD_BUFFER_LIMIT = 5000;
 
+/**
+ * 诊断面板里保留的后端告警条数。后端已用 `_warn_once` 对同类问题去重，
+ * 这里只是兜底，防止长跑会话里无限增长。
+ */
+export const BACKEND_NOTE_LIMIT = 20;
+
+/** 后端 `log.warning` 通知的一条记录。 */
+export type BackendNote = {
+  ts: number;
+  level: string;
+  logger: string;
+  message: string;
+};
+
 type CapturedKeyHandler = (name: string) => void;
 
 export const useAppStore = defineStore("app", {
@@ -37,6 +51,14 @@ export const useAppStore = defineStore("app", {
     reconnectNotice: "",
     // 最近一次以 error 级别上报的信息，诊断面板用。
     lastError: "",
+    // 后端 WARNING 及以上的日志（log.warning 通知）。
+    //
+    // 为什么要有它：`core.vision` 那些「不报错、只是点歪/找不到」的诊断
+    // （模板文件失效 / 纯色模板 / 密度不一致）原本只进 stderr 与
+    // ~/Library/Logs/autoflow-tauri.log，而那份日志是 5000+ 行的 RPC 帧流水，
+    // 让用户去里面 grep 等于没有诊断。这里收下来给诊断面板显示。
+    // 有界：日志可能反复触发，不能无限增长。
+    backendNotes: [] as BackendNote[],
     protocolOk: true,
     appVersion: "",
     running: false,
@@ -93,6 +115,7 @@ export const useAppStore = defineStore("app", {
         // 优先给「最近一次断连」的详情：面板通常在已恢复时才被打开
         rpcDownDetail: state.lastRpcDownDetail || state.rpcDownDetail,
         lastError: state.lastError,
+        backendNotes: state.backendNotes,
         permissions: {
           accessibility: !!p.accessibility,
           inputMonitoring: !!p.inputMonitoring,
@@ -320,6 +343,24 @@ export const useAppStore = defineStore("app", {
           this.setClickThrough(false);
           this.setBanner("运行出错：" + (n.params.message ?? ""), "error");
           break;
+        case "log.warning": {
+          const msg = String(n.params?.message ?? "");
+          if (!msg) break;
+          // 新的排前面（面板直接顺序渲染，不用再倒序）
+          this.backendNotes = [
+            {
+              ts: Date.now(),
+              level: String(n.params?.level ?? "WARNING"),
+              logger: String(n.params?.logger ?? ""),
+              message: msg,
+            },
+            ...this.backendNotes,
+          ].slice(0, BACKEND_NOTE_LIMIT);
+          // 顺带在横幅上露一次脸——否则用户得先想到去开诊断面板。
+          // 只在横幅空着时写：不能把正在显示的运行错误顶掉。
+          if (!this.banner) this.setBanner("后端告警：" + msg, "warn");
+          break;
+        }
         case "schedule.fired":
           if (n.params?.ran) {
             // 仅表示触发成功，可能晚于 run.finished；运行态以 run.* 为准。

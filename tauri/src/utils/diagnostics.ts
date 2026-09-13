@@ -30,6 +30,8 @@ export interface DiagnosticsData {
   lastRecordInfo: any;
   running: boolean;
   recording: boolean;
+  /** 后端 WARNING 及以上的日志（log.warning 通知），新的在前。 */
+  backendNotes?: { ts: number; level: string; logger: string; message: string }[];
 }
 
 const PERM_LABEL: Record<string, string> = {
@@ -90,6 +92,15 @@ export function formatDiagnostics(d: DiagnosticsData): string {
   );
 
   if (d.lastError) lines.push("", `最近错误    ${d.lastError}`);
+  const notes = d.backendNotes ?? [];
+  if (notes.length) {
+    // 后端告警单独成段：这些是「不报错、只是点歪/找不到」的静默失败诊断
+    // （模板失效 / 纯色模板 / 密度不一致），贴 issue 时往往是关键线索。
+    lines.push("", `--- 后端告警（最近 ${notes.length} 条，新的在前）---`);
+    for (const n of notes) {
+      lines.push(`[${fmtTime(n.ts)}] ${n.level} ${n.logger}: ${n.message}`);
+    }
+  }
   if (d.rpcDownDetail) {
     // 断连详情常含查找路径 + sidecar stderr 多行，原样保留（这是排查的主要线索）。
     lines.push("", "--- 最近断连详情 ---", d.rpcDownDetail.trim());

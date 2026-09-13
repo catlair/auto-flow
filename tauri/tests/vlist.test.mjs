@@ -189,3 +189,24 @@ test("有录制记录时列出过滤/超限/监听中断", () => {
   assert.match(txt, /超限丢弃 3/);
   assert.match(txt, /监听中断（鼠标）/);
 });
+
+test("诊断文本带出后端告警全文（模板失效/密度不一致这类静默失败线索）", () => {
+  const txt = formatDiagnostics(
+    sampleDiag({
+      backendNotes: [
+        { ts: Date.now(), level: "WARNING", logger: "core.vision",
+          message: "模板图读不出来：/tmp/x.png。文件可能已被移动或删除" },
+        { ts: Date.now(), level: "WARNING", logger: "core.vision",
+          message: "模板 /tmp/x.png 的像素密度是 2.00x，而截屏是 1x" },
+      ],
+    })
+  );
+  assert.match(txt, /后端告警（最近 2 条，新的在前）/);
+  assert.ok(txt.includes("WARNING core.vision: 模板图读不出来：/tmp/x.png"));
+  assert.ok(txt.includes("像素密度是 2.00x"));
+});
+
+test("没有后端告警时不出这一段（否则报告里全是空标题）", () => {
+  const txt = formatDiagnostics(sampleDiag());
+  assert.ok(!txt.includes("后端告警"));
+});
