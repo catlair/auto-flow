@@ -46,6 +46,10 @@
   命中位置经**放大截图肉眼确认**在目标中心；切回 2.0x 组 `score=0.9590` 与不重采样
   **完全一致（无回归）**。回归测试 `test_density_mismatch_is_auto_resampled_and_matches`
   及其对照 `test_without_alignment_a_2x_template_would_miss`（关掉密度识别即失败）。
+- **F-VIS-10 安装版端到端**（2026-09-13，`/Applications` 里那个 .app 自带的 sidecar）：
+  用 `condition`(图像存在，2x 苹果图标模板) 门控 `delay`，2.0x 组与 **1.0x 组**都得到
+  `['condition','delay']`。1.0x 那次是关键——修复前该 condition 必然为假（只有
+  `['condition']`），证明自动对齐确实进了打包产物，不只是源码树里能跑。
 
 ## 设计要点
 
