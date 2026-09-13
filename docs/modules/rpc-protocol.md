@@ -12,21 +12,21 @@
 - `tauri/src/rpc/client.ts` / `types.ts` — 前端客户端
 - `tests/test_rpc.py` — 真实子进程端到端协议测试
 
-## 传输要点
+## 功能清单
 
-- 帧 = 单行 compact JSON + `\n`；**协议不走 fd 1**——`_init_output()` 先 `os.dup(1)`
-  拿到独立 fd 作协议通道，再把 fd 1 `dup2` 到 stderr。只重定向 `sys.stdout`
-  拦不住 C 层写入（opencv/onnxruntime 告警、printf），字节会混进 NDJSON 帧流。
-- **全局写锁**：响应（stdin 读线程直写）与通知（writer 线程）并发写同一 fd，
-  无锁时大帧字节交错 → 前端随机解析失败（「丢帧」错觉的真凶，2026-09-12 修）。
-- 通知队列 maxsize=1024；满时**只丢 `_DROPPABLE_NOTIFICATIONS` 里的可丢类**
-  （`record.event` / `run.progress` / `log.warning`），其余是状态跃迁、丢一条
-  前端可能永久停在旧状态，必须送达（挤掉最旧一条并 `logger.warning` 留痕）。
-  后端进程退出前同步排空。
-- Rust 壳逐行 `rpc_event` 转发（补 `\n`）；EOF 后清 stdin 句柄并发 rpc_down，
-  2s 后守护重启。
+| 编号 | 功能 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| F-RPC-01 | 帧格式与协议通道 | ✅ | 单行 compact JSON + `\n`；协议走 `os.dup(1)` 的独立 fd，fd 1 让给 stderr |
+| F-RPC-02 | 全局写锁 | ✅ | 响应与通知并发写同一 fd 不交错（「丢帧」错觉的真凶，2026-09-12 修） |
+| F-RPC-03 | 通知队列背压 | ✅ | maxsize=1024，满时只丢可丢类；退出前同步排空 |
+| F-RPC-04 | 请求/响应方法集 | ✅ | 见下方「方法清单」 |
+| F-RPC-05 | 通知广播 | ✅ | 见下方「通知清单」 |
+| F-RPC-06 | 响应驱动 UI 收敛 | ✅ | 状态类操作一律以响应为准，通知只作广播冗余 |
+| F-RPC-07 | 错误归一 | ✅ | ControllerError 业务码（-32001…）；前端 errMessage 兼容三种形态 |
+| F-RPC-08 | 后端告警转发 | ✅ | WARNING+ → `log.warning` 通知 → 诊断面板 |
+| F-RPC-09 | 丢帧判据后端计算 | ✅ | `record.stop.unaccounted`，前端只判 `!= 0` |
 
-## 方法清单（请求/响应）
+### 方法清单（请求/响应）
 
 | 方法 | 参数（摘要） | 返回 |
 | --- | --- | --- |
@@ -49,7 +49,7 @@
 | schedule.configure / get | cfg | {schedule, nextFire} |
 | app.shutdown | — | 退出 |
 
-## 通知清单（后端 → 前端）
+### 通知清单（后端 → 前端）
 
 | 通知 | 载荷 | 说明 |
 | --- | --- | --- |
@@ -64,7 +64,7 @@
 | permission.changed | 三项布尔 | 2s 轮询变化才发 |
 | permission.probe | {inputAlive} | 自检结果 |
 | schedule.fired | {path,ran,reason?} | 定时触发 |
-| log.warning | {level, logger, message} | **后端 WARNING+ 转发给界面**（见设计要点 5） |
+| log.warning | {level, logger, message} | **后端 WARNING+ 转发给界面**（见设计要点 4） |
 
 ## 验收记录
 
@@ -74,6 +74,22 @@
 - **并发写**：91 例全绿 + 真机长录（数百事件）无解析失败（2026-09-12 写锁后）
 
 ## 设计要点
+
+### 传输要点
+
+- 帧 = 单行 compact JSON + `\n`；**协议不走 fd 1**——`_init_output()` 先 `os.dup(1)`
+  拿到独立 fd 作协议通道，再把 fd 1 `dup2` 到 stderr。只重定向 `sys.stdout`
+  拦不住 C 层写入（opencv/onnxruntime 告警、printf），字节会混进 NDJSON 帧流。
+- **全局写锁**：响应（stdin 读线程直写）与通知（writer 线程）并发写同一 fd，
+  无锁时大帧字节交错 → 前端随机解析失败（「丢帧」错觉的真凶，2026-09-12 修）。
+- 通知队列 maxsize=1024；满时**只丢 `_DROPPABLE_NOTIFICATIONS` 里的可丢类**
+  （`record.event` / `run.progress` / `log.warning`），其余是状态跃迁、丢一条
+  前端可能永久停在旧状态，必须送达（挤掉最旧一条并 `logger.warning` 留痕）。
+  后端进程退出前同步排空。
+- Rust 壳逐行 `rpc_event` 转发（补 `\n`）；EOF 后清 stdin 句柄并发 rpc_down，
+  2s 后守护重启。
+
+### 设计决策
 
 1. **响应驱动 UI**：通知会丢（Tauri 事件转发链路），凡影响 UI 状态的操作
    （结构变更/录制停止/运行停止）一律以响应收敛，通知只作广播冗余。
@@ -118,3 +134,7 @@
   `_UiLogHandler` 带线程本地防递归守卫；`log.warning` 列入可丢类
 - 2026-09-13 修正本文件两处与实际实现不符的描述：协议通道是 `os.dup(1)` 而非
   `fdopen(1)`；队列满时只丢可丢类而非无差别丢最旧
+- 2026-09-13 文档结构对齐 `_template.md`：补 `## 功能清单`（F-RPC-01…09），
+  原「传输要点 / 方法清单 / 通知清单」三个独立章节降为 `###` 子节
+  （分别归入「设计要点」与「功能清单」）；修正通知表里 `log.warning` 的设计要点
+  交叉引用（原写「见设计要点 5」，实际是 4）

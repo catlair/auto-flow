@@ -9,7 +9,17 @@
 - `tasks/builtin.py` — 九种内置节点实现 + tolerant_event
 - `rpc/controller.py` — nodes_definitions()（含 COMMON_PARAMS 与菜单顺序）
 
-## 节点清单
+## 功能清单
+
+| 编号 | 功能 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| F-NOD-01 | 自描述参数定义 | ✅ | ParamDef(ptype/默认值/min/max) → 前端动态表单 |
+| F-NOD-02 | 节点改名 | ✅ | Node.name 持久化，node.rename RPC，双击行内编辑 |
+| F-NOD-03 | 节点 uid | ✅ | uuid4，前端列表/拖拽 key 稳定（type 会撞） |
+| F-NOD-04 | 通用参数 run_when | ✅ | 全节点尾部渲染，后端为真源 |
+| F-NOD-05 | 注册表防漏 | ✅ | executor._run_node 内 import tasks.builtin 兜底 |
+
+### 节点清单（内置节点一览）
 
 | 节点 | type | 状态 | 要点 |
 | --- | --- | --- | --- |
@@ -22,16 +32,6 @@
 | YOLO 找目标 | yolo_click | ✅ | onnxruntime/CoreML，yolo11n.onnx（COCO 80 类） |
 | 条件判断 | condition | ✅ | 图像存在 / 文字存在 / 目标存在(YOLO) |
 | 注释 | note | ✅ | 不执行，仅说明 |
-
-## 功能清单
-
-| 编号 | 功能 | 状态 | 说明 |
-| --- | --- | --- | --- |
-| F-NOD-01 | 自描述参数定义 | ✅ | ParamDef(ptype/默认值/min/max) → 前端动态表单 |
-| F-NOD-02 | 节点改名 | ✅ | Node.name 持久化，node.rename RPC，双击行内编辑 |
-| F-NOD-03 | 节点 uid | ✅ | uuid4，前端列表/拖拽 key 稳定（type 会撞） |
-| F-NOD-04 | 通用参数 run_when | ✅ | 全节点尾部渲染，后端为真源 |
-| F-NOD-05 | 注册表防漏 | ✅ | executor._run_node 内 import tasks.builtin 兜底 |
 
 ## 验收记录
 
@@ -62,3 +62,5 @@
 
 - 2026-09-05 图像/OCR/YOLO/条件节点逐个落地（见 git 历史）
 - 2026-09-12 节点改名 + uid + keys ptype 修正
+- 2026-09-13 文档结构对齐 `_template.md`：原独立的「节点清单」章节降为
+  「功能清单」下的 `###` 子节（`docs/README.md` 要求所有模块文档一律用模板结构）
