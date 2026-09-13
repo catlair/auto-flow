@@ -204,7 +204,7 @@ def test_flat_screen_is_skipped_and_warned_once(monkeypatch, caplog):
     monkeypatch.setattr(vision, "_raw_screens",
                         lambda: [({"left": 0, "top": 0, "width": 1280, "height": 832},
                                   _blank(1280, 832, (30, 30, 30)))])
-    monkeypatch.setattr(vision, "_flat_warned", False, raising=False)
+    monkeypatch.setattr(vision, "_warned", set())
     tpl = _pattern(40, 20, seed=9)
     with caplog.at_level("WARNING", logger="core.vision"):
         assert not vision.find_template(0.8, template_bgr=tpl).found
@@ -332,3 +332,120 @@ def test_yolo_detections_sorted_by_confidence_across_screens(monkeypatch):
     dets = detect_on_all_screens(FakeEngine(), 0.5)
     assert [d.confidence for d in dets] == [0.8, 0.3]
     assert dets[0].x == 100          # 高置信度那个在副屏，坐标已带偏移
+
+
+# --------------------------------------------------------------------------- #
+# 截屏密度：模板必须与截屏同像素密度
+#
+# 背景（2026-09-13 真机定位）：「截图识别没有效果」的真凶。mss 10.2 在 darwin
+# 上默认带 kCGWindowImageNominalResolution，Retina 屏拿回的是**逻辑尺寸**
+# （物理尺寸的一半）；而「截取模板」走 screencapture，产出的是**物理像素**。
+# 模板于是比屏上目标大一倍，分数从 1.0 掉到 0.5 上下、永远过不了阈值，
+# 而且全程无日志。实测：2x 模板对 1x 屏 = 0.53；缩到同密度 = 0.9998。
+# --------------------------------------------------------------------------- #
+def _png_with_dpi(path, ppm: int | None) -> str:
+    """写一张真实可解码的最小 PNG；`ppm=None` 时不写 pHYs（未声明密度）。
+
+    144dpi 对应 ppm=5669、72dpi 对应 ppm=2835（`screencapture` 就按这两种写）。
+    """
+    import struct
+    import zlib
+
+    def chunk(ctype: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(ctype + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + ctype + data + struct.pack(">I", crc)
+
+    size = 64
+    raw = b"".join(b"\x00" + bytes((x * 4) % 256 for x in range(size * 3))
+                   for _ in range(size))
+    body = chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+    if ppm is not None:
+        body += chunk(b"pHYs", struct.pack(">IIB", ppm, ppm, 1))
+    body += chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + body)
+    return str(path)
+
+
+def _one_plain_screen(seed: int = 21):
+    """一块 1280x832 的假屏：图宽=逻辑宽 → scale=1.0（即「1x 屏」）。"""
+    return [({"left": 0, "top": 0, "width": 1280, "height": 832},
+             _pattern(1280, 832, seed=seed))]
+
+
+def test_png_helper_writes_a_real_decodable_png(tmp_path):
+    """辅助函数本身要诚实：产出必须是真的 PNG，否则后面的密度用例是自说自话。"""
+    import cv2
+
+    img = cv2.imread(_png_with_dpi(tmp_path / "t.png", 5669))
+    assert img is not None and img.shape[:2] == (64, 64)
+
+
+def test_mss_asks_for_physical_resolution():
+    """截屏必须请求**物理像素**，否则与 screencapture 的模板差一倍密度。
+
+    确定性用例：`IMAGE_OPTIONS` 里只要出现 NominalResolution 位就是回归。
+    """
+    mss_darwin = pytest.importorskip("mss.darwin")
+    nominal = mss_darwin.kCGWindowImageNominalResolution
+    assert not (mss_darwin.IMAGE_OPTIONS & nominal), (
+        "mss 又被设回「名义分辨率」：Retina 上截图只有物理尺寸的一半，"
+        "与 screencapture 截出的模板密度不一致，匹配分数会整体砍半")
+
+
+def test_png_density_reads_phys_chunk(tmp_path):
+    """144dpi→2x、72dpi→1x、未声明/不存在→None。"""
+    assert vision._png_density(_png_with_dpi(tmp_path / "retina.png", 5669)) \
+        == pytest.approx(2.0, abs=0.01)
+    assert vision._png_density(_png_with_dpi(tmp_path / "plain.png", 2835)) \
+        == pytest.approx(1.0, abs=0.01)
+    assert vision._png_density(_png_with_dpi(tmp_path / "nodpi.png", None)) is None
+    assert vision._png_density(str(tmp_path / "不存在.png")) is None
+
+
+def test_density_mismatch_is_reported_once(monkeypatch, caplog, tmp_path):
+    """模板密度与截屏不一致时必须点名原因——这是「静默失败」的典型。
+
+    确定性：屏幕固定为 1x（图宽=逻辑宽），模板声明 2x，比值必然不等。
+    """
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_raw_screens", lambda: _one_plain_screen())
+    tpl = _png_with_dpi(tmp_path / "retina.png", 5669)
+    with caplog.at_level("WARNING", logger="core.vision"):
+        assert not vision.find_template(1.0, template_path=tpl).found
+        assert not vision.find_template(1.0, template_path=tpl).found
+    hits = [r for r in caplog.records if "像素密度" in r.getMessage()]
+    assert len(hits) == 1, "重试循环每 400ms 一轮，密度告警不能刷屏"
+
+
+def test_no_density_warning_when_densities_agree(monkeypatch, caplog, tmp_path):
+    """密度一致时不能误报——否则用户会被引向错误方向（反向验证的配对用例）。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_raw_screens", lambda: _one_plain_screen())
+    tpl = _png_with_dpi(tmp_path / "plain.png", 2835)      # 1x 模板对 1x 屏
+    with caplog.at_level("WARNING", logger="core.vision"):
+        assert not vision.find_template(1.0, template_path=tpl).found
+    assert not [r for r in caplog.records if "像素密度" in r.getMessage()]
+
+
+def test_missing_template_file_is_reported_once(monkeypatch, caplog, tmp_path):
+    """模板文件没了要留话：返回值上与「屏上真没有」完全一样，静默就没法排查。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_raw_screens", lambda: _one_plain_screen())
+    missing = str(tmp_path / "nope.png")
+    with caplog.at_level("WARNING", logger="core.vision"):
+        assert not vision.find_template(0.8, template_path=missing).found
+        assert not vision.find_template(0.8, template_path=missing).found
+    hits = [r for r in caplog.records if "读不出来" in r.getMessage()]
+    assert len(hits) == 1
+
+
+def test_flat_template_is_reported(monkeypatch, caplog):
+    """纯色模板（没有屏幕录制权限时截出来的）此前是静默「找不到」，现在要留话。"""
+    monkeypatch.setattr(vision, "_warned", set())
+    monkeypatch.setattr(vision, "_raw_screens", lambda: _one_plain_screen())
+    flat = np.full((40, 60, 3), 200, np.uint8)
+    with caplog.at_level("WARNING", logger="core.vision"):
+        assert not vision.find_template(0.8, template_bgr=flat).found
+    assert any("近似纯色" in r.getMessage() and "模板" in r.getMessage()
+               for r in caplog.records)

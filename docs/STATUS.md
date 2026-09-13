@@ -4,11 +4,11 @@
 
 | 模块 | 文档 | 状态 | 验收 | 备注 |
 | --- | --- | --- | --- | --- |
-| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 134 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
-| 回放引擎 | [player.md](modules/player.md) | ✅ | 134 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
+| 键鼠录制 | [recorder.md](modules/recorder.md) | ✅ | 141 测试 + 真机 | v3 重写：保轨采样 + 拖拽/双击语义 + 事件编辑 + 文本聚合 |
+| 回放引擎 | [player.md](modules/player.md) | ✅ | 141 测试 + 真机 | v3 重写：虚拟时钟 + 三档追赶 + 文本投递 |
 | 工作流执行器 | [executor.md](modules/executor.md) | ✅ | 测试 | 异常兜底 + 条件门控 + 热停 |
 | 节点体系 | [nodes.md](modules/nodes.md) | ✅ | 测试 + 真机 | 9 种内置节点，自描述参数 |
-| 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | Retina 坐标换算；锁屏时 Quartz 兜底 |
+| 视觉（图像/OCR/YOLO） | [vision.md](modules/vision.md) | ✅ | 测试 + 真机 | 截屏取物理像素，与 screencapture 模板同密度；「找不到」可诊断 |
 | 全局热键/取点 | [hotkeys.md](modules/hotkeys.md) | ✅ | 真机 | 取点用按键事件坐标（CLI 读不到光标） |
 | 定时运行 | [schedule.md](modules/schedule.md) | ✅ | 测试 | 后端到点真跑，非仅通知 |
 | macOS 权限 | [permissions.md](modules/permissions.md) | ✅ | 真机 | TCC 按二进制授权；F18 回环自检 |
