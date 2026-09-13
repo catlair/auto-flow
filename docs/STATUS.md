@@ -1,6 +1,6 @@
 # 模块状态总览
 
-> 更新：2026-09-12 · 明细见各模块文档，本表只做全局速览
+> 更新：2026-09-13 · 明细见各模块文档，本表只做全局速览
 
 | 模块 | 文档 | 状态 | 验收 | 备注 |
 | --- | --- | --- | --- | --- |
@@ -14,7 +14,7 @@
 | macOS 权限 | [permissions.md](modules/permissions.md) | ✅ | 真机 | TCC 按二进制授权；F18 回环自检 |
 | RPC 协议 | [rpc-protocol.md](modules/rpc-protocol.md) | ✅ | 91 测试 | 写锁防交错；广播 events 摘要化 |
 | 前端界面 | [frontend.md](modules/frontend.md) | ✅ | 真机 | 响应驱动刷新；通知仅广播冗余 |
-| 打包/签名/部署 | [packaging.md](modules/packaging.md) | ✅ | 真机 | ⚠️ 修复后必须重打包部署（曾致旧包跑 6 天） |
+| 打包/签名/部署 | [packaging.md](modules/packaging.md) | ✅ | 11 项产物断言 | ⚠️ 修复后必须重打包部署；第 5 步 `check_installed.py` 收口 |
 | 旧 PySide6 UI | — | ⛔ | — | 2026-09-12 删除（ui/、main.py、旧脚本、PySide6 依赖） |
 
 ## 近期计划（无主次排序）
@@ -23,8 +23,11 @@
 - 📋 工作流变量系统：跨节点传值（计划书 §workflow_vars 曾有占位）
 - 📋 Windows 支持：core 逻辑平台无关，输入层需按平台抽象（pynput 可跨）
 - 📋 视觉模型按需分发：opencv/onnxruntime 占 sidecar 体积 200MB+，可拆可选包
-- 🧹 构建残留清理：`./scripts/clean_old_builds.sh`（预演）/ `--apply`（移入废纸篓）
+- 📋 公证：需 `APPLE_ID / APPLE_APP_PASSWORD / APPLE_TEAM_ID`，脚本参数位已留
+- 📋 录制侧直接拿汉字：唯一方向是 AX 轮询 `kAXValueAttribute` 差分，但终端/
+  画布类应用不适用且不知道插入位置，暂不做（见 recorder.md 已知问题）
 
-> 待真机确认：系统拼音输入法提交中文时是否也走事件层（`keycode=0` + Unicode）。
-> 若只出现连续字母按键、事件表「文本」过滤为空，说明该输入法走 `insertText:` 通道，
-> 被动 tap 看不到——此时需要另一套方案（AX 差分捕获）。见计划书 §15.8。
+> 已实测定性（2026-09-12，见 recorder.md 已知问题）：系统简体拼音走 `insertText:`
+> 通道，事件层录不到汉字、只有拼音按键；但**拼音按键回放会重新驱动输入法、
+> 中文照样上屏**（往返成立但不确定）。要确定性回放用 `record.keysToText`
+> 把按键段换成文本事件。

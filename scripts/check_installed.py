@@ -43,10 +43,14 @@ def _co_names_recursive(code) -> set:
 
 
 def _sub_code(code, fname):
-    """取出模块里某个函数自身的 code object。"""
+    """取出某个函数/方法自身的 code object（递归找，方法在类体里嵌一层）。"""
     for const in code.co_consts:
-        if hasattr(const, "co_name") and const.co_name == fname:
-            return const
+        if isinstance(const, type(code)):
+            if const.co_name == fname:
+                return const
+            found = _sub_code(const, fname)
+            if found is not None:
+                return found
     return None
 
 
@@ -73,6 +77,11 @@ def _artifact_checks(recorder, inputsource, controller, server) -> list:
     out.append(("rpc.controller 定义了 record_keys_to_text",
                 controller is not None
                 and "record_keys_to_text" in _co_names_recursive(controller)))
+    # 裁剪快照已改元素级复制：record_stop 里应出现 replace（修复前没有）。
+    # 这条能挡住"撤销回来是被人改过的数据"那个静默损坏。
+    stop_co = _sub_code(controller, "record_stop") if controller else None
+    out.append(("record_stop 用 replace 做元素级快照（撤销不会拿到被改的数据）",
+                stop_co is not None and "replace" in _co_names_recursive(stop_co)))
     # 入口脚本 rpc.server：方法表里的注册名（漏了就是方法不存在，调用报 -32601）
     out.append(("rpc.server 注册了 record.keysToText",
                 server is not None and "record.keysToText" in _all_consts(server)))
