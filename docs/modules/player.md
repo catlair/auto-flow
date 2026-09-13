@@ -8,6 +8,8 @@
 
 - `core/player.py` — Player：play() 主循环、`_travel` 时间采样调度、QuartzMouse 输出层
 - `core/events.py` — `MacroEvent`（v3）中的 `dragged` / `clicks` / `wheel_unit`
+- `core/mactype.py` — 任意 Unicode 文本输入（CGEvent Unicode 通道）；
+  `player.KeyboardController` 指向它的 `MacKeyboardController`
 
 ## 功能清单
 
@@ -26,13 +28,20 @@
 | F-PLY-11 | **双击/三击** | ✅ | 按 `clicks` 写入 `kCGMouseEventClickState`（v3） |
 | F-PLY-12 | **滚轮单位与双轴** | ✅ | 按 `wheel_unit` 选 line/pixel，横纵两轴一起创建（v3） |
 | F-PLY-13 | **长空档不平滑爬行** | ✅ | 单段滑行封顶 0.25s，长等待先静止再走（v3） |
-| F-PLY-14 | **文本事件投递** | ✅ | `kind="text"` 走 `mactype.type_text`（Unicode 通道），不挪光标（v3） |
+| F-PLY-14 | **文本事件投递** | ✅ | `kind="text"` 走 `mactype.type_text`（CGEvent Unicode 通道，见设计要点 8），不挪光标（v3） |
 
 ## 验收记录
 
 - **F-PLY-14**（2026-09-12）：`test_player_types_text_events_without_moving_cursor`
   ——中文与 emoji 各走一次 `type_text`，光标位置不变。中文/emoji 无法经键码映射
   投递（`pynput` 的 `type()` 只覆盖 ASCII），只能走 Unicode 通道。
+- **F-PLY-14 文本通道本身**（2026-09-12，`tests/test_mactype.py` 共 **12 例**全绿）：
+  `u16_len`（`"🎯"`/`"𝕏"` 各 2 码元）、`_chunks` 不超限且不劈代理对、
+  往返可读回（`test_type_text_round_trips_astral_characters`）、
+  Return/Tab 发真实键码、CRLF 规范化、空串零投递、
+  `player.KeyboardController is mactype.MacKeyboardController`。
+  全部用**假投递器**（`post=记录器`）——真 `CGEventPost` 会往用户当前聚焦的
+  窗口打字，`conftest.py` 的 `block_real_text_typing` 也会拦。
 
 - **F-PLY-09**（2026-09-12）：`test_player_catches_up_by_skipping_instead_of_bursting`
   ——61 个"计划时刻已过去"的事件全部按各自位置投递，落点精确（1770），
@@ -74,6 +83,30 @@
    且把"行"增量按 pixel 单位投递，量级差一个数量级，表现为滚轮几乎不动。
 7. **热路径不写日志**：v2 每次点击都 `logger.info` 落盘，高频点击/拖拽时是
    实打实的 I/O 拖累。
+8. **文本投递必须走 CGEvent Unicode 通道**（`core/mactype.py`，F-PLY-14）：
+   `pynput` 的 `Controller.type()` 是「字符 → 虚拟键码」映射，**只覆盖 ASCII**，
+   填中文时**静默跳过**——节点看起来执行了、目标框里什么都没有、也不报错。
+   改用 `CGEventKeyboardSetUnicodeString` 把文本直接挂在键盘事件上投递，
+   绕开键码映射。四个实测踩过的点：
+   - **`length` 参数是 UTF-16 码元数，不是 Python 字符数**：
+     `len("emoji 🎯")` 是 8，UTF-16 要 **9** 个码元（代理对占 2）。
+     传错会**静默截断**、甚至把代理对劈成半个字符。统一用 `u16_len()`
+     （`len(t.encode("utf-16-le")) // 2`）。
+   - **按 20 码元切块，且绝不切开代理对**。事件层本身实测没有 20 码元上限
+     （36 码元也能完整往返），限制来自**接收方**通常只处理每个事件的前若干字符；
+     所以是兼容性取值，不是硬约束。`_chunks(..., limit=1)` 对单个 emoji
+     仍返回一个块（宁可超限也不劈代理对）。
+   - **`\n` / `\t` 发真实键码**（`0x24` Return / `0x30` Tab），不塞进 Unicode 串
+     ——多数应用不认字面换行符，塞进去属行为回退；这是刻意保持 pynput 的旧语义。
+     `\r\n` / `\r` 先规范化成 `\n`（否则一个换行变两次）。
+   - **组合键仍走 pynput**：`MacKeyboardController` 只覆盖 `type()`，
+     `press()` / `release()` 保持 pynput 实现（组合键/单键本来就是键码语义，
+     那条路径是验证过的）。
+   - **写测试的陷阱**：`CGEventKeyboardGetUnicodeString` 对**没挂字符串**的事件
+     （纯键码的 Return/Tab、空 keyUp）返回的是**未定义垃圾**，实测 `(1, '\r')`
+     而不是 `(0, '')`——拿它当「该事件不带文本」的依据会写出**假断言**。
+     要断言键码就读 `kCGKeyboardEventKeycode` 字段。写法见 `tests/test_mactype.py`
+     的 `_read()`。
 
 ## 已知问题
 
@@ -88,3 +121,6 @@
 - 2026-09-12 点击时序修复
 - 2026-09-12 **v3 重写**：虚拟时钟 + 时间采样插值 + 三档追赶；拖拽事件类型、
   点击序列号、滚轮单位与双轴、HID 层投递、热路径去日志
+- 2026-09-13 补记 `core/mactype.py` 的 Unicode 文本通道细节（UTF-16 码元长度、
+  代理对切块、控制字符走真实键码）与 `CGEventKeyboardGetUnicodeString` 的假断言陷阱
+  （设计要点 8）；补 `core/mactype.py` 到代码位置
