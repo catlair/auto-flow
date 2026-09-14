@@ -7,17 +7,17 @@
 ```
 ┌──────────────────────────────────────────────────┐
 │ Auto Flow.app（Tauri 2 / Rust）                  │
-│  ├─ WebView：Vue 3 + TDesign 前端（8 组件）       │
+│  ├─ WebView：Vue 3 + TDesign 前端（8 组件）      │
 │  ├─ spawn / 守护重启 Python sidecar              │
-│  └─ rpc_event 事件转发 + send_rpc 命令            │
+│  └─ rpc_event 事件转发 + send_rpc 命令           │
 └──────────────┬───────────────────────────────────┘
                │ stdio NDJSON（JSON-RPC 2.0）
 ┌──────────────▼───────────────────────────────────┐
-│ autoflow-sidecar（PyInstaller onedir，MacDev 签） │
-│  ├─ rpc/server.py     帧解析/分发/通知队列（写锁） │
-│  ├─ rpc/controller.py 工作流真源 + 状态机          │
-│  ├─ core/             录制/回放/执行器/视觉/热键   │
-│  └─ tasks/            九种内置节点（自描述参数）   │
+│ autoflow-sidecar（PyInstaller onedir，MacDev 签）│
+│  ├─ rpc/server.py    帧解析/分发/通知队列（写锁）│
+│  ├─ rpc/controller.py 工作流真源 + 状态机        │
+│  ├─ core/             录制/回放/执行器/视觉/热键 │
+│  └─ tasks/           十二种内置节点（自描述参数）│
 └──────────────────────────────────────────────────┘
 ```
 
@@ -37,14 +37,14 @@ NDJSON JSON-RPC 2.0 over stdio。请求/响应按 id 配对；通知（无 id）
 ## 目录
 
 ```
-core/      events(模型) recorder player executor maclistener mackeys
+core/      events(流程图模型) recorder player executor maclistener mackeys
            keymap vision ocr yolo permissions paths
-tasks/     base(注册表/自描述参数) builtin(九种节点)
+tasks/     base(注册表/自描述参数) builtin(十二种节点)
 rpc/       server controller
 tauri/     前端 + Rust 壳
 models/    yolo11n.onnx（默认 YOLO 模型）
-tests/     test_core.py + test_rpc.py（91 例，RPC 用真实子进程）
-scripts/   build_sidecar / sign_tauri_app / sync_app / make_dmg
+tests/     test_core.py + test_rpc.py（173 例，RPC 用真实子进程）
+scripts/   build_sidecar / sign_tauri_app / sync_app / make_dmg / check_installed
 ```
 
 ## 硬约束（踩坑沉淀，不可违反）

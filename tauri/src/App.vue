@@ -3,7 +3,7 @@ import { onMounted, ref } from "vue";
 import { useAppStore } from "@/stores/app";
 import WorkflowMenu from "@/components/WorkflowMenu.vue";
 import PermissionBanner from "@/components/PermissionBanner.vue";
-import NodeList from "@/components/NodeList.vue";
+import FlowCanvas from "@/components/FlowCanvas.vue";
 import ParamsPanel from "@/components/ParamsPanel.vue";
 import RunPanel from "@/components/RunPanel.vue";
 import RecordPanel from "@/components/RecordPanel.vue";
@@ -50,6 +50,14 @@ onMounted(() => store.init());
     <button class="af-link" @click="store.dismissReconnect()">知道了</button>
   </div>
 
+  <!-- 旧版工作流迁移提示：后端把 v3 的线性列表接成了线性边链，但条件的
+       run_when 门控语义无法一对一映射，必须让用户知道要去重连。 -->
+  <div v-if="store.migratedNotice" class="af-migrated">
+    <span>{{ store.migratedNotice }}</span>
+    <span style="flex: 1" />
+    <button class="af-link" @click="store.dismissMigrated()">知道了</button>
+  </div>
+
   <div v-if="store.banner" :class="['af-banner', store.bannerKind]">
     {{ store.banner }}
     <!-- 非 ok 的横幅都给一个通往诊断面板的入口：断连详情、运行错误都在那里 -->
@@ -64,9 +72,11 @@ onMounted(() => store.init());
   </div>
 
   <div class="af-layout">
-    <section class="af-col">
-      <div class="af-panel-head"><b>工作流</b><span class="af-hint">拖动 ⋮⋮ 排序 · 双击节点改名</span></div>
-      <NodeList />
+    <section class="af-col af-flow-col">
+      <div class="af-panel-head">
+        <b>流程图</b><span class="af-hint">拖节点移动 · 从右侧圆点拖出连线 · Delete 删除</span>
+      </div>
+      <FlowCanvas />
     </section>
     <section class="af-col">
       <div class="af-panel-head"><b>参数</b><span class="af-hint">{{ selectedTitle }}</span></div>
@@ -128,6 +138,13 @@ onMounted(() => store.init());
   padding: 10px 12px;
   overflow-y: auto;
 }
+/* 画布这一列自己管滚动：让 .af-col 滚动会把画布一起滚走，
+   而画布要的是「固定大小 + 内部平移缩放」。 */
+.af-flow-col {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .af-panel-head {
   display: flex;
   align-items: baseline;
@@ -175,6 +192,16 @@ onMounted(() => store.init());
   color: #057a4a;
   font-size: 12px;
   border-bottom: 1px solid #cdebd9;
+}
+.af-migrated {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: #fff8e6;
+  color: #8a5a00;
+  font-size: 12px;
+  border-bottom: 1px solid #f2e2b5;
 }
 .af-link {
   border: none;

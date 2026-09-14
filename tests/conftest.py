@@ -78,6 +78,34 @@ def isolate_desktop_and_schedule(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def restore_task_registry():
+    """每个用例结束后把节点注册表还原成内置集合。
+
+    `tasks.base._REGISTRY` 是**进程级全局**：用例里 `tb.register(_TestNode())`
+    注册的探针节点不会自己消失，会一直留到整个 pytest 进程结束。
+
+    历史后果（2026-09-13 实际踩到）：`test_executor_stop_flag_stops_loop` 的
+    `_test_slow` 与 `test_executor_node_exception_stops_gracefully` 的
+    `_test_bad` 泄漏进注册表，跑到后面的 `test_node_menu_order_is_explicit`
+    时 `all_definitions()` 多出两条（order 都是默认的 100，排在末尾），
+    `len(defs) == 12` 断言失败——**且只在全量运行时失败**，单跑那条用例永远
+    通过。顺序依赖型假失败极难排查，统一在这里兜住，不必逐个用例写清理。
+
+    快照前先 `import tasks.builtin`：否则若本 fixture 在 builtin 被导入之前
+    抢先跑（导入顺序取决于先收集哪个测试文件），快照到的是**空注册表**，
+    测试结束还原就会把全部内置节点抹掉，反而制造出更诡异的失败。
+    """
+    import tasks.base as tb
+    import tasks.builtin  # noqa: F401  先确保内置节点已注册，再快照
+
+    before = dict(tb._REGISTRY)
+    yield
+    # 就地改同一个 dict 对象，避免别处持有的引用失效
+    tb._REGISTRY.clear()
+    tb._REGISTRY.update(before)
+
+
+@pytest.fixture(autouse=True)
 def block_real_screen_capture(monkeypatch):
     """默认禁止真实截屏。
 

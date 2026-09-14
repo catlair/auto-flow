@@ -7,6 +7,7 @@ import type {
   Permissions,
   Workflow,
 } from "@/rpc/types";
+import { PORT_OUT } from "@/flow/ports";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -33,6 +34,28 @@ export type BackendNote = {
 };
 
 type CapturedKeyHandler = (name: string) => void;
+
+/**
+ * 实际的起始节点 uid——**必须与后端 `Executor.entry_uid` 完全一致**，
+ * 否则画布上的「起点」徽标会标在一个后端并不从这里开始跑的节点上，
+ * 用户照着画布排查会越排越糊涂。
+ *
+ * 规则：显式 `start`（且节点还在）> 第一个 start 节点 > 第一个节点。
+ * 「节点还在」这层判断不能省：`start` 是后端清空的，但手工编辑的 json
+ * 或半途失败的操作都可能留下指向已删节点的 start。
+ *
+ * 写成模块级函数而不是只在 getter 里实现，是因为 `diagnostics` 也要报它——
+ * 而在 getter 里写 `this.entryUid` 会让 Pinia 的 getters 类型推断成环，
+ * 结果是**所有** getter 在组件里都变成「不存在」（TS2339 一大片）。
+ */
+function resolveEntryUid(wf: Workflow | null | undefined): string {
+  const nodes = wf?.nodes ?? [];
+  if (!nodes.length) return "";
+  const wanted = wf?.start;
+  if (wanted && nodes.some((n) => n.uid === wanted)) return wanted;
+  const s = nodes.find((n) => n.type === "start");
+  return s?.uid ?? nodes[0]?.uid ?? "";
+}
 
 export const useAppStore = defineStore("app", {
   state: () => ({
@@ -69,9 +92,13 @@ export const useAppStore = defineStore("app", {
     recordCanUndo: false,
     recordOrigin: [0, 0] as [number, number],
     permissions: { accessibility: false, inputMonitoring: false, screenRecording: false } as Permissions,
-    workflow: { name: "未命名", speed: 1.0, repeat: 1, nodes: [] } as Workflow,
+    workflow: { name: "未命名", speed: 1.0, repeat: 1, nodes: [], edges: [], start: "" } as Workflow,
     definitions: [] as NodeDefinition[],
     selectedIndex: -1,
+    // 「本次加载的工作流由旧版有序列表迁移而来」——后端只存内存不落盘，
+    // 界面据此给一次提示（否则用户会发现条件不再门控却完全不知道为什么）。
+    workflowMigrated: false,
+    migratedNotice: "",
     base: { x: 0, y: 0 },
     schedule: null as any,
     nextFire: "",
@@ -93,6 +120,10 @@ export const useAppStore = defineStore("app", {
       const m: Record<string, NodeDefinition> = {};
       for (const d of state.definitions) m[d.type] = d;
       return m;
+    },
+    /** 起始节点 uid，见 `resolveEntryUid`。 */
+    entryUid(state): string {
+      return resolveEntryUid(state.workflow);
     },
     /**
      * 诊断信息汇总（§18 P4「诊断面板」）。
@@ -124,6 +155,9 @@ export const useAppStore = defineStore("app", {
         workflowName: state.workflow?.name ?? "",
         nodeCount: nodes.length,
         enabledNodeCount: nodes.filter((n) => n?.enabled).length,
+        edgeCount: state.workflow?.edges?.length ?? 0,
+        startUid: resolveEntryUid(state.workflow),
+        migratedFromList: !!state.workflowMigrated,
         definitionCount: state.definitions.length,
         base: { x: state.base?.x ?? 0, y: state.base?.y ?? 0 },
         scheduleMode: state.schedule?.mode ?? "",
@@ -148,6 +182,9 @@ export const useAppStore = defineStore("app", {
     },
     dismissReconnect() {
       this.reconnectNotice = "";
+    },
+    dismissMigrated() {
+      this.migratedNotice = "";
     },
     isInputFocused(): boolean {
       const el = document.activeElement as HTMLElement | null;
@@ -269,7 +306,30 @@ export const useAppStore = defineStore("app", {
       if (!wf || !Array.isArray(wf.nodes)) {
         throw new Error("工作流数据无效：缺少 nodes 数组");
       }
-      this.workflow = wf;
+      // v4 的 edges / start 缺失时补默认值。旧帧（重连前缓存的）或旧版后端
+      // 都不带这两个字段，画布拿到 undefined 会在 computed 里直接抛。
+      // 注意**不改传入对象**：它可能是 store 里已有的引用。
+      const next: Workflow = {
+        ...wf,
+        edges: Array.isArray(wf.edges) ? wf.edges : [],
+        start: typeof wf.start === "string" ? wf.start : "",
+      };
+      this.workflow = next;
+
+      // 迁移提示只在「从否变是」时给一次。每次都设的话，后续任何一次
+      // workflow.changed（改个参数就会有）都会把提示重新弹出来。
+      const migrated = !!next.migrated_from_list;
+      if (migrated && !this.workflowMigrated) {
+        this.migratedNotice =
+          "这个工作流来自旧版「有序列表」，已按原顺序自动连线。" +
+          "条件节点不再自动门控后续节点——请把「成立 / 不成立」分别接到各自的分支上。";
+      } else if (!migrated) {
+        // 换成了非迁移工作流（新建 / 打开 v4 文件）：提示必须撤掉，
+        // 否则它会一直挂在界面上，说的却是上一个工作流的事。
+        this.migratedNotice = "";
+      }
+      this.workflowMigrated = migrated;
+
       if (typeof running === "boolean") this.running = running;
       if (typeof recording === "boolean") this.recording = recording;
       if (this.selectedIndex >= wf.nodes.length) this.selectedIndex = wf.nodes.length - 1;
@@ -412,19 +472,31 @@ export const useAppStore = defineStore("app", {
       if (this.selectedIndex >= this.workflow.nodes.length)
         this.selectedIndex = this.workflow.nodes.length - 1;
     },
-    async addNode(type: string, index?: number) {
-      const r = await rpc.request("node.add", { type, index });
+    /**
+     * uid → 当前 nodes 下标；找不到返回 -1。
+     *
+     * 画布上一切交互都以 uid 为单位（边的两端、Vue Flow 的节点 id 都是 uid），
+     * 而后端 node.* 系列仍以 index 为单位，所以这里集中做一次换算。
+     * 不要在组件里各写一份 `findIndex`——下标会随增删漂移，散着写迟早有一处忘记重算。
+     */
+    indexOfUid(uid: string): number {
+      return this.workflow.nodes.findIndex((n) => n.uid === uid);
+    },
+    async addNode(type: string, x?: number, y?: number) {
+      const r = await rpc.request("node.add", { type, x, y });
       this.applyCurrent(r);
       return r.index as number;
     },
     async removeNode(index: number) {
+      const selUid = this.workflow.nodes[this.selectedIndex]?.uid;
       const cur = await rpc.request("node.remove", { index });
       this.applyCurrent(cur);
-      if (this.selectedIndex === index) this.selectNode(-1);
-    },
-    async moveNode(index: number, to: number) {
-      const cur = await rpc.request("node.move", { index, to });
-      this.applyCurrent(cur);
+      // 选中要**跟着 uid 走**：删掉的是别的节点时下标会整体前移，
+      // 只按 index 判断的话选中会悄悄挪到相邻的另一个节点上，
+      // 而参数面板这时显示的是另一个节点的参数——用户一改就改错了对象。
+      if (!selUid) return;
+      if (!this.workflow.nodes.some((n) => n.uid === selUid)) this.selectNode(-1);
+      else this.selectedIndex = this.indexOfUid(selUid);
     },
     async renameNode(index: number, name: string) {
       const cur = await rpc.request("node.rename", { index, name });
@@ -436,6 +508,36 @@ export const useAppStore = defineStore("app", {
     },
     async setParam(index: number, key: string, value: any) {
       const cur = await rpc.request("node.params.set", { index, key, value });
+      this.applyCurrent(cur);
+    },
+
+    // ---- 画布：坐标与边（后端这几个方法本身就是 uid 为单位） ----
+    /**
+     * 保存节点坐标。**只在拖拽结束时调一次**——逐帧上报会把整份工作流
+     * 广播几十次，workflow.changed 刷满通知队列，把运行状态类通知挤掉
+     * （丢一条界面就可能永久停在旧状态）。
+     */
+    async setNodePos(uid: string, x: number, y: number) {
+      const cur = await rpc.request("node.setPos", { uid, x, y });
+      this.applyCurrent(cur);
+    },
+    /**
+     * 连一条边。同一个 (源节点, 出口) 后端只保留一条——**后连的替换先连的**。
+     * 返回是否发生了替换，调用方据此提示用户（否则旧连线无声消失）。
+     */
+    async addEdge(src: string, dst: string, port: string = PORT_OUT): Promise<boolean> {
+      const replaced = this.workflow.edges.some((e) => e.src === src && e.port === port);
+      const cur = await rpc.request("edge.add", { src, dst, port });
+      this.applyCurrent(cur);
+      return replaced;
+    },
+    async removeEdge(src: string, port: string = PORT_OUT) {
+      const cur = await rpc.request("edge.remove", { src, port });
+      this.applyCurrent(cur);
+    },
+    /** 指定起始节点；传空串回到「第一个 start 节点 / 第一个节点」的默认规则。 */
+    async setStart(uid: string) {
+      const cur = await rpc.request("workflow.setStart", { uid });
       this.applyCurrent(cur);
     },
     setClickThrough(enabled: boolean) {

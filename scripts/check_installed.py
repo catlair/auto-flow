@@ -57,7 +57,8 @@ def _sub_code(code, fname):
     return None
 
 
-def _artifact_checks(recorder, inputsource, controller, server, vision) -> list:
+def _artifact_checks(recorder, inputsource, controller, server, vision,
+                     events=None, executor=None) -> list:
     out = []
     if recorder is None:
         return [("core.recorder 没打进 PYZ（打包不完整？）", False)]
@@ -122,6 +123,46 @@ def _artifact_checks(recorder, inputsource, controller, server, vision) -> list:
     out.append(("_UiLogHandler.emit 带线程本地防递归守卫",
                 emit is not None and "_local" in _co_names_recursive(emit)
                 and "busy" in _all_consts(emit)))
+
+    # ---- v4 流程图（2026-09-13）----
+    # 这一组全是「不生效也不报错」的类型，正是本脚本存在的理由。
+    #
+    # SCRIPT_VERSION 必须与源码一致。打进包的若是**上一版** sidecar，打开 v4 文件
+    # 不会报任何错：旧版不认识 edges，会退化成「按 nodes 列表顺序跑」——
+    # 界面看着正常、执行顺序却是错的。这是最难从外部发现的一类偏差。
+    ev_consts = _all_consts(events) if events is not None else set()
+    # 版本号是 **int**，`_all_consts` 只收字符串，所以这里直接看模块的 co_consts。
+    # 同时要求名字也在（`co_consts` 只有值没有名，光判值会放过「别处也有个 4」）。
+    out.append(("core.events.SCRIPT_VERSION == 4（打进来的不是上一版 sidecar）",
+                events is not None
+                and "SCRIPT_VERSION" in events.co_names
+                and 4 in events.co_consts))
+    out.append(("core.events 定义了出口名常量（out/true/false/else）",
+                {"out", "true", "false", "else"} <= ev_consts))
+    # 迁移摆位：缺了它旧文件打开是一摞完全重叠的卡片，看起来像工作流被毁了
+    out.append(("core.events 有 _linear_positions（旧文件迁移会摆开坐标）",
+                events is not None
+                and "_linear_positions" in _co_names_recursive(events)))
+    # 循环兜底：缺了它，连成环的图会让界面永远停在「运行中」，只能强杀进程。
+    # 查 Executor 类体自身的常量表，而不是整个模块（模块里别处也可能有 10000）。
+    ex_body = _sub_code(executor, "Executor") if executor is not None else None
+    out.append(("core.executor.Executor.MAX_STEPS == 10000（死循环兜底）",
+                ex_body is not None
+                and "MAX_STEPS" in ex_body.co_names
+                and 10000 in ex_body.co_consts))
+    out.append(("core.executor 走图遍历（_walk + next_map + entry_uid）",
+                executor is not None
+                and {"_walk", "next_map", "entry_uid"}
+                <= _co_names_recursive(executor)))
+
+    ctrl_names = _co_names_recursive(controller) if controller is not None else set()
+    out.append(("rpc.controller 有画布方法实现（edge_add/edge_remove/node_set_pos/set_start）",
+                {"edge_add", "edge_remove", "node_set_pos", "workflow_set_start"}
+                <= ctrl_names))
+    srv_consts = _all_consts(server) if server is not None else set()
+    out.append(("rpc.server 注册了画布方法（edge.add/edge.remove/node.setPos/workflow.setStart）",
+                {"edge.add", "edge.remove", "node.setPos", "workflow.setStart"}
+                <= srv_consts))
     return out
 
 
@@ -153,7 +194,8 @@ def _load_pyz(exe: str) -> dict:
         f.write(car.extract("PYZ.pyz"))
     zar = ZlibArchiveReader(pyz_path)
     mods = {}
-    for name in ("core.recorder", "core.inputsource", "rpc.controller", "core.vision"):
+    for name in ("core.recorder", "core.inputsource", "rpc.controller",
+                 "core.vision", "core.events", "core.executor"):
         try:
             mods[name] = zar.extract(name)      # 直接返回 code object，不是 bytes
         except Exception:
@@ -302,6 +344,79 @@ def _live_checks(sidecar_path: str) -> list:
                           f"{str(p2.get('message'))[:36]}…）" if note else "")
                 out.append(("后端 WARNING 经 log.warning 通知送达界面" + detail,
                             note is not None))
+
+        # v4 流程图走一遍真实的 RPC 往返（2026-09-13）。
+        # 产物级只能证明「代码进去了」，这里证明「装进去的这份真的按新模型工作」：
+        # 边能被存下来、起点能被指定、旧文件迁移会摆开坐标。
+        with tempfile.TemporaryDirectory(prefix="autoflow-flowchk-") as td:
+            # (1) v4 文件：边与坐标原样保留，且**不**被当成迁移对象
+            v4 = os.path.join(td, "v4.json")
+            with open(v4, "w", encoding="utf-8") as f:
+                json.dump({"version": 4, "name": "flow", "start": "",
+                           "nodes": [
+                               {"type": "delay", "params": {"ms": 1}, "uid": "a",
+                                "enabled": True, "x": 80, "y": 120},
+                               {"type": "end", "params": {}, "uid": "b",
+                                "enabled": True, "x": 320, "y": 120}],
+                           "edges": [{"src": "a", "port": "out", "dst": "b"}]},
+                          f, ensure_ascii=False)
+            r4 = (s.call("workflow.load", {"path": v4}).get("result") or {}).get("workflow") or {}
+            out.append((f"v4 工作流加载后带 1 条边（edges={len(r4.get('edges') or [])}）",
+                        len(r4.get("edges") or []) == 1))
+            out.append(("v4 工作流不被标记为「由列表迁移」",
+                        r4.get("migrated_from_list") is False))
+            out.append((f"节点坐标原样带回（x={[n.get('x') for n in r4.get('nodes') or []]}）",
+                        [n.get("x") for n in r4.get("nodes") or []] == [80, 320]))
+
+            # (2) v3 文件：自动接成线性边链 **并且摆开坐标**。
+            # 只断言「迁移了」是不够的——不摆坐标时画布上是一摞重叠卡片，
+            # 用户会以为工作流被毁了，而那正是这次修复要挡住的症状。
+            v3 = os.path.join(td, "v3.json")
+            with open(v3, "w", encoding="utf-8") as f:
+                json.dump({"version": 3, "name": "old", "nodes": [
+                    {"type": "delay", "params": {"ms": 1}, "uid": f"n{i}"}
+                    for i in range(3)]}, f, ensure_ascii=False)
+            r3 = (s.call("workflow.load", {"path": v3}).get("result") or {}).get("workflow") or {}
+            coords = [(n.get("x"), n.get("y")) for n in r3.get("nodes") or []]
+            out.append(("v3 文件加载后被标记为「由列表迁移」",
+                        r3.get("migrated_from_list") is True))
+            out.append((f"v3 文件接成线性边链（{len(r3.get('edges') or [])} 条边）",
+                        len(r3.get("edges") or []) == 2))
+            out.append((f"迁移的节点坐标已摆开、不重叠（{coords}）",
+                        len(set(coords)) == 3 and all(c != (0, 0) for c in coords)))
+
+            # (3) 画布方法真的挂在 RPC 线上（方法表里有名字 ≠ 实现能用）。
+            #
+            # 必须**重新加载 v4 文件**：上面第 (2) 步把当前工作流换成了 v3 那个，
+            # 它的节点 uid 是 n0/n1/n2，而下面全部用 a/b 寻址。忘了重载时
+            # `_node_by_uid("a")` 会抛「节点不存在」，三条断言一起假失败
+            # （实测踩到：node.setPos 落在 None,None、edge.remove 一条没删、
+            # start 仍为 None，看着像后端坏了，其实是脚本自己找错了工作流）。
+            s.call("workflow.load", {"path": v4})
+            rp = s.call("node.setPos", {"uid": "a", "x": 11, "y": 22})
+            pos = ((rp.get("result") or {}).get("workflow") or {}).get("nodes") or []
+            got = next((n for n in pos if n.get("uid") == "a"), {})
+            out.append((f"node.setPos 生效（a 落在 {got.get('x')},{got.get('y')}）",
+                        (got.get("x"), got.get("y")) == (11, 22)))
+            # 不存在的 uid 必须**报错**，不能静默成功：静默成功意味着用户拖一个
+            # 已被删掉的节点时界面毫无反应、也没有任何提示，只能靠猜。
+            ghost = s.call("node.setPos", {"uid": "ghost", "x": 1, "y": 1})
+            out.append((f"node.setPos 对不存在的 uid 报错（返回 "
+                        f"{(ghost.get('error') or {}).get('code')}）",
+                        (ghost.get("error") or {}).get("code") == -32602))
+            # 自环必须被拒（-32602）；接受了会让执行器原地打转
+            loop = s.call("edge.add", {"src": "a", "dst": "a", "port": "out"})
+            out.append((f"edge.add 拒绝自环（返回 {(loop.get('error') or {}).get('code')}）",
+                        (loop.get("error") or {}).get("code") == -32602))
+            rm = s.call("edge.remove", {"src": "a", "port": "out"})
+            left = ((rm.get("result") or {}).get("workflow") or {}).get("edges") or []
+            # 必须同时判「没报错」：老 sidecar 会返回 -32601，此时 result 为空、
+            # 边数为 0，只看条数会**假通过**（实测踩到过）。
+            out.append((f"edge.remove 按 (src,port) 删边（剩 {len(left)} 条）",
+                        rm.get("error") is None and len(left) == 0))
+            st = s.call("workflow.setStart", {"uid": "b"})
+            got_start = ((st.get("result") or {}).get("workflow") or {}).get("start")
+            out.append((f"workflow.setStart 生效（start={got_start}）", got_start == "b"))
     finally:
         s.close()
     return out
@@ -325,7 +440,9 @@ def main() -> int:
                                     mods["core.inputsource"],
                                     mods["rpc.controller"],
                                     mods["rpc.server"],
-                                    mods.get("core.vision"))
+                                    mods.get("core.vision"),
+                                    mods.get("core.events"),
+                                    mods.get("core.executor"))
     except Exception as e:  # noqa: BLE001
         results.append((f"读 PYZ 失败：{e}", False))
     for desc, ok in results:

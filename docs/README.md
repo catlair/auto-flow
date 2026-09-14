@@ -17,8 +17,9 @@ docs/
     ├── _template.md       # 模块文档模板（新建模块从这里复制）
     ├── recorder.md        # 键鼠录制
     ├── player.md          # 回放引擎（插值轨迹）
-    ├── executor.md        # 工作流执行器
-    ├── nodes.md           # 节点体系（九种内置节点）
+    ├── flow.md            # 流程图模型（节点 + 有向边 / 出口名 / 迁移）
+    ├── executor.md        # 工作流执行器（图遍历）
+    ├── nodes.md           # 节点体系（十二种内置节点）
     ├── vision.md          # 图像匹配 / OCR / YOLO
     ├── hotkeys.md         # 全局热键 / 按键捕获 / 取点
     ├── schedule.md        # 定时运行

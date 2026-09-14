@@ -222,13 +222,102 @@ def test_workflow_new_and_node_crud() -> None:
         defs = _call(p, "nodes.definitions", req_id=9)
         assert defs["id"] == 9
         assert [d["type"] for d in defs["result"]] == [
-            "mouse", "keyboard", "delay", "record_replay",
-            "image_click", "ocr_click", "yolo_click", "condition", "note",
+            "start", "mouse", "keyboard", "delay", "record_replay",
+            "image_click", "ocr_click", "yolo_click", "condition", "branch", "note", "end",
         ]
         # 顺序由 definition()['order'] 提供，前端不再自己排
         assert [d["order"] for d in defs["result"]] == sorted(
             d["order"] for d in defs["result"])
-        assert all("common_params" in d and any(c["key"] == "run_when" for c in d["common_params"]) for d in defs["result"])
+        # common_params 在 v4 起**故意为空**：run_when 的语义改由「边」表达
+        assert all(d["common_params"] == [] for d in defs["result"])
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
+def test_flowchart_edges_and_positions() -> None:
+    """画布 RPC：连边/断边/节点坐标/起始节点，以及删节点时的悬空边清理。"""
+    p = _start()
+    try:
+        _call(p, "node.add", {"type": "start", "x": 10, "y": 20}, req_id=1)
+        cur = _call(p, "workflow.current", req_id=2)
+        wf = cur["result"]["workflow"]
+        a = wf["nodes"][0]["uid"]
+        # 坐标必须原样存下来（画布布局的唯一真源在后端）
+        assert (wf["nodes"][0]["x"], wf["nodes"][0]["y"]) == (10, 20)
+        assert wf["edges"] == [] and wf["start"] == ""
+        assert wf["migrated_from_list"] is False
+
+        b = _call(p, "node.add", {"type": "condition"}, req_id=3)["result"]["node"]["uid"]
+        c = _call(p, "node.add", {"type": "delay"}, req_id=4)["result"]["node"]["uid"]
+
+        # 连边
+        e1 = _call(p, "edge.add", {"src": a, "dst": b, "port": "out"}, req_id=5)
+        assert e1["result"]["workflow"]["edges"] == [{"src": a, "port": "out", "dst": b}]
+
+        # 同一个 (源, 出口) 再连一次 = **替换**，不是新增（不允许扇出）
+        e2 = _call(p, "edge.add", {"src": a, "dst": c, "port": "out"}, req_id=6)
+        assert e2["result"]["workflow"]["edges"] == [{"src": a, "port": "out", "dst": c}]
+
+        # 同一个源的不同出口互不影响（条件的 true / false 各自一条）
+        _call(p, "edge.add", {"src": b, "dst": c, "port": "true"}, req_id=7)
+        e3 = _call(p, "edge.add", {"src": b, "dst": a, "port": "false"}, req_id=8)
+        assert {(x["port"], x["dst"]) for x in e3["result"]["workflow"]["edges"]
+                if x["src"] == b} == {("true", c), ("false", a)}
+
+        # 自环要被挡住（连到自己一定是错的，早点报比运行时报好）
+        bad = _call(p, "edge.add", {"src": a, "dst": a, "port": "out"}, req_id=9)
+        assert bad["error"]["code"] == -32602
+
+        # 起始节点
+        s = _call(p, "workflow.setStart", {"uid": b}, req_id=10)
+        assert s["result"]["workflow"]["start"] == b
+
+        # 拖拽结束回写坐标，小数要取整
+        pos = _call(p, "node.setPos", {"uid": c, "x": 300.4, "y": 199.6}, req_id=11)
+        moved = [n for n in pos["result"]["workflow"]["nodes"] if n["uid"] == c][0]
+        assert (moved["x"], moved["y"]) == (300, 200)
+
+        # 断边
+        e_rm = _call(p, "edge.remove", {"src": a, "port": "out"}, req_id=12)
+        assert all(not (e["src"] == a and e["port"] == "out")
+                   for e in e_rm["result"]["workflow"]["edges"])
+
+        # 删节点必须同时清掉连着它的边：否则画布上留着悬空连线，
+        # 而执行器走到那儿会找不到节点直接断路径——两种表现对不上。
+        cidx = [i for i, n in enumerate(e_rm["result"]["workflow"]["nodes"])
+                if n["uid"] == c][0]
+        rm = _call(p, "node.remove", {"index": cidx}, req_id=13)
+        assert all(e["src"] != c and e["dst"] != c
+                   for e in rm["result"]["workflow"]["edges"])
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
+def test_workflow_load_reports_list_migration(tmp_path) -> None:
+    """打开 v3 旧文件：接成线性边链，并把「已迁移」标记透给界面。
+
+    标记必须让前端看到——否则用户会发现条件不再门控而完全不知道为什么。
+    """
+    old = tmp_path / "v3.json"
+    old.write_text(json.dumps({"version": 3, "name": "旧流", "nodes": [
+        {"type": "delay", "params": {"ms": 1}, "uid": "a"},
+        {"type": "condition", "params": {}, "uid": "b"},
+        {"type": "delay", "params": {"ms": 2}, "uid": "c"},
+    ]}), encoding="utf-8")
+
+    p = _start()
+    try:
+        ld = _call(p, "workflow.load", {"path": str(old)}, req_id=1)
+        wf = ld["result"]["workflow"]
+        assert wf["migrated_from_list"] is True
+        assert {(e["src"], e["port"], e["dst"]) for e in wf["edges"]} == {
+            ("a", "out", "b"), ("b", "true", "c"), ("b", "false", "c")}
+        # 落盘时不该带迁移标记（否则每次打开都提示一遍）
+        out = tmp_path / "saved.json"
+        _call(p, "workflow.save", {"path": str(out)}, req_id=2)
+        assert "migrated_from_list" not in json.loads(out.read_text(encoding="utf-8"))
     finally:
         _rpc(p, "app.shutdown")
         p.wait(timeout=5)

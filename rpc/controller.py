@@ -15,18 +15,21 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
-from core.events import MacroEvent, Node, Workflow
+from core.events import MacroEvent, Node, Workflow, Edge, PORT_OUT
 from core import executor as _executor_mod  # 仅类型/构造；真正运行在 P1-2
 
 # 节点菜单顺序（§9.4）**不再在这里维护**：唯一真源是各节点的 order
 # （tasks/base.py::all_definitions）。此前这里有一份 _NODE_ORDER 映射，
 # 正好把 tasks/ 里错误的注册顺序掩盖住了。
 
-# 通用参数「执行条件」（§9.3），所有节点尾部都渲染，后端为真源。
-COMMON_PARAMS = [
-    {"key": "run_when", "label": "执行条件", "ptype": "select",
-     "default": "总是", "options": ["总是", "条件成立", "条件不成立"]},
-]
+# 通用参数（所有节点尾部渲染，后端为真源）。
+#
+# v4 起**故意为空**：原来的「执行条件 run_when」（总是/条件成立/条件不成立）是
+# 「线性列表 + 一个全局条件标志」时代的产物，流程图模式下这个语义由**边**表达
+# （条件的 true/false 出口），留着它会出现两套互相打架的分支机制。
+# 旧文件里残留的 `run_when` 参数值**不做清理**——它只是不再渲染、不再被读取，
+# 清掉反而会让用户以为自己的配置被吞了。
+COMMON_PARAMS: list = []
 
 # 热键物理键顺序：F9/F10/F11 依次对应 record/run/pick（与现状 ui/main_window 一致）。
 _HOTKEY_KEYS = ["F9", "F10", "F11"]
@@ -115,13 +118,16 @@ class AppController:
             # 且保存即数据丢失）——必须另建浅拷贝视图。
             params = {**params, "events": {"count": len(evs)}}
         return {"type": node.type, "params": params, "enabled": node.enabled,
-                "uid": node.uid, "name": node.name}
+                "uid": node.uid, "name": node.name, "x": node.x, "y": node.y}
 
     def _public_workflow(self) -> dict:
         with self._lock:
             return {
                 **{k: v for k, v in self.workflow.to_dict().items() if k != "nodes"},
                 "nodes": [self._public_node(n) for n in self.workflow.nodes],
+                # 迁移标记**不落盘**（to_dict 刻意不带），但必须让界面看到——
+                # 否则用户打开旧文件后会发现「条件不再门控了」而完全不知道为什么。
+                "migrated_from_list": self.workflow.migrated_from_list,
             }
 
     def _broadcast_workflow(self) -> None:
@@ -188,7 +194,8 @@ class AppController:
             raise ControllerError(-32602, "节点索引越界", {"index": index})
         return self.workflow.nodes[index]
 
-    def node_add(self, type_name: str, index: Optional[int] = None) -> dict:
+    def node_add(self, type_name: str, index: Optional[int] = None,
+                 x: Optional[int] = None, y: Optional[int] = None) -> dict:
         import tasks.builtin  # 确保节点已注册
         from tasks.base import get_task
         if not get_task(type_name):
@@ -201,13 +208,24 @@ class AppController:
             else:
                 inserted = max(0, index)
                 self.workflow.nodes.insert(inserted, node)
+            # 坐标：前端没给就**错开摆**。这不是布局，只是避免新节点全叠在
+            # 同一点上（画布上会看起来像「加了没反应」）。真正的布局在前端。
+            node.x = int(x) if x is not None else 80 + (inserted % 4) * 200
+            node.y = int(y) if y is not None else 80 + (inserted // 4) * 130
         self._broadcast_workflow()
         return {**self.workflow_current(), "index": inserted, "node": self._public_node(node)}
 
     def node_remove(self, index: int) -> dict:
         with self._lock:
-            self._node_at(index)
+            node = self._node_at(index)
             self.workflow.nodes.pop(index)
+            # **必须同时清掉连着它的边**：留着的话，用户看到的是画布上悬空的
+            # 连线（视觉上像还在连），而执行器走到那儿会因为找不到节点直接断掉
+            # 整条路径——两种表现对不上，是最难查的那类不一致。
+            self.workflow.edges = [e for e in self.workflow.edges
+                                   if e.src != node.uid and e.dst != node.uid]
+            if self.workflow.start == node.uid:
+                self.workflow.start = ""
         self._broadcast_workflow()
         return self.workflow_current()
 
@@ -241,6 +259,69 @@ class AppController:
         with self._lock:
             node = self._node_at(index)
             node.params[key] = value
+        self._broadcast_workflow()
+        return self.workflow_current()
+
+    # ---- 画布：节点坐标（v4 起节点有 x/y，前端画布用） ----
+    def _node_by_uid(self, uid: str) -> Node:
+        for n in self.workflow.nodes:
+            if n.uid == uid:
+                return n
+        raise ControllerError(-32602, "节点不存在", {"uid": uid})
+
+    def node_set_pos(self, uid: str, x: Any, y: Any) -> dict:
+        """保存节点在画布上的坐标。
+
+        **只该在拖拽结束时调一次**（前端挂在 drag-stop 上）。逐帧上报会把整份
+        工作流广播几十次，`workflow.changed` 刷满通知队列，把运行状态类的通知
+        挤掉——那条丢一条界面就永久停在旧状态。
+        """
+        try:
+            px, py = int(round(float(x))), int(round(float(y)))
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "坐标须为数字", {"x": x, "y": y})
+        with self._lock:
+            node = self._node_by_uid(str(uid or ""))
+            node.x, node.y = px, py
+        self._broadcast_workflow()
+        return self.workflow_current()
+
+    # ---- 画布：边 ----
+    def edge_add(self, src: str, dst: str, port: str = PORT_OUT) -> dict:
+        """连一条边。同一个 (源节点, 出口) 只保留一条——**后连的替换先连的**。
+
+        不允许一个出口扇出多条：那要引入并行执行，而并行和「顺序执行 + 汇合」
+        是两套模型，混在一起没人能预测行为。要并行请拆成两条路径再用汇合节点收回。
+        """
+        src, dst, port = str(src or ""), str(dst or ""), str(port or PORT_OUT)
+        if not src or not dst:
+            raise ControllerError(-32602, "src / dst 必填")
+        if src == dst:
+            raise ControllerError(-32602, "不能连到自己", {"uid": src})
+        with self._lock:
+            self._node_by_uid(src)
+            self._node_by_uid(dst)
+            self.workflow.edges = [e for e in self.workflow.edges
+                                   if not (e.src == src and e.port == port)]
+            self.workflow.edges.append(Edge(src=src, port=port, dst=dst))
+        self._broadcast_workflow()
+        return self.workflow_current()
+
+    def edge_remove(self, src: str, port: str = PORT_OUT) -> dict:
+        src, port = str(src or ""), str(port or PORT_OUT)
+        with self._lock:
+            self.workflow.edges = [e for e in self.workflow.edges
+                                   if not (e.src == src and e.port == port)]
+        self._broadcast_workflow()
+        return self.workflow_current()
+
+    def workflow_set_start(self, uid: str) -> dict:
+        """指定起始节点；传空串 = 回到「第一个 start 节点 / 第一个节点」的默认规则。"""
+        uid = str(uid or "")
+        with self._lock:
+            if uid:
+                self._node_by_uid(uid)
+            self.workflow.start = uid
         self._broadcast_workflow()
         return self.workflow_current()
 

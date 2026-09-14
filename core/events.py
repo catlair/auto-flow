@@ -2,6 +2,9 @@
 
 MacroEvent 与 Tauri 版 macro-recorder 的脚本格式保持字段兼容，
 旧版录制的 .json 脚本可以直接导入使用。
+
+**v4 起工作流是流程图**（节点 + 有向边），不再是「有序列表 + run_when 门控」。
+旧文件仍能打开（见 `Workflow.load`），但 `run_when` 不再生效。
 """
 from __future__ import annotations
 
@@ -11,10 +14,31 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
-SCRIPT_VERSION = 3
+SCRIPT_VERSION = 4
 
 # 滚轮增量单位：line=逐行（传统滚轮）pixel=逐点（触控板/妙控鼠标）
 WHEEL_UNITS = ("line", "pixel")
+
+# ---- 流程图出口名（port） ----
+# 一条边 = (源节点 uid, 源节点的某个出口名) -> 目标节点 uid。
+# 出口名是**协议的一部分**：前端按它渲染连接手柄，后端按它选下一跳。
+# 同一个 (源节点, 出口名) 只允许一条边（`edge.add` 会替换旧的）——
+# 不允许扇出，否则「一个出口同时跑两条路径」的执行语义要引入并行，
+# 那和「顺序执行 + 汇合」是两套模型，混在一起没人能预测行为。
+PORT_OUT = "out"        # 操作 / 开始：唯一出口
+PORT_TRUE = "true"      # 条件：成立
+PORT_FALSE = "false"    # 条件：不成立
+PORT_ELSE = "else"      # 分支：所有 case 都不成立
+
+
+def case_port(i: int) -> str:
+    """分支节点的第 i 个 case 出口名（i 从 1 开始，与用户看到的序号一致）。"""
+    return f"case:{i}"
+
+
+# 分支节点的 case 上限。参数面板是按 ParamDef 平铺渲染的，每个 case 要占
+# 两个参数（检测方式 + 取值），所以这个数字直接决定参数面板的长度。
+MAX_BRANCH_CASES = 6
 
 
 @dataclass
@@ -88,22 +112,49 @@ class RecordResult:
 
 
 @dataclass
+class Edge:
+    """流程图里的一条有向边。
+
+    `src` / `dst` 都是节点的 **uid**，不是下标——下标会随增删移动漂移，
+    删掉一个节点就会让后面的连线整体错位接错人；uid 是稳定的。
+
+    `dst` 为空串表示「这个出口没有下一跳」。之所以允许存下来，是为了让画布上
+    「我留空了这个出口」和「这条边不存在」看起来一样——反正执行器都不会往下走。
+    """
+    src: str
+    port: str = PORT_OUT
+    dst: str = ""
+
+    def to_dict(self) -> dict:
+        return {"src": self.src, "port": self.port, "dst": self.dst}
+
+    @staticmethod
+    def from_dict(d: dict) -> "Edge":
+        return Edge(src=str(d.get("src") or ""),
+                    port=str(d.get("port") or PORT_OUT),
+                    dst=str(d.get("dst") or ""))
+
+
+@dataclass
 class Node:
     type: str
     params: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     uid: str = field(default_factory=lambda: uuid.uuid4().hex)  # 前端列表/拖拽 key，稳定唯一
     name: str = ""                              # 自定义名（空则显示类型名）
+    x: int = 0                                  # 画布坐标：后端只存不算，布局由前端负责
+    y: int = 0
 
     def to_dict(self) -> dict:
         return {"type": self.type, "params": self.params, "enabled": self.enabled,
-                "uid": self.uid, "name": self.name}
+                "uid": self.uid, "name": self.name, "x": self.x, "y": self.y}
 
     @staticmethod
     def from_dict(d: dict) -> "Node":
         return Node(type=d.get("type", ""), params=d.get("params") or {},
                     enabled=d.get("enabled", True), uid=d.get("uid") or uuid.uuid4().hex,
-                    name=str(d.get("name") or ""))
+                    name=str(d.get("name") or ""),
+                    x=int(d.get("x") or 0), y=int(d.get("y") or 0))
 
 
 @dataclass
@@ -113,6 +164,11 @@ class Workflow:
     speed: float = 1.0              # 全局速度倍率，>1 加速
     repeat: int = 1                 # 整体循环次数
     nodes: list[Node] = field(default_factory=list)
+    edges: list[Edge] = field(default_factory=list)
+    start: str = ""                 # 起始节点 uid；空 = 第一个 start 节点，再退回 nodes[0]
+    # 加载时是否由 v3 线性列表迁移而来。**不落盘**（to_dict 里刻意不带），
+    # 只在本次会话里让界面提示「条件不再自动门控，请重连」。
+    migrated_from_list: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -120,7 +176,9 @@ class Workflow:
             "name": self.name,
             "speed": self.speed,
             "repeat": self.repeat,
+            "start": self.start,
             "nodes": [n.to_dict() for n in self.nodes],
+            "edges": [e.to_dict() for e in self.edges],
         }
 
     def save(self, path: str) -> None:
@@ -150,7 +208,67 @@ class Workflow:
             }))
         else:
             wf.nodes = [Node.from_dict(n) for n in (nodes or [])]
+            wf.edges = [Edge.from_dict(e) for e in (data.get("edges") or [])]
+            wf.start = str(data.get("start") or "")
+        # v3 及更早：有序列表，没有边。接成线性边链让它还能跑。
+        if wf.version < SCRIPT_VERSION and not wf.edges:
+            wf.edges = _linear_edges(wf.nodes)
+            _linear_positions(wf.nodes)
+            wf.migrated_from_list = bool(wf.nodes)
         return wf
+
+
+def _linear_edges(nodes: list[Node]) -> list[Edge]:
+    """把 v3 的线性节点列表接成一条线性边链（v4 迁移用）。
+
+    **不试图还原分支**：v3 的 `run_when` 依赖一个全局的「最近一次条件结果」，
+    同一条件下可以有任意多节点挂不同的 run_when，语义无法一对一映射成边。
+    所以这里只保证「还能从头跑到尾」，由调用方提示用户重连。
+
+    条件节点要**两个出口都接上**：它没有 `out` 出口，只接一条的话执行到它就
+    走不下去了（流程图直接断在那儿）。两条都接到下一个节点 = 条件不门控，
+    与「run_when 失效」的承诺一致，而且画布上能一眼看出「这里该重连」。
+    """
+    out: list[Edge] = []
+    for i in range(len(nodes) - 1):
+        src, dst = nodes[i], nodes[i + 1].uid
+        if src.type == "condition":
+            out.append(Edge(src=src.uid, port=PORT_TRUE, dst=dst))
+            out.append(Edge(src=src.uid, port=PORT_FALSE, dst=dst))
+        elif src.type == "branch":
+            # v3 没有 branch 节点，但防御一下：把 case 与 else 都接到下一个
+            for k in range(1, MAX_BRANCH_CASES + 1):
+                out.append(Edge(src=src.uid, port=case_port(k), dst=dst))
+            out.append(Edge(src=src.uid, port=PORT_ELSE, dst=dst))
+        else:
+            out.append(Edge(src=src.uid, port=PORT_OUT, dst=dst))
+    return out
+
+
+# 迁移时的节点坐标：横向排成一条链。
+# x 间距要大于卡片宽度（前端约 180px），否则卡片会首尾相叠。
+MIGRATED_X0 = 80
+MIGRATED_Y0 = 120
+MIGRATED_DX = 240
+
+
+def _linear_positions(nodes: list[Node]) -> None:
+    """就地给迁移来的节点摆开位置。
+
+    为什么必须有这一步：x/y 是 v4 才有的字段，v3 文件里一个坐标都没有，
+    全部落在 (0, 0)。画布上看到的就是**一摞完全重叠的卡片**——看起来像
+    「打开旧文件之后工作流被毁了」，而数据其实完好。这里按原顺序把它们摆开。
+
+    **横向**而不是纵向：手柄在节点的左右两侧，横向链的边才是直的；
+    纵向排列会让每条边都绕成 S 形。
+
+    只在坐标为 (0, 0) 的节点上动手：手工给旧文件补过坐标的人不该被覆盖。
+    """
+    for i, n in enumerate(nodes):
+        if n.x or n.y:
+            continue
+        n.x = MIGRATED_X0 + i * MIGRATED_DX
+        n.y = MIGRATED_Y0
 
 
 def now_ms() -> int:

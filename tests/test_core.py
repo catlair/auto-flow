@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from core.events import MacroEvent, Node, Workflow
+from core.events import (MacroEvent, Node, Workflow, Edge,
+                         PORT_OUT, PORT_TRUE, PORT_FALSE, PORT_ELSE, case_port)
 from core.executor import Executor, RunContext
 from core.player import PlayOptions, Player
 from core import keymap
@@ -71,15 +72,19 @@ def test_keymap_single_char():
 
 # ---------- executor ----------
 def test_executor_order_and_repeat():
+    """沿边走 + 注释节点跳过但不断链 + 工作流 repeat 生效。"""
     calls = []
     ex = Executor()
     ex.player.glide_now = lambda t: None  # 不动真鼠标
-    wf = Workflow(repeat=2, nodes=[
-        Node(type="note", params={"text": "skip"}),
-        Node(type="delay", params={"ms": 1}),
-        Node(type="keyboard", params={"mode": "text", "text": ""}),
-    ])
+    wf = _graph(
+        ("note", {"text": "skip"}),
+        ("delay", {"ms": 1}),
+        ("keyboard", {"mode": "text", "text": ""}),
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 2)],
+        repeat=2,
+    )
     ex.run_workflow(wf, on_node=lambda i, t: calls.append(t))
+    # note 不执行也不上报（它不是「跑过」的节点），但路径照样往下走
     assert calls == ["delay", "keyboard", "delay", "keyboard"]
     assert ex.running is False
 
@@ -128,31 +133,311 @@ def test_generic_node_repeat_remains_supported(monkeypatch):
     assert waits == [0.01] * 6
 
 
-def test_executor_condition_gating(monkeypatch):
-    """run_workflow 每次重置条件；由条件节点写入后门控后续节点。"""
-    ran = []
+def _graph(*nodes, edges=(), **kw) -> Workflow:
+    """按 (type, params) 建节点，边用**下标**写，省得每处手搓 uid。
+
+    `edges` 每项是 `(源下标, 出口名, 目标下标)`。
+    """
+    ns = [Node(type=t, params=dict(p)) for t, p in nodes]
+    es = [Edge(src=ns[a].uid, port=port, dst=ns[b].uid) for a, port, b in edges]
+    return Workflow(nodes=ns, edges=es, **kw)
+
+
+def _patch_wait(monkeypatch, ex, seen):
+    """把 player.wait 换成记录器：delay 节点于是变成「记一笔 + 立即返回」。"""
+    monkeypatch.setattr(ex.player, "wait", lambda s: seen.append(s))
+
+
+def test_executor_follows_edges_not_list_order(monkeypatch):
+    """执行顺序由**边**决定，不是由节点在列表里的顺序决定。"""
     ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    # 列表顺序是 A,B,C；边却要求 A → C → B
+    wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 2}), ("delay", {"ms": 3}),
+                edges=[(0, PORT_OUT, 2), (2, PORT_OUT, 1)])
+    ex.run_workflow(wf)
+    assert seen == [0.001, 0.003, 0.002]
 
-    # 无条件节点：默认条件 False → 条件成立节点被跳过，条件不成立节点执行
-    wf = Workflow(nodes=[
-        Node(type="delay", params={"ms": 1, "run_when": "条件成立"}),
-        Node(type="delay", params={"ms": 1, "run_when": "条件不成立"}),
-    ])
-    ex.run_workflow(wf, on_node=lambda i, t: ran.append(t))
-    assert ran == ["delay"]
 
-    # 条件节点（mock 视觉命中）→ 条件成立节点执行
+def test_executor_condition_routes_by_port(monkeypatch):
+    """条件成立走 true 出口，只执行挂在 true 上的那条分支。"""
     from core import vision
     monkeypatch.setattr(vision, "find_template",
                         lambda conf, template_path="": type("M", (), {"found": True})())
-    ran.clear()
-    wf2 = Workflow(nodes=[
-        Node(type="condition", params={"image_path": "x.png"}),
-        Node(type="delay", params={"ms": 1, "run_when": "条件成立"}),
-        Node(type="delay", params={"ms": 1, "run_when": "条件不成立"}),
+    ex = Executor()
+    ran: list = []
+    wf = _graph(
+        ("condition", {"image_path": "x.png"}),   # 0
+        ("delay", {"ms": 1}),                     # 1 ← true
+        ("delay", {"ms": 2}),                     # 2 ← false
+        edges=[(0, PORT_TRUE, 1), (0, PORT_FALSE, 2)],
+    )
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 1]
+
+
+def test_executor_condition_false_routes_to_other_branch(monkeypatch):
+    """不成立走 false 出口——与上一条互为对照，证明真的在看条件结果。"""
+    from core import vision
+    monkeypatch.setattr(vision, "find_template",
+                        lambda conf, template_path="": type("M", (), {"found": False})())
+    ex = Executor()
+    ran: list = []
+    wf = _graph(
+        ("condition", {"image_path": "x.png"}),
+        ("delay", {"ms": 1}),
+        ("delay", {"ms": 2}),
+        edges=[(0, PORT_TRUE, 1), (0, PORT_FALSE, 2)],
+    )
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 2]
+
+
+def test_executor_branch_routes_to_matching_case(monkeypatch):
+    """多路分支按序号取第一个命中的 case（顺序即优先级）。"""
+    from core import vision
+    seen_paths: list = []
+
+    def fake(conf, template_path=""):
+        seen_paths.append(template_path)
+        return type("M", (), {"found": template_path == "b.png"})()
+
+    monkeypatch.setattr(vision, "find_template", fake)
+    ex = Executor()
+    ran: list = []
+    wf = _graph(
+        ("branch", {"case_count": 3, "case1_value": "a.png", "case2_value": "b.png",
+                    "case3_value": "c.png"}),
+        ("delay", {"ms": 1}),      # case:1
+        ("delay", {"ms": 2}),      # case:2
+        ("delay", {"ms": 3}),      # case:3
+        ("delay", {"ms": 4}),      # else
+        edges=[(0, case_port(1), 1), (0, case_port(2), 2), (0, case_port(3), 3),
+               (0, PORT_ELSE, 4)],
+    )
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 2]
+    # 命中之后**不再**继续测后面的 case —— 顺序就是优先级
+    assert seen_paths == ["a.png", "b.png"]
+
+
+def test_executor_branch_falls_back_to_else(monkeypatch):
+    from core import vision
+    monkeypatch.setattr(vision, "find_template",
+                        lambda conf, template_path="": type("M", (), {"found": False})())
+    ex = Executor()
+    ran: list = []
+    wf = _graph(
+        ("branch", {"case_count": 2, "case1_value": "a.png", "case2_value": "b.png"}),
+        ("delay", {"ms": 1}),
+        ("delay", {"ms": 2}),
+        ("delay", {"ms": 3}),
+        edges=[(0, case_port(1), 1), (0, case_port(2), 2), (0, PORT_ELSE, 3)],
+    )
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 3]
+
+
+def test_executor_merges_when_two_edges_point_at_one_node(monkeypatch):
+    """两条边指向同一节点就是汇合——不需要特殊语法，到达即执行。"""
+    from core import vision
+    monkeypatch.setattr(vision, "find_template",
+                        lambda conf, template_path="": type("M", (), {"found": True})())
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    wf = _graph(
+        ("condition", {"image_path": "x.png"}),   # 0
+        ("delay", {"ms": 1}),                     # 1  true 分支
+        ("delay", {"ms": 2}),                     # 2  false 分支
+        ("delay", {"ms": 9}),                     # 3  汇合点
+        edges=[(0, PORT_TRUE, 1), (0, PORT_FALSE, 2),
+               (1, PORT_OUT, 3), (2, PORT_OUT, 3)],
+    )
+    ex.run_workflow(wf)
+    # 只走了 true 那条，但汇合点仍然执行到（且只执行一次）
+    assert seen == [0.001, 0.009]
+
+
+def test_executor_end_node_stops_that_path(monkeypatch):
+    """end 节点终止本路径，不会再顺着列表往下跑。"""
+    ex = Executor()
+    ran: list = []
+    wf = _graph(
+        ("end", {}),                 # 0
+        ("delay", {"ms": 1}),        # 1 排在 end 后面，但没有任何边指向它
+        edges=[],
+    )
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0]
+
+
+def test_executor_disabled_node_passes_through(monkeypatch):
+    """停用节点 = 跳过它自己，但**继续往下走**（不是截断路径）。"""
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    ns = [Node(type="delay", params={"ms": 1}),
+          Node(type="delay", params={"ms": 2}, enabled=False),
+          Node(type="delay", params={"ms": 3})]
+    wf = Workflow(nodes=ns, edges=[
+        Edge(src=ns[0].uid, port=PORT_OUT, dst=ns[1].uid),
+        Edge(src=ns[1].uid, port=PORT_OUT, dst=ns[2].uid),
     ])
-    ex.run_workflow(wf2, on_node=lambda i, t: ran.append(t))
-    assert ran == ["condition", "delay"]
+    ex.run_workflow(wf)
+    assert seen == [0.001, 0.003]      # 中间那个没执行，但路径没断
+
+
+def test_executor_missing_edge_ends_path(monkeypatch):
+    """出口没有边 = 路径到此为止，不会「接着跑列表里的下一个」。"""
+    ex = Executor()
+    ran: list = []
+    wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 2}), edges=[])
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0]
+
+
+def test_executor_runaway_cycle_is_stopped_and_reported(monkeypatch):
+    """成环的图必须被步数上限拦住并**报错停止**，而不是永远转下去。
+
+    这是循环能力的必要代价：允许回边就等于允许写出死循环，没有上限的话
+    界面会一直停在「运行中」，用户除了强杀进程没有别的办法。
+    """
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    errors: list = []
+    # 两个节点互指成环
+    wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 1}),
+                edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)])
+    ex.run_workflow(wf, on_error=lambda i, t, e: errors.append(str(e)))
+    assert errors and "步数超过上限" in errors[0]
+    assert ex._stop.is_set()
+    # 必须**真的转了很多圈**才被砍：否则「一步就停」也能让上面两条通过，
+    # 那守的就不是「死循环被拦住」而是别的东西了。
+    assert len(seen) >= Executor.MAX_STEPS - 2
+
+
+def test_executor_cycle_terminates_when_edge_is_dropped(monkeypatch):
+    """反向对照：把回边去掉，同一张图就能正常跑完。
+
+    没有这条，上面那条用例即使把「所有循环都当错误」也能通过。
+    """
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    errors: list = []
+    wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 2}),
+                edges=[(0, PORT_OUT, 1)])
+    ex.run_workflow(wf, on_error=lambda i, t, e: errors.append(str(e)))
+    assert errors == []
+    assert seen == [0.001, 0.002]
+
+
+def test_executor_start_uid_wins_over_list_order(monkeypatch):
+    """显式 start 指向谁就从谁开始，与列表顺序无关。"""
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 2}),
+                edges=[(1, PORT_OUT, 0)])
+    wf.start = wf.nodes[1].uid
+    ex.run_workflow(wf)
+    assert seen == [0.002, 0.001]
+
+
+def test_executor_falls_back_to_first_node_without_start(monkeypatch):
+    """没有 start 节点 / 没指定 start 时退回第一个节点，保证旧图仍能跑。"""
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    wf = _graph(("delay", {"ms": 7}), ("delay", {"ms": 8}),
+                edges=[(0, PORT_OUT, 1)])
+    ex.run_workflow(wf)
+    assert seen == [0.007, 0.008]
+
+
+def test_workflow_load_migrates_linear_list(tmp_path):
+    """v3 旧文件：接成线性边链，条件节点两个出口都接上（否则执行到它就断了）。"""
+    old = {"version": 3, "name": "old", "nodes": [
+        {"type": "delay", "params": {"ms": 1}, "uid": "a"},
+        {"type": "condition", "params": {}, "uid": "b"},
+        {"type": "delay", "params": {"ms": 2}, "uid": "c"},
+    ]}
+    p = str(tmp_path / "v3.json")
+    json.dump(old, open(p, "w"))
+    wf = Workflow.load(p)
+    assert wf.migrated_from_list is True
+    ports = {(e.src, e.port, e.dst) for e in wf.edges}
+    assert ports == {("a", PORT_OUT, "b"),
+                     ("b", PORT_TRUE, "c"), ("b", PORT_FALSE, "c")}
+
+
+def test_migration_lays_nodes_out_instead_of_stacking_them(tmp_path):
+    """迁移必须给节点摆开位置。
+
+    x/y 是 v4 才有的字段，v3 文件里一个坐标都没有，全部落在 (0, 0)——
+    画布上就是一摞完全重叠的卡片，看起来像「打开旧文件之后工作流被毁了」。
+    """
+    old = {"version": 3, "name": "old", "nodes": [
+        {"type": "delay", "params": {}, "uid": f"n{i}"} for i in range(4)
+    ]}
+    p = str(tmp_path / "v3-pos.json")
+    json.dump(old, open(p, "w"))
+    wf = Workflow.load(p)
+
+    coords = [(n.x, n.y) for n in wf.nodes]
+    assert len(set(coords)) == len(coords), f"节点仍叠在一起：{coords}"
+    # 横向排开（手柄在左右两侧，横向链的边才是直的），间距要大于卡片宽度
+    assert [c[1] for c in coords] == [coords[0][1]] * len(coords), "应在同一行"
+    xs = [c[0] for c in coords]
+    assert xs == sorted(xs), "顺序应与原来的列表顺序一致"
+    gaps = [b - a for a, b in zip(xs, xs[1:])]
+    assert all(g > 180 for g in gaps), f"间距太挤，卡片会相叠：{gaps}"
+
+
+def test_migration_keeps_hand_written_coordinates(tmp_path):
+    """手工给旧文件补过坐标的人不该被覆盖。"""
+    old = {"version": 3, "name": "old", "nodes": [
+        {"type": "delay", "params": {}, "uid": "a", "x": 999, "y": 888},
+        {"type": "delay", "params": {}, "uid": "b"},
+    ]}
+    p = str(tmp_path / "v3-hand.json")
+    json.dump(old, open(p, "w"))
+    wf = Workflow.load(p)
+    assert (wf.nodes[0].x, wf.nodes[0].y) == (999, 888)
+    # 没给坐标的那个仍然要被摆开，不能留在 (0, 0) 和别的节点叠
+    assert (wf.nodes[1].x, wf.nodes[1].y) != (0, 0)
+
+
+def test_v4_load_does_not_touch_positions(tmp_path):
+    """已经是 v4 的文件：坐标是用户亲手摆的，一个都不能动。"""
+    p = str(tmp_path / "v4-pos.json")
+    json.dump({"version": 4, "name": "v4", "nodes": [
+        {"type": "delay", "params": {}, "uid": "a", "x": 0, "y": 0},
+        {"type": "delay", "params": {}, "uid": "b", "x": 0, "y": 0},
+    ], "edges": []}, open(p, "w"))
+    wf = Workflow.load(p)
+    assert [(n.x, n.y) for n in wf.nodes] == [(0, 0), (0, 0)]
+
+
+def test_workflow_load_keeps_v4_edges_untouched(tmp_path):
+    """已经是 v4 的文件不能被迁移逻辑改写——包括「用户故意删光了所有边」这种情况。"""
+    p = str(tmp_path / "v4.json")
+    json.dump({"version": 4, "name": "v4", "nodes": [
+        {"type": "delay", "params": {}, "uid": "a"},
+        {"type": "delay", "params": {}, "uid": "b"},
+    ], "edges": []}, open(p, "w"))
+    wf = Workflow.load(p)
+    assert wf.edges == []
+    assert wf.migrated_from_list is False
+
+
+def test_migrated_flag_is_not_persisted(tmp_path):
+    """迁移标记只在本次会话里提示用，不该被写进文件（否则每次打开都提示一次）。"""
+    wf = Workflow(nodes=[Node(type="delay", params={})], migrated_from_list=True)
+    assert "migrated_from_list" not in wf.to_dict()
 
 
 def test_executor_stop_flag_stops_loop():
@@ -326,8 +611,8 @@ def test_glide_reaches_target(monkeypatch):
 # ---------- tasks ----------
 def test_all_nodes_have_definitions():
     types = [d["type"] for d in all_definitions()]
-    for t in ["record_replay", "image_click", "ocr_click", "yolo_click",
-              "condition", "mouse", "keyboard", "delay", "note"]:
+    for t in ["start", "end", "branch", "record_replay", "image_click", "ocr_click",
+              "yolo_click", "condition", "mouse", "keyboard", "delay", "note"]:
         assert t in types, t
         d = [x for x in all_definitions() if x["type"] == t][0]
         assert d["name"] and isinstance(d["params"], list)
@@ -338,10 +623,11 @@ def test_node_defaults_applied():
     assert task.defaults()["ms"] == 500
 
 
-# §9.4：菜单顺序 = 鼠标 → 键盘 → 延时 → 录制回放 → 图像 → OCR → YOLO → 条件 → 注释
+# §9.4：菜单顺序 = 开始 → 鼠标 → 键盘 → 延时 → 录制回放 → 图像 → OCR → YOLO
+#         → 条件 → 多路分支 → 注释 → 结束
 BUILTIN_MENU_ORDER = [
-    "mouse", "keyboard", "delay", "record_replay",
-    "image_click", "ocr_click", "yolo_click", "condition", "note",
+    "start", "mouse", "keyboard", "delay", "record_replay",
+    "image_click", "ocr_click", "yolo_click", "condition", "branch", "note", "end",
 ]
 
 
@@ -360,6 +646,14 @@ def test_node_menu_order_is_explicit():
 
     n = len(BUILTIN_MENU_ORDER)
     assert [d["type"] for d in defs[:n]] == BUILTIN_MENU_ORDER
+    # 数量也必须对上。**这一条才是「新增节点忘了登记」的唯一护栏**：
+    # 只用 defs[:n] == BUILTIN_MENU_ORDER 的话，新节点的 order 若比现有都大
+    # （追加到菜单末尾，最常见），这个切片仍然等于旧列表 → 测试通过，
+    # 而新节点完全没被任何用例覆盖。
+    assert len(defs) == n, (
+        "注册的节点数与 BUILTIN_MENU_ORDER 不一致（新增内置节点时必须同步它）："
+        f"{sorted({d['type'] for d in defs} ^ set(BUILTIN_MENU_ORDER))}"
+    )
     # order 撞车会让菜单顺序退化成注册顺序，必须唯一
     builtin_orders = orders[:n]
     assert len(set(builtin_orders)) == n, f"order 重复：{builtin_orders}"

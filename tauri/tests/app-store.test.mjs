@@ -8,13 +8,37 @@ import ts from "typescript";
 // 使用项目已有的 TypeScript 和 Node 测试器，无需启动 WebView 或真实 sidecar。
 // 运行实际 store 源码，仅替换 RPC、系统文件对话框等外部边界。
 const require = createRequire(import.meta.url);
-const source = readFileSync(new URL("../src/stores/app.ts", import.meta.url), "utf8");
-const compiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2021,
-  },
-}).outputText;
+
+/**
+ * 把仓库里的 .ts 模块编译成 CJS 并求值，返回它的 exports。
+ *
+ * 为什么要真编译而不是打桩：store 里 `addEdge(src, dst, port = PORT_OUT)`
+ * 的默认值来自 `@/flow/ports`。打桩的话测的是桩的常量，而真实模块写错字面量
+ * 时测试照样绿——那正好是「前端出口名和后端对不上」这类最难查的 bug。
+ */
+function compileTs(relPath) {
+  const src = readFileSync(new URL(relPath, import.meta.url), "utf8");
+  return ts.transpileModule(src, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2021,
+    },
+  }).outputText;
+}
+
+function loadModule(relPath, resolveShim) {
+  const out = compileTs(relPath);
+  const mod = { exports: {} };
+  const fn = runInThisContext(`(function(require, module, exports) {\n${out}\n})`, {
+    filename: relPath.replace(/[^\w]/g, "_") + ".cjs",
+  });
+  fn(resolveShim ?? ((name) => require(name)), mod, mod.exports);
+  return mod.exports;
+}
+
+const compiled = compileTs("../src/stores/app.ts");
+// 真实的出口名常量模块（无依赖，可直接求值）
+const flowPorts = loadModule("../src/flow/ports.ts");
 const { createPinia } = require("pinia");
 
 function setup(request) {
@@ -62,6 +86,7 @@ function setup(request) {
   });
   load((name) => {
     if (name === "@/rpc/client") return { rpc, errMessage: (e) => String(e?.message ?? e) };
+    if (name === "@/flow/ports") return flowPorts;
     if (name === "@tauri-apps/plugin-dialog") {
       return { open: () => { throw new Error("禁止打开系统对话框"); },
         save: () => { throw new Error("禁止打开系统对话框"); } };
@@ -72,6 +97,7 @@ function setup(request) {
     store: module.exports.useAppStore(createPinia()),
     // 模块导出（如 RECORD_BUFFER_LIMIT），便于断言「实现与常量同源」
     mod: module.exports,
+    ports: flowPorts,
     calls,
     emitStatus: (up, detail = "") => statusHandlers.forEach((h) => h(up, detail)),
     methods: () => calls.map((c) => c.method),
@@ -95,7 +121,9 @@ test("workflow.changed 使用后端直接发送的工作流，并修正选中索
   store.selectedIndex = 3;
   const wf = workflow([{ type: "delay", params: { ms: 1 }, enabled: true }]);
   notify(store, "workflow.changed", wf);
-  assert.deepEqual(store.workflow, wf);
+  // 后端帧缺 edges/start 时会被补成默认值（画布直接读这两个字段），
+  // 其余字段必须原样保留、不能被复制丢内容
+  assert.deepEqual(store.workflow, { ...wf, edges: [], start: "" });
   assert.equal(store.selectedIndex, 0);
   notify(store, "workflow.changed", workflow());
   assert.equal(store.selectedIndex, -1);
@@ -259,7 +287,7 @@ test("重连握手会用后端状态覆盖运行/录制态", async () => {
   assert.equal(store.recording, false);
 });
 
-// ---------- §18 P4：拖拽排序 / 崩溃重连 / 诊断面板 ----------
+// ---------- v4 流程图：边 / 坐标 / 起点 / 迁移 ----------
 
 const threeNodes = () => [
   { type: "mouse", params: {}, enabled: true, uid: "a", name: "" },
@@ -268,50 +296,260 @@ const threeNodes = () => [
 ];
 
 /** 只补上基础握手，其余方法交给传入的 handler。 */
-const baseHandler = (nodes, extra) => async (method, params) => {
+const baseHandler = (nodes, extra, wfExtra = {}) => async (method, params) => {
   if (method === "app.info") return { appVersion: "0.1.0", protocolVersion: 1, permissions: {} };
   if (method === "nodes.definitions") return [];
-  if (method === "workflow.current") return { workflow: workflow(nodes), running: false, recording: false };
+  if (method === "workflow.current")
+    return {
+      workflow: { ...workflow(nodes), edges: [], start: "", ...wfExtra },
+      running: false,
+      recording: false,
+    };
   if (method === "schedule.get") return { schedule: null, nextFire: "" };
   return extra ? extra(method, params) : {};
 };
 
-test("拖拽排序：moveNode 透传 (index,to) 并以响应刷新工作流", async () => {
-  const nodes = threeNodes();
-  const seen = [];
+const wfOf = (nodes, edges = [], start = "") => ({
+  ...workflow(nodes),
+  edges,
+  start,
+});
+const res = (nodes, edges = [], start = "") => ({
+  workflow: wfOf(nodes, edges, start),
+  running: false,
+  recording: false,
+});
+
+test("旧帧缺少 edges/start 时补齐默认值，画布不会拿到 undefined", () => {
+  const { store } = setup();
+  store.applyWorkflow({
+    name: "v3 帧",
+    speed: 1,
+    repeat: 1,
+    nodes: [{ type: "delay", params: {}, enabled: true, uid: "a" }],
+  });
+  // 旧版后端（或重连前缓存的帧）没有这两个字段。画布的 computed 直接读
+  // `workflow.edges`，补不上就是 undefined.some(...) 抛异常、整个界面白屏。
+  assert.deepEqual(store.workflow.edges, []);
+  assert.equal(store.workflow.start, "");
+  assert.equal(store.workflow.name, "v3 帧", "其余字段要原样保留");
+  assert.equal(store.workflow.nodes.length, 1, "nodes 不能被复制丢内容");
+});
+
+test("起始节点解析与后端 Executor.entry_uid 同规则", () => {
+  const { store } = setup();
+  const apply = (nodes, start = "") => store.applyWorkflow(wfOf(nodes, [], start));
+  const n = (uid, type) => ({ type, params: {}, enabled: true, uid });
+
+  apply([]);
+  assert.equal(store.entryUid, "", "空工作流没有起点");
+
+  // 既没有显式 start 也没有 start 节点 → 第一个节点
+  apply([n("a", "delay"), n("b", "mouse")]);
+  assert.equal(store.entryUid, "a");
+
+  // 有 start 节点 → 它优先于「第一个节点」
+  apply([n("a", "delay"), n("s", "start")]);
+  assert.equal(store.entryUid, "s");
+
+  // 显式 start 最优先
+  apply([n("s", "start"), n("b", "mouse")], "b");
+  assert.equal(store.entryUid, "b");
+
+  // start 指向已不存在的节点 → 退回默认规则。
+  // 不退回的话画布会把「起」徽标挂在一个空气节点上，用户按画布排查会彻底跑偏。
+  apply([n("s", "start")], "ghost");
+  assert.equal(store.entryUid, "s");
+});
+
+test("旧版迁移提示只弹一次，换成非迁移工作流后撤掉", () => {
+  const { store } = setup();
+  const nodes = [{ type: "delay", params: {}, enabled: true, uid: "a" }];
+  const migrated = { ...wfOf(nodes), migrated_from_list: true };
+
+  store.applyWorkflow(migrated);
+  assert.match(store.migratedNotice, /有序列表/);
+  assert.equal(store.workflowMigrated, true);
+
+  // 用户关掉之后，后续任何一次 workflow.changed（改个参数就会有）
+  // 都不得把提示重新弹出来——否则它等于关不掉。
+  store.dismissMigrated();
+  store.applyWorkflow(migrated);
+  assert.equal(store.migratedNotice, "", "已经关掉的提示不得复活");
+
+  // 换成普通工作流 → 标记与提示都要撤，否则提示会一直说上一个工作流的事
+  store.applyWorkflow(wfOf(nodes));
+  assert.equal(store.workflowMigrated, false);
+  assert.equal(store.migratedNotice, "");
+});
+
+test("添加节点带上画布坐标，并以响应刷新工作流", async () => {
+  const { store, calls } = setup(
+    baseHandler([], (method, params) => {
+      if (method !== "node.add") return {};
+      return {
+        ...res([{ type: params.type, params: {}, enabled: true, uid: "n1", x: params.x, y: params.y }]),
+        index: 0,
+      };
+    })
+  );
+  const idx = await store.addNode("mouse", 120, 240);
+  assert.equal(idx, 0);
+  assert.deepEqual(calls.find((c) => c.method === "node.add").params, {
+    type: "mouse",
+    x: 120,
+    y: 240,
+  });
+  assert.equal(store.workflow.nodes[0].x, 120);
+});
+
+test("节点坐标只在拖拽结束时提交一次，后端负责取整", async () => {
+  const nodes = [{ type: "delay", params: {}, enabled: true, uid: "a", x: 0, y: 0 }];
+  const { store, calls } = setup(
+    baseHandler(nodes, (method, params) =>
+      method === "node.setPos"
+        ? res([
+            {
+              type: "delay",
+              params: {},
+              enabled: true,
+              uid: "a",
+              // 复刻后端 node_set_pos 的 int(round(...))
+              x: Math.round(params.x),
+              y: Math.round(params.y),
+            },
+          ])
+        : {}
+    )
+  );
+  await store.setNodePos("a", 33.4, 66.6);
+  const pos = calls.filter((c) => c.method === "node.setPos");
+  // 逐帧上报会把整份工作流广播几十次，刷满通知队列把运行状态通知挤掉
+  assert.equal(pos.length, 1, "一次拖拽只能发一次坐标");
+  assert.deepEqual(pos[0].params, { uid: "a", x: 33.4, y: 66.6 });
+  assert.equal(store.workflow.nodes[0].x, 33);
+});
+
+test("连线：同一出口只留一条，替换时回报给调用方", async () => {
+  const nodes = [
+    { type: "condition", params: {}, enabled: true, uid: "c" },
+    { type: "delay", params: {}, enabled: true, uid: "a" },
+    { type: "delay", params: {}, enabled: true, uid: "b" },
+  ];
+  let edges = [];
+  const { store, ports } = setup(
+    baseHandler(nodes, (method, params) => {
+      if (method === "edge.add") {
+        edges = edges.filter((e) => !(e.src === params.src && e.port === params.port));
+        edges.push({ src: params.src, port: params.port, dst: params.dst });
+      } else if (method === "edge.remove") {
+        edges = edges.filter((e) => !(e.src === params.src && e.port === params.port));
+      } else {
+        return {};
+      }
+      return res(nodes, edges.map((e) => ({ ...e })));
+    })
+  );
+
+  assert.equal(await store.addEdge("c", "a", ports.PORT_TRUE), false, "首次连线不算替换");
+  assert.deepEqual(store.workflow.edges, [{ src: "c", port: "true", dst: "a" }]);
+
+  // 同一出口再连一条：后端替换旧的，前端要能告诉用户「旧的那条没了」，
+  // 否则用户会以为自己连了两条
+  assert.equal(await store.addEdge("c", "b", ports.PORT_TRUE), true, "同出口第二次要回报替换");
+  assert.deepEqual(store.workflow.edges, [{ src: "c", port: "true", dst: "b" }]);
+
+  // 另一个出口互不影响：条件节点两个出口本来就该各连一条
+  await store.addEdge("c", "a", ports.PORT_FALSE);
+  assert.equal(store.workflow.edges.length, 2);
+
+  await store.removeEdge("c", ports.PORT_FALSE);
+  assert.deepEqual(store.workflow.edges, [{ src: "c", port: "true", dst: "b" }]);
+});
+
+test("addEdge 不传出口时默认 out，与后端 edge_add 的默认值一致", async () => {
+  const nodes = [{ type: "delay", params: {}, enabled: true, uid: "a" }];
+  const { store, calls, ports } = setup(baseHandler(nodes, () => res(nodes)));
+  await store.addEdge("a", "a");
+  assert.equal(ports.PORT_OUT, "out", "字面量必须与 core/events.py 一致");
+  assert.deepEqual(calls.find((c) => c.method === "edge.add").params, {
+    src: "a",
+    dst: "a",
+    port: "out",
+  });
+});
+
+test("设置与恢复起始节点", async () => {
+  const nodes = [
+    { type: "start", params: {}, enabled: true, uid: "s" },
+    { type: "mouse", params: {}, enabled: true, uid: "m" },
+  ];
+  const { store, calls } = setup(
+    baseHandler(nodes, (method, params) =>
+      method === "workflow.setStart" ? res(nodes, [], params.uid) : {}
+    )
+  );
+  await store.setStart("m");
+  assert.equal(store.entryUid, "m");
+
+  await store.setStart("");
+  assert.equal(store.workflow.start, "");
+  assert.equal(store.entryUid, "s", "清空后回到「第一个 start 节点」的默认规则");
+  assert.deepEqual(
+    calls.filter((c) => c.method === "workflow.setStart").map((c) => c.params.uid),
+    ["m", ""]
+  );
+});
+
+test("删除别的节点时，选中跟着 uid 走而不是跟着下标漂移", async () => {
+  // 用可变的 nodes 当「后端真源」：每次删除都从**当前**状态里摘，
+  // 而不是从最初那份列表里摘——否则第二次删除的索引会指向错的人。
+  let nodes = [
+    { type: "delay", params: {}, enabled: true, uid: "a" },
+    { type: "delay", params: {}, enabled: true, uid: "b" },
+    { type: "delay", params: {}, enabled: true, uid: "c" },
+  ];
   const { store } = setup(
     baseHandler(nodes, (method, params) => {
-      if (method !== "node.move") return {};
-      seen.push(params);
-      // 复刻后端语义：pop(index) 再 insert(to)（to 是最终位置）
-      const arr = nodes.slice();
-      arr.splice(params.to, 0, arr.splice(params.index, 1)[0]);
-      return { workflow: workflow(arr), running: false, recording: false };
+      if (method !== "node.remove") return {};
+      nodes = nodes.filter((_, i) => i !== params.index);
+      return res(nodes);
     })
   );
   await store.init();
+  store.selectNode(2); // 选中 c
+  assert.equal(store.selectedNode.uid, "c");
 
-  await store.moveNode(0, 2); // 把第一项拖到最后
-  assert.deepEqual(seen, [{ index: 0, to: 2 }]);
-  assert.deepEqual(store.workflow.nodes.map((n) => n.uid), ["b", "c", "a"]);
+  await store.removeNode(0); // 删掉 a → 下标整体前移
+  // 只按 index 判断的话选中会从 2 落到 1，界面显示的是 b 的参数，
+  // 用户接着一改就改错了对象
+  assert.equal(store.selectedNode?.uid, "c", "选中必须还是 c，不能滑到 b 上");
+
+  await store.removeNode(store.indexOfUid("c"));
+  assert.equal(store.selectedIndex, -1);
+  assert.equal(store.selectedNode, null);
+  assert.deepEqual(nodes.map((n) => n.uid), ["b"]);
 });
 
-test("拖拽失败：moveNode 抛出（供 UI 回滚），真源不被乐观修改", async () => {
-  const nodes = threeNodes();
-  const { store } = setup(
-    baseHandler(nodes, (method) => {
-      if (method === "node.move") throw new Error("目标索引越界");
-      return {};
-    })
-  );
-  await store.init();
-  const before = store.workflow.nodes.map((n) => n.uid);
-
-  await assert.rejects(() => store.moveNode(0, 2), /越界/);
-  // store 只在 RPC 成功后写入，所以失败时本来就干净——NodeList 需要靠这个
-  // 异常把本地镜像拉回来（vuedraggable 已经乐观改过 items）。
-  assert.deepEqual(store.workflow.nodes.map((n) => n.uid), before);
+test("诊断面板报出边数、起点与迁移标记", () => {
+  const { store } = setup();
+  store.applyWorkflow({
+    ...wfOf(
+      [
+        { type: "start", params: {}, enabled: true, uid: "s" },
+        { type: "delay", params: {}, enabled: true, uid: "a" },
+      ],
+      [{ src: "s", port: "out", dst: "a" }]
+    ),
+    migrated_from_list: true,
+  });
+  const d = store.diagnostics;
+  assert.equal(d.nodeCount, 2);
+  assert.equal(d.edgeCount, 1);
+  assert.equal(d.startUid, "s");
+  assert.equal(d.migratedFromList, true);
 });
+
 
 test("断线显示原因与「正在重连」，恢复后给出恢复提示且 banner 清空", async () => {
   const { store, emitStatus } = setup();

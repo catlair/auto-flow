@@ -18,6 +18,42 @@ const allParams = computed<ParamDef[]>(() => {
   return [...def.params, ...def.common_params];
 });
 
+/**
+ * 按 `show_if` 过滤后的可见字段。
+ *
+ * 分支节点有 6 组 case 字段，全平铺出来是一堵墙，而用户通常只用 2~3 个。
+ * `show_if: {key: "case_count", gte: N}` 让第 N 组只在 case 数够时才出现。
+ */
+const visibleParams = computed<ParamDef[]>(() =>
+  allParams.value.filter((p) => passesShowIf(p))
+);
+
+/**
+ * 取某个参数的**生效值**：节点上没设过就用 ParamDef 的默认值。
+ *
+ * 这一步不能省。`show_if` 依赖 `case_count`，而节点刚添加时 params 里
+ * 根本没有这个 key——直接读 `node.params[key]` 会得到 undefined，
+ * `undefined >= 1` 为 false，于是**所有** case 字段都不显示，用户看到的是
+ * 一个只剩「情形个数」的分支节点。默认值正是后端实际会用的值。
+ */
+function paramValue(key: string): any {
+  const node = selected.value;
+  if (!node) return undefined;
+  const raw = node.params?.[key];
+  if (raw !== undefined) return raw;
+  return allParams.value.find((d) => d.key === key)?.default;
+}
+
+function passesShowIf(p: ParamDef): boolean {
+  const c = p.show_if;
+  if (!c) return true;
+  const v = paramValue(c.key);
+  if (c.gte !== undefined) return Number(v) >= c.gte;
+  if (c.lte !== undefined) return Number(v) <= c.lte;
+  if (c.eq !== undefined) return v === c.eq;
+  return !!v;
+}
+
 function curValue(p: ParamDef): any {
   const node = selected.value;
   if (!node) return p.default;
@@ -98,7 +134,7 @@ onBeforeUnmount(() => unsub?.());
   <div>
     <div v-if="!selected" class="af-empty">未选择节点。</div>
     <div v-else class="af-form">
-      <div v-for="p in allParams" :key="p.key" class="af-field">
+      <div v-for="p in visibleParams" :key="p.key" class="af-field">
         <label class="af-label">{{ p.label }}</label>
 
         <t-input-number
@@ -152,6 +188,18 @@ onBeforeUnmount(() => unsub?.());
             @click="startCapture(p)"
             >{{ capturing ? "捕获中…" : "捕获" }}</t-button
           >
+        </div>
+
+        <!-- `pick`：文本框旁边挂个「选择」。
+             用于「既可能是模板图路径、也可能是一段文字」的字段——`file` 类型是
+             只读的，装不下文字，所以只能给可编辑文本框加选择按钮。 -->
+        <div v-else-if="p.pick" style="display: flex; gap: 6px">
+          <t-input
+            :value="curValue(p)"
+            size="small"
+            @change="(v: string) => setVal(p, v)"
+          />
+          <t-button size="small" variant="outline" @click="pickFile(p)">选择</t-button>
         </div>
 
         <t-input

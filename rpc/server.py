@@ -31,6 +31,7 @@ from rpc import PROTOCOL_VERSION, __version__ as APP_VERSION
 from rpc.controller import AppController, ControllerError, _err
 
 from core import permissions
+from core.events import PORT_OUT
 from core.paths import app_dir
 
 logger = logging.getLogger("autoflow-sidecar")
@@ -317,12 +318,18 @@ _HANDLERS = {
     "workflow.save": _ctl(lambda p: _CTRL.workflow_save(p.get("path"))),
     "workflow.new": _ctl(lambda p: _CTRL.workflow_new()),
     "workflow.update": _ctl(lambda p: _CTRL.workflow_update(p.get("patch", {}))),
-    "node.add": _ctl(lambda p: _CTRL.node_add(p.get("type", ""), p.get("index"))),
+    "node.add": _ctl(lambda p: _CTRL.node_add(p.get("type", ""), p.get("index"),
+                                               p.get("x"), p.get("y"))),
     "node.remove": _ctl(lambda p: _CTRL.node_remove(p.get("index", -1))),
     "node.move": _ctl(lambda p: _CTRL.node_move(p.get("index", -1), p.get("to", -1))),
     "node.toggle": _ctl(lambda p: _CTRL.node_toggle(p.get("index", -1), p.get("enabled", True))),
     "node.rename": _ctl(lambda p: _CTRL.node_rename(p.get("index", -1), p.get("name", ""))),
     "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"), p.get("value"))),
+    "node.setPos": _ctl(lambda p: _CTRL.node_set_pos(p.get("uid", ""), p.get("x", 0), p.get("y", 0))),
+    "edge.add": _ctl(lambda p: _CTRL.edge_add(p.get("src", ""), p.get("dst", ""),
+                                              p.get("port", PORT_OUT))),
+    "edge.remove": _ctl(lambda p: _CTRL.edge_remove(p.get("src", ""), p.get("port", PORT_OUT))),
+    "workflow.setStart": _ctl(lambda p: _CTRL.workflow_set_start(p.get("uid", ""))),
     "nodes.definitions": _ctl(lambda p: _CTRL.nodes_definitions()),
     # --- 运行 / 录制（§5/§9.5，P1-2） ---
     "run.start": _ctl(lambda p: _CTRL.run_start(p.get("base_x", 0), p.get("base_y", 0))),

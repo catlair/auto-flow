@@ -25,6 +25,8 @@
 | F-RPC-07 | 错误归一 | ✅ | ControllerError 业务码（-32001…）；前端 errMessage 兼容三种形态 |
 | F-RPC-08 | 后端告警转发 | ✅ | WARNING+ → `log.warning` 通知 → 诊断面板 |
 | F-RPC-09 | 丢帧判据后端计算 | ✅ | `record.stop.unaccounted`，前端只判 `!= 0` |
+| F-RPC-10 | 画布方法按 uid 寻址 | ✅ | `node.setPos` / `edge.add` / `edge.remove` / `workflow.setStart` |
+| F-RPC-11 | 结构变更连带清理 | ✅ | `node.remove` 一并清掉连着它的边与指向它的 `start` |
 
 ### 方法清单（请求/响应）
 
@@ -35,9 +37,14 @@
 | app.openPermissionSettings | panel | — |
 | app.requestPermissions | — | 权限快照（弹系统提示） |
 | workflow.current / new / load / save / update | — | workflow_current（统一真源视图） |
-| node.add / remove / move / toggle / rename | index… | workflow_current（add 附 index/node） |
+| workflow.setStart | uid | workflow_current；`uid=""` 回到「第一个 start 节点 / 第一个节点」 |
+| node.add | type, **x, y** | workflow_current + index/node（不给坐标则落在视口外错开处） |
+| node.remove / toggle / rename / move | index… | workflow_current；**remove 同时清掉连着它的边与指向它的 start** |
 | node.params.set | index,key,value | workflow_current |
-| nodes.definitions | — | 节点定义（含 common_params，驱动动态表单） |
+| **node.setPos** | uid,x,y | workflow_current（**只在拖拽结束时调一次**，见设计要点 6） |
+| **edge.add** | src,dst,port | workflow_current；同 `(src,port)` **替换**旧边，`src==dst` 报错 |
+| **edge.remove** | src,port | workflow_current |
+| nodes.definitions | — | 节点定义（`common_params` 现为空数组；ParamDef 含 `show_if`/`pick`） |
 | run.start / run.stop | base_x/base_y | {running}；stop 已 join 运行线程 |
 | record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/text_merged/trimmed/**unaccounted**/监听器存活） |
 | record.current / remove / removeMovesBefore / setOrigin / setText / keysToText / undo | index,text | 编辑权威事件序列，全部可 `record.undo` 回滚；`keysToText` 把选中处的**最大连续按键段**换成一条 text 事件 |
@@ -53,7 +60,7 @@
 
 | 通知 | 载荷 | 说明 |
 | --- | --- | --- |
-| workflow.changed | 公共视图工作流 | **events 摘要为 {count}**（真源在后端） |
+| workflow.changed | 公共视图工作流 | **events 摘要为 {count}**（真源在后端）；含 `edges` / `start` / `migrated_from_list` |
 | record.event | {events:[…]}（100ms 批） | 仅订阅时推送 |
 | record.stopped | 统计 | 响应携带同数据（响应为准） |
 | run.node / run.progress / run.finished / run.error | — | 运行生命周期 |
@@ -72,6 +79,12 @@
 - **错误码**：`test_unknown_method_and_parse_error`、`test_run_and_record_error_codes`
 - **录制→写回节点**：`test_record_to_node_roundtrip`（真实起停 Recorder）
 - **并发写**：91 例全绿 + 真机长录（数百事件）无解析失败（2026-09-12 写锁后）
+- **F-RPC-10/11**（2026-09-13）：`test_flowchart_edges_and_positions`
+  （边增删、坐标、起点、删节点连带清边）；前端 `npm --prefix tauri test` 的
+  `连线：同一出口只留一条，替换时回报给调用方`、`设置与恢复起始节点`、
+  `节点坐标只在拖拽结束时提交一次，后端负责取整`
+- **F-RPC-10 迁移可见性**（2026-09-13）：`test_workflow_load_reports_list_migration`
+  （`workflow.load` 的响应里 `migrated_from_list` 为真，且不落盘）
 
 ## 设计要点
 
@@ -115,6 +128,25 @@
    各制造过一次「检测到系统层丢事件，请反馈」的假警报。判据收敛到一处，
    新增丢弃类别时只改 `record_stop` 一处。
    （回归测试：`test_record_stop_unaccounted_is_zero_after_trim`）
+6. **画布方法按 uid 寻址，其余 node.* 仍按下标**。这是刻意的分工：
+   边、坐标、起点在语义上就是「某个具体节点」，而 `node.*` 的其余方法
+   （改名/启停/改参数）跟着「当前选中项」走，前端本来就用下标寻址。
+   风险在于下标会随增删漂移，所以 `node.remove` 会**同时清掉连着它的边**——
+   不清的话用户看到画布上悬空的连线（视觉上像还在连），而执行器走到那儿会因为
+   找不到节点直接断掉整条路径，两种表现对不上，是最难查的那类不一致。
+   前端 `store.removeNode` 另外把「选中」按 uid 跟随，避免下标前移导致
+   参数面板悄悄显示另一个节点的参数（改一次就改错了对象）。
+7. **`node.setPos` 只能按「拖拽结束」调，不能逐帧调**。逐帧上报会把整份工作流
+   广播几十次，`workflow.changed` 刷满 1024 格的通知队列，把 `run.finished`
+   这类状态通知挤掉——丢一条界面就可能永久停在旧状态。
+   方法本身不做频率限制（后端无法区分「用户拖了一次」与「脚本调了两次」），
+   约束写在前端。
+8. **`edge.add` 替换而不是报错**。同一个 `(源节点, 出口)` 只保留一条边。
+   再连一条时替换旧的并正常返回。响应里**没有**「发生了替换」这个字段——
+   前端在**发请求之前**查一遍当前边集就知道（`store.addEdge` 的返回值），
+   因为真源就在它手里、再让后端回一个冗余标志只会多一个可能对不上的真源。
+   提示是必要的：不说一声的话旧连线无声消失，用户会以为自己连了两条。
+   报错也不行——「换个目标」是正常操作，不该逼用户走「先删后连」两步。
 
 ## 已知问题
 
@@ -138,3 +170,9 @@
   原「传输要点 / 方法清单 / 通知清单」三个独立章节降为 `###` 子节
   （分别归入「设计要点」与「功能清单」）；修正通知表里 `log.warning` 的设计要点
   交叉引用（原写「见设计要点 5」，实际是 4）
+- 2026-09-13 **v4 画布协议**：新增 `workflow.setStart` / `node.setPos` /
+  `edge.add` / `edge.remove`（F-RPC-10）；`node.add` 接受 `x,y`；
+  `node.remove` 连带清边与 start（F-RPC-11）；工作流视图增加
+  `edges` / `start` / `migrated_from_list`，节点视图增加 `x` / `y`；
+  `nodes.definitions` 的 `common_params` 变为空数组（`run_when` 退场），
+  ParamDef 新增 `show_if` / `pick`

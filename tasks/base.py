@@ -13,20 +13,30 @@ _REGISTRY: dict[str, "BaseTask"] = {}
 class ParamDef:
     def __init__(self, key: str, label: str, ptype: str = "text",
                  default: Any = None, options: Optional[list] = None,
-                 tooltip: str = "", min_value: float = None, max_value: float = None) -> None:
+                 tooltip: str = "", min_value: float = None, max_value: float = None,
+                 show_if: Optional[dict] = None, pick: bool = False) -> None:
         self.key = key
         self.label = label
-        self.ptype = ptype          # text / int / float / bool / select / events / point
+        self.ptype = ptype          # text / int / float / bool / select / events / point / keys / file
         self.default = default
         self.options = options or []
         self.tooltip = tooltip
         self.min_value = min_value
         self.max_value = max_value
+        # 条件显示：`{"key": "case_count", "gte": 2}` —— 仅当另一个参数满足条件时才渲染。
+        # 多路分支节点有 6 路 × 2 个字段，不平铺的话参数面板会长得没法看。
+        # 只支持 gte / lte / eq 三种比较，够用且不用在前端塞一个表达式求值器。
+        self.show_if = show_if
+        # text 类型是否额外给一个「选择文件」按钮。多路分支的取值既可能是
+        # 模板图路径、也可能是要找的文字，不能固定成 file 类型（那个输入框是
+        # 只读的，文字没法填），所以给可编辑输入框补一个挑选按钮。
+        self.pick = pick
 
     def to_dict(self) -> dict:
         return {"key": self.key, "label": self.label, "ptype": self.ptype,
                 "default": self.default, "options": self.options,
-                "tooltip": self.tooltip, "min": self.min_value, "max": self.max_value}
+                "tooltip": self.tooltip, "min": self.min_value, "max": self.max_value,
+                "show_if": self.show_if, "pick": self.pick}
 
 
 class BaseTask:
