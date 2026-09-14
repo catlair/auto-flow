@@ -54,6 +54,11 @@
   （含「用户关掉之后改参数不得复活」）。
 - **F-UI-02 视野自适应**（2026-09-13）：只在节点数「从 0 变非 0」时 `fitView`，
   编辑过程中不打扰用户已经调好的视野。
+- **F-UI-02 节点改动按 uid 寻址**（2026-09-15）：
+  `节点改动按 uid 寻址：多选删除不会删错人`——断言请求里带 `uid`、**不带** `index`，
+  并模拟画布上「多选后按 Delete」的并发删除，断言后端真源只少了该少的那些。
+  反向验证：把 `removeNode` 改回送 index，本条与
+  `删除别的节点时，选中跟着 uid 走…` 一起失败。
 
 ## 设计要点
 
@@ -124,4 +129,7 @@
   两个纯逻辑模块；`store` 的节点操作改按 uid 寻址（`indexOfUid` / `setNodePos` /
   `addEdge` / `removeEdge` / `setStart`），删除 `moveNode`；
   `ParamsPanel` 支持 `show_if` / `pick`；新增起点徽标与迁移提示条（F-UI-02/14/15）
+- 2026-09-15 `removeNode` / `renameNode` / `toggleNode` / `setParam` 改为**直接送 uid**，
+  不再做 uid→下标换算；画布 `onNodesChange` 的多个删除改为**串行 await**
+  （原先并发发出，各自按同一份旧列表算下标 → 第二笔起删错节点）
 

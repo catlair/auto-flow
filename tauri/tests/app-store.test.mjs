@@ -512,7 +512,7 @@ test("删除别的节点时，选中跟着 uid 走而不是跟着下标漂移", 
   const { store } = setup(
     baseHandler(nodes, (method, params) => {
       if (method !== "node.remove") return {};
-      nodes = nodes.filter((_, i) => i !== params.index);
+      nodes = nodes.filter((n) => n.uid !== params.uid);
       return res(nodes);
     })
   );
@@ -520,15 +520,49 @@ test("删除别的节点时，选中跟着 uid 走而不是跟着下标漂移", 
   store.selectNode(2); // 选中 c
   assert.equal(store.selectedNode.uid, "c");
 
-  await store.removeNode(0); // 删掉 a → 下标整体前移
+  await store.removeNode("a"); // 删掉 a → 下标整体前移
   // 只按 index 判断的话选中会从 2 落到 1，界面显示的是 b 的参数，
   // 用户接着一改就改错了对象
   assert.equal(store.selectedNode?.uid, "c", "选中必须还是 c，不能滑到 b 上");
 
-  await store.removeNode(store.indexOfUid("c"));
+  await store.removeNode("c");
   assert.equal(store.selectedIndex, -1);
   assert.equal(store.selectedNode, null);
   assert.deepEqual(nodes.map((n) => n.uid), ["b"]);
+});
+
+test("节点改动按 uid 寻址：多选删除不会删错人", async () => {
+  // 画布上「多选后按 Delete」会给每个 remove 各发一次请求。若请求带的是
+  // 下标，它们都按**同一份删除前的列表**算 → 第二笔起指向别的节点，删错且不报错。
+  // 这条用例锁住「请求里必须带 uid、且不带 index」这个契约。
+  let nodes = [
+    { type: "delay", params: {}, enabled: true, uid: "a" },
+    { type: "delay", params: {}, enabled: true, uid: "b" },
+    { type: "delay", params: {}, enabled: true, uid: "c" },
+  ];
+  const seen = [];
+  const { store } = setup(
+    baseHandler(nodes, (method, params) => {
+      if (!method.startsWith("node.")) return {};
+      seen.push({ method, params });
+      if (method === "node.remove") nodes = nodes.filter((n) => n.uid !== params.uid);
+      return res(nodes);
+    })
+  );
+  await store.init();
+
+  // 并发发出（真实画布就是这么快），断言的是**后端真源**的结果
+  await Promise.all([store.removeNode("a"), store.removeNode("c")]);
+  assert.deepEqual(nodes.map((n) => n.uid), ["b"], "只该剩下 b");
+
+  await store.renameNode("b", "改过名");
+  await store.toggleNode("b", false);
+  await store.setParam("b", "ms", 123);
+
+  for (const s of seen) {
+    assert.equal(typeof s.params.uid, "string", `${s.method} 必须带 uid`);
+    assert.equal(s.params.index, undefined, `${s.method} 不该再送 index`);
+  }
 });
 
 test("诊断面板报出边数、起点与迁移标记", () => {

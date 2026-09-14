@@ -61,10 +61,13 @@ function curValue(p: ParamDef): any {
 }
 
 async function setVal(p: ParamDef, v: any) {
-  const idx = store.selectedIndex;
-  if (idx < 0) return;
+  // 按 uid 送，不送下标：参数面板是**异步**交互（改一个值 → 等响应 → 再刷新），
+  // 期间选中项或节点列表都可能变。用下标的话「用户改的是 A 的参数，实际写进了
+  // B」——而且不报错，参数面板显示的又是 A 的值，看不出哪里不对。
+  const uid = selected.value?.uid;
+  if (!uid) return;
   try {
-    await store.setParam(idx, p.key, v);
+    await store.setParam(uid, p.key, v);
   } catch (e) {
     MessagePlugin.error("设置参数失败：" + errMessage(e));
   }

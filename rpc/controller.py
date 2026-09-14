@@ -194,6 +194,27 @@ class AppController:
             raise ControllerError(-32602, "节点索引越界", {"index": index})
         return self.workflow.nodes[index]
 
+    def _index_of(self, index: int = -1, uid: str = "") -> int:
+        """把 (uid, index) 解析成**当前**列表下标。**uid 优先**。
+
+        v4 起节点有稳定 uid，前端不该再把它换算成下标送过来。下标是「当前
+        这一份列表里的位置」，而前端手上那份可能比后端旧一步——例如定时任务
+        刚换掉整份工作流、`workflow.changed` 还没被前端处理完。这时前端按
+        旧列表算出的下标会指向**另一个节点**，于是删掉/改错节点，**不报任何错**。
+        uid 在节点真被删掉之前一直有效，没有这个窗口。
+
+        画布上一次删多个节点时更明显：`onNodesChange` 会把每个 remove 都
+        发一次请求，而它们都按**同一份旧状态**算下标——第二笔起必然错位。
+        """
+        if uid:
+            for i, n in enumerate(self.workflow.nodes):
+                if n.uid == uid:
+                    return i
+            raise ControllerError(-32602, "节点不存在", {"uid": uid})
+        if not isinstance(index, int) or index < 0 or index >= len(self.workflow.nodes):
+            raise ControllerError(-32602, "节点索引越界", {"index": index})
+        return index
+
     def node_add(self, type_name: str, index: Optional[int] = None,
                  x: Optional[int] = None, y: Optional[int] = None) -> dict:
         import tasks.builtin  # 确保节点已注册
@@ -215,10 +236,11 @@ class AppController:
         self._broadcast_workflow()
         return {**self.workflow_current(), "index": inserted, "node": self._public_node(node)}
 
-    def node_remove(self, index: int) -> dict:
+    def node_remove(self, index: int = -1, uid: str = "") -> dict:
         with self._lock:
-            node = self._node_at(index)
-            self.workflow.nodes.pop(index)
+            i = self._index_of(index, uid)
+            node = self.workflow.nodes[i]
+            self.workflow.nodes.pop(i)
             # **必须同时清掉连着它的边**：留着的话，用户看到的是画布上悬空的
             # 连线（视觉上像还在连），而执行器走到那儿会因为找不到节点直接断掉
             # 整条路径——两种表现对不上，是最难查的那类不一致。
@@ -239,25 +261,26 @@ class AppController:
         self._broadcast_workflow()
         return self.workflow_current()
 
-    def node_rename(self, index: int, name: str) -> dict:
+    def node_rename(self, index: int = -1, name: str = "", uid: str = "") -> dict:
         name = str(name or "").strip()[:50]
         with self._lock:
-            self._node_at(index).name = name
+            self.workflow.nodes[self._index_of(index, uid)].name = name
         self._broadcast_workflow()
         return self.workflow_current()
 
-    def node_toggle(self, index: int, enabled: bool) -> dict:
+    def node_toggle(self, index: int = -1, enabled: bool = True, uid: str = "") -> dict:
         with self._lock:
-            node = self._node_at(index)
+            node = self.workflow.nodes[self._index_of(index, uid)]
             node.enabled = bool(enabled)
         self._broadcast_workflow()
         return self.workflow_current()
 
-    def node_params_set(self, index: int, key: str, value: Any) -> dict:
+    def node_params_set(self, index: int = -1, key: str = "", value: Any = None,
+                        uid: str = "") -> dict:
         if not isinstance(key, str):
             raise ControllerError(-32602, "参数 key 须为字符串")
         with self._lock:
-            node = self._node_at(index)
+            node = self.workflow.nodes[self._index_of(index, uid)]
             node.params[key] = value
         self._broadcast_workflow()
         return self.workflow_current()

@@ -295,6 +295,55 @@ def test_flowchart_edges_and_positions() -> None:
         p.wait(timeout=5)
 
 
+def test_node_mutations_prefer_uid_over_stale_index() -> None:
+    """节点改动按 uid 寻址：下标在「一次删多个」时会指向别人。
+
+    画布上多选后按 Delete，会给每个 remove 各发一次请求，而它们都按**同一份
+    「删除前」的节点列表**算下标：第一笔删掉 a 之后，第二笔原本算出的下标已经
+    指到另一个节点上了——删错人且不报任何错。uid 在节点真被删掉前一直有效，
+    没有这个窗口。
+
+    这条用例**故意送一个错的下标 + 正确的 uid**，断言死的是 uid 指的那个。
+    """
+    p = _start()
+    try:
+        a = _call(p, "node.add", {"type": "delay"}, req_id=1)["result"]["node"]["uid"]
+        b = _call(p, "node.add", {"type": "delay"}, req_id=2)["result"]["node"]["uid"]
+        c = _call(p, "node.add", {"type": "delay"}, req_id=3)["result"]["node"]["uid"]
+
+        # 下标写 0（指向 a），但 uid 是 c → 必须删掉 c，不是 a
+        rm = _call(p, "node.remove", {"index": 0, "uid": c}, req_id=4)
+        assert [n["uid"] for n in rm["result"]["workflow"]["nodes"]] == [a, b]
+
+        # 改名 / 停用 / 改参数同样 uid 优先（下标一律给 0 干扰）
+        _call(p, "node.rename", {"index": 0, "uid": b, "name": "改过名"}, req_id=5)
+        _call(p, "node.toggle", {"index": 0, "uid": b, "enabled": False}, req_id=6)
+        cur = _call(p, "node.params.set",
+                    {"index": 0, "uid": b, "key": "ms", "value": 123},
+                    req_id=7)["result"]["workflow"]
+        target = [n for n in cur["nodes"] if n["uid"] == b][0]
+        assert target["name"] == "改过名"
+        assert target["enabled"] is False
+        assert target["params"]["ms"] == 123
+        # 0 号（a）完全不该被动过
+        zero = [n for n in cur["nodes"] if n["uid"] == a][0]
+        assert zero["name"] == "" and zero["enabled"] is True
+        assert "ms" not in zero["params"]
+
+        # 不存在的 uid 要**报错**，不能悄悄退回下标 0 上把 a 删了
+        ghost = _call(p, "node.remove", {"index": 0, "uid": "nope"}, req_id=8)
+        assert ghost["error"]["code"] == -32602
+        still = _call(p, "workflow.current", req_id=9)["result"]["workflow"]
+        assert [n["uid"] for n in still["nodes"]] == [a, b]
+
+        # 只给 index 的旧调用方式仍然可用（向后兼容，v3 时代的客户端）
+        legacy = _call(p, "node.remove", {"index": 0}, req_id=10)
+        assert [n["uid"] for n in legacy["result"]["workflow"]["nodes"]] == [b]
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
 def test_workflow_load_reports_list_migration(tmp_path) -> None:
     """打开 v3 旧文件：接成线性边链，并把「已迁移」标记透给界面。
 

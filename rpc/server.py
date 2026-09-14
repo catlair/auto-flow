@@ -320,11 +320,18 @@ _HANDLERS = {
     "workflow.update": _ctl(lambda p: _CTRL.workflow_update(p.get("patch", {}))),
     "node.add": _ctl(lambda p: _CTRL.node_add(p.get("type", ""), p.get("index"),
                                                p.get("x"), p.get("y"))),
-    "node.remove": _ctl(lambda p: _CTRL.node_remove(p.get("index", -1))),
+    # 这四个都**优先按 uid 寻址**（v4 起节点有稳定 uid）。前端把 uid 换算成
+    # 下标再送过来是纯损失：下标只在「送出的那一刻、那一份列表」里成立，
+    # 一次删多个节点时第二笔起必然错位。index 保留只为兼容旧客户端与测试。
+    "node.remove": _ctl(lambda p: _CTRL.node_remove(p.get("index", -1), p.get("uid", ""))),
     "node.move": _ctl(lambda p: _CTRL.node_move(p.get("index", -1), p.get("to", -1))),
-    "node.toggle": _ctl(lambda p: _CTRL.node_toggle(p.get("index", -1), p.get("enabled", True))),
-    "node.rename": _ctl(lambda p: _CTRL.node_rename(p.get("index", -1), p.get("name", ""))),
-    "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"), p.get("value"))),
+    "node.toggle": _ctl(lambda p: _CTRL.node_toggle(p.get("index", -1),
+                                                    p.get("enabled", True),
+                                                    p.get("uid", ""))),
+    "node.rename": _ctl(lambda p: _CTRL.node_rename(p.get("index", -1), p.get("name", ""),
+                                                    p.get("uid", ""))),
+    "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"),
+                                                            p.get("value"), p.get("uid", ""))),
     "node.setPos": _ctl(lambda p: _CTRL.node_set_pos(p.get("uid", ""), p.get("x", 0), p.get("y", 0))),
     "edge.add": _ctl(lambda p: _CTRL.edge_add(p.get("src", ""), p.get("dst", ""),
                                               p.get("port", PORT_OUT))),

@@ -159,6 +159,10 @@ def _artifact_checks(recorder, inputsource, controller, server, vision,
     out.append(("rpc.controller 有画布方法实现（edge_add/edge_remove/node_set_pos/set_start）",
                 {"edge_add", "edge_remove", "node_set_pos", "workflow_set_start"}
                 <= ctrl_names))
+    # 节点改动按 uid 寻址（2026-09-15）：_index_of 是那批方法共用的解析入口。
+    # 只看方法表名字是不够的——uid 支持是**行为**，所以下面 RPC 级还实测一次。
+    out.append(("rpc.controller 有 _index_of（节点改动按 uid 优先寻址）",
+                "_index_of" in ctrl_names))
     srv_consts = _all_consts(server) if server is not None else set()
     out.append(("rpc.server 注册了画布方法（edge.add/edge.remove/node.setPos/workflow.setStart）",
                 {"edge.add", "edge.remove", "node.setPos", "workflow.setStart"}
@@ -417,6 +421,22 @@ def _live_checks(sidecar_path: str) -> list:
             st = s.call("workflow.setStart", {"uid": "b"})
             got_start = ((st.get("result") or {}).get("workflow") or {}).get("start")
             out.append((f"workflow.setStart 生效（start={got_start}）", got_start == "b"))
+
+            # 节点改动按 uid 寻址（2026-09-15）。**故意送错的下标 + 正确的 uid**：
+            # 老 sidecar 只认下标，会照下标 0 把 a 删掉；新 sidecar uid 优先，
+            # 死的是 b。用 b 当靶子是因为它同时是上面 setStart 设的起点——
+            # 删掉它之后 start 必须被清空，顺带把那条规则也验了。
+            rm2 = s.call("node.remove", {"index": 0, "uid": "b"})
+            wf2 = (rm2.get("result") or {}).get("workflow") or {}
+            left_uids = [n.get("uid") for n in wf2.get("nodes") or []]
+            out.append((f"node.remove 按 uid 寻址而不是下标（剩下 {left_uids}）",
+                        rm2.get("error") is None and left_uids == ["a"]))
+            out.append((f"删掉起点节点后 start 被清空（start={wf2.get('start')!r}）",
+                        wf2.get("start") == ""))
+            ghost_rm = s.call("node.remove", {"index": 0, "uid": "nope"})
+            out.append((f"node.remove 对不存在的 uid 报错（返回 "
+                        f"{(ghost_rm.get('error') or {}).get('code')}）",
+                        (ghost_rm.get("error") or {}).get("code") == -32602))
     finally:
         s.close()
     return out

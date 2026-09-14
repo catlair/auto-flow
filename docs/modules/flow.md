@@ -48,6 +48,12 @@
 - **F-FLW-11/13**（2026-09-13）：`pytest tests/test_rpc.py -k flowchart`；
   前端 `npm --prefix tauri test` 的 `节点坐标只在拖拽结束时提交一次`、
   `删除别的节点时，选中跟着 uid 走而不是跟着下标漂移`
+- **F-FLW-13 补充**（2026-09-15）：节点改动按 **uid** 寻址（下标在「一次删多个」
+  时会指向别人，删错且不报错）——`test_node_mutations_prefer_uid_over_stale_index`
+  （故意送错的下标 + 正确的 uid，断言死的是 uid 指的那个；反向验证：让 `_index_of`
+  忽略 uid 后该用例失败并删掉了 a）、前端
+  `节点改动按 uid 寻址：多选删除不会删错人`（反向验证：`removeNode` 改回送 index
+  后 2 个用例失败）
 - **F-FLW-12**（2026-09-13）：`test_workflow_load_migrates_linear_list`、
   `test_migration_lays_nodes_out_instead_of_stacking_them`、
   `test_migration_keeps_hand_written_coordinates`、`test_v4_load_does_not_touch_positions`、
@@ -56,7 +62,7 @@
 - **F-FLW-14**（2026-09-13）：`npm --prefix tauri test` 的
   `出口名与 core/events.py 逐一对齐`（反向验证：把 `PORT_TRUE` 改成 `"yes"`
   会让 5 个用例失败）
-- **整体**：`pytest tests/ -q` → **173 passed**；`npm --prefix tauri test` → **70 passed**
+- **整体**：`pytest tests/ -q` → **174 passed**；`npm --prefix tauri test` → **71 passed**
 
 ## 设计要点
 
@@ -69,6 +75,14 @@
 2. **边的两端是 uid 而不是下标**。下标会随增删移动漂移：删掉第 3 个节点，
    所有 `index > 3` 的连线就会整体接到别人身上——**静默接错人**，比报错难查得多。
    `uid` 由后端在创建时生成（`uuid4().hex`），只在节点真的被删时才消失。
+
+   同一条理由**同样适用于改节点本身**（`node.remove` / `rename` / `toggle` /
+   `params.set`）。2026-09-15 修掉了一处漏网：这几个方法原本收下标，前端在调用前
+   把 uid 换算成下标送过去——而画布上「多选后按 Delete」会给每个 remove 各发一次
+   请求，它们**都按同一份删除前的列表**算下标，于是第二笔起指向别的节点，
+   **删错且不报错**（uid→下标的换算在这里是纯损失，前端本来就握着 uid）。
+   现在后端 uid 优先、前端直接送 uid；多个删除仍然**串行 await**，
+   因为并发的 `workflow.changed` 会互相覆盖前端状态、让画布闪一下。
 
 3. **一个出口只允许一条边（不允许扇出）**。扇出意味着「一个出口同时跑两条路径」，
    那要引入并行执行；而并行与「顺序执行 + 汇合」是两套模型，混在一起没人能预测
@@ -167,3 +181,5 @@
 
 - 2026-09-13 初版：v4 流程图模型（数据模型 / 图遍历 / 出口名 / 分支 / 结束 / 迁移 /
   画布），替换 v3 的「有序列表 + `run_when` 门控」
+- 2026-09-15 `node.remove` / `rename` / `toggle` / `params.set` 改为 uid 优先
+  （修「多选删除会删错节点且不报错」，见设计要点 2）

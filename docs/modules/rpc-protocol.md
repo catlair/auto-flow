@@ -39,8 +39,9 @@
 | workflow.current / new / load / save / update | — | workflow_current（统一真源视图） |
 | workflow.setStart | uid | workflow_current；`uid=""` 回到「第一个 start 节点 / 第一个节点」 |
 | node.add | type, **x, y** | workflow_current + index/node（不给坐标则落在视口外错开处） |
-| node.remove / toggle / rename / move | index… | workflow_current；**remove 同时清掉连着它的边与指向它的 start** |
-| node.params.set | index,key,value | workflow_current |
+| node.remove / toggle / rename | **uid**（或 index） | workflow_current；**remove 同时清掉连着它的边与指向它的 start** |
+| node.params.set | **uid**（或 index）,key,value | workflow_current |
+| node.move | index,to | workflow_current（列表内换序，画布已不用） |
 | **node.setPos** | uid,x,y | workflow_current（**只在拖拽结束时调一次**，见设计要点 6） |
 | **edge.add** | src,dst,port | workflow_current；同 `(src,port)` **替换**旧边，`src==dst` 报错 |
 | **edge.remove** | src,port | workflow_current |
@@ -128,14 +129,23 @@
    各制造过一次「检测到系统层丢事件，请反馈」的假警报。判据收敛到一处，
    新增丢弃类别时只改 `record_stop` 一处。
    （回归测试：`test_record_stop_unaccounted_is_zero_after_trim`）
-6. **画布方法按 uid 寻址，其余 node.* 仍按下标**。这是刻意的分工：
-   边、坐标、起点在语义上就是「某个具体节点」，而 `node.*` 的其余方法
-   （改名/启停/改参数）跟着「当前选中项」走，前端本来就用下标寻址。
-   风险在于下标会随增删漂移，所以 `node.remove` 会**同时清掉连着它的边**——
-   不清的话用户看到画布上悬空的连线（视觉上像还在连），而执行器走到那儿会因为
-   找不到节点直接断掉整条路径，两种表现对不上，是最难查的那类不一致。
-   前端 `store.removeNode` 另外把「选中」按 uid 跟随，避免下标前移导致
+6. **节点相关方法一律按 uid 寻址（`index` 只为向后兼容保留）**。
+   v4 起节点有稳定 uid（`uuid4().hex`），而**下标只在「送出那一刻、那一份列表」
+   里成立**。前端手上的那份可能比后端旧一步（例如定时任务刚换掉整份工作流、
+   `workflow.changed` 还没被处理完），按旧列表算出的下标会指向**另一个节点**——
+   删掉/改错节点，且**不报任何错**。最典型的是画布上「多选后按 Delete」：
+   每个 remove 各发一次请求，它们都按同一份删除前的列表算下标，**第二笔起必然错位**
+   （2026-09-15 发现并修掉：`node.remove` / `rename` / `toggle` / `params.set`
+   全部改成 uid 优先，前端不再做 uid→下标换算）。
+   注意前端**仍然串行 await** 多个删除：寻址正确不代表并发安全，
+   并发的 `workflow.changed` 会互相覆盖前端状态、让画布闪一下。
+   `node.remove` 还必须**同时清掉连着它的边与指向它的 `start`**——不清的话用户
+   看到画布上悬空的连线（视觉上像还在连），而执行器走到那儿会因为找不到节点
+   直接断掉整条路径，两种表现对不上，是最难查的那类不一致。
+   前端 `store.removeNode` 另外把「选中」也按 uid 跟随，避免下标前移导致
    参数面板悄悄显示另一个节点的参数（改一次就改错了对象）。
+   （回归测试：`test_node_mutations_prefer_uid_over_stale_index`、
+   前端 `节点改动按 uid 寻址：多选删除不会删错人`）
 7. **`node.setPos` 只能按「拖拽结束」调，不能逐帧调**。逐帧上报会把整份工作流
    广播几十次，`workflow.changed` 刷满 1024 格的通知队列，把 `run.finished`
    这类状态通知挤掉——丢一条界面就可能永久停在旧状态。
@@ -176,3 +186,7 @@
   `edges` / `start` / `migrated_from_list`，节点视图增加 `x` / `y`；
   `nodes.definitions` 的 `common_params` 变为空数组（`run_when` 退场），
   ParamDef 新增 `show_if` / `pick`
+- 2026-09-15 **`node.remove` / `rename` / `toggle` / `params.set` 改为 uid 优先**
+  （`index` 保留向后兼容）：下标会在「一次删多个节点」时指向别人，
+  删错/改错且不报错。前端不再做 uid→下标换算，多个删除改为串行 await。
+  见设计要点 6

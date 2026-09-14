@@ -487,9 +487,13 @@ export const useAppStore = defineStore("app", {
       this.applyCurrent(r);
       return r.index as number;
     },
-    async removeNode(index: number) {
+    // 以下四个都是**按 uid 寻址**。别改回传下标：下标只在「送出那一刻、那一份
+    // 列表」里成立，而画布上一次删多个节点会给每个 remove 各发一次请求，它们
+    // 都按同一份旧状态算下标 → 第二笔起指向别的节点，**删错/改错且不报错**。
+    // uid 在节点真被删掉之前一直有效。
+    async removeNode(uid: string) {
       const selUid = this.workflow.nodes[this.selectedIndex]?.uid;
-      const cur = await rpc.request("node.remove", { index });
+      const cur = await rpc.request("node.remove", { uid });
       this.applyCurrent(cur);
       // 选中要**跟着 uid 走**：删掉的是别的节点时下标会整体前移，
       // 只按 index 判断的话选中会悄悄挪到相邻的另一个节点上，
@@ -498,16 +502,16 @@ export const useAppStore = defineStore("app", {
       if (!this.workflow.nodes.some((n) => n.uid === selUid)) this.selectNode(-1);
       else this.selectedIndex = this.indexOfUid(selUid);
     },
-    async renameNode(index: number, name: string) {
-      const cur = await rpc.request("node.rename", { index, name });
+    async renameNode(uid: string, name: string) {
+      const cur = await rpc.request("node.rename", { uid, name });
       this.applyCurrent(cur);
     },
-    async toggleNode(index: number, enabled: boolean) {
-      const cur = await rpc.request("node.toggle", { index, enabled });
+    async toggleNode(uid: string, enabled: boolean) {
+      const cur = await rpc.request("node.toggle", { uid, enabled });
       this.applyCurrent(cur);
     },
-    async setParam(index: number, key: string, value: any) {
-      const cur = await rpc.request("node.params.set", { index, key, value });
+    async setParam(uid: string, key: string, value: any) {
+      const cur = await rpc.request("node.params.set", { uid, key, value });
       this.applyCurrent(cur);
     },
 

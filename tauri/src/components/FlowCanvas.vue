@@ -143,10 +143,18 @@ function onPaneClick() {
   store.selectNode(-1);
 }
 
-/** 画布内的删除（选中后按 Delete）走和后端一样的两条路径：删节点 / 删边。 */
-function onNodesChange(changes: NodeChange[]) {
+/**
+ * 画布内的删除（选中后按 Delete）走和后端一样的两条路径：删节点 / 删边。
+ *
+ * 一次可能来**多个** remove（Shift 多选 / 框选后按 Delete）。这里必须**串行
+ * await**：早先写成 `void removeByUid(ch.id)` 并发发出，每个请求都按同一份
+ * 「删除前」的节点列表把 uid 换算成下标 → 第二笔起下标错位，后端删掉的是
+ * **别的节点**且不报错。现在寻址已改成 uid（后端不再依赖下标），但**仍然串行**：
+ * 并发的 `workflow.changed` 会互相覆盖前端状态，画布会闪一下。
+ */
+async function onNodesChange(changes: NodeChange[]) {
   for (const ch of changes) {
-    if (ch.type === "remove") void removeByUid(ch.id);
+    if (ch.type === "remove") await removeByUid(ch.id);
   }
 }
 
@@ -161,20 +169,21 @@ function onEdgesChange(changes: EdgeChange[]) {
 }
 
 async function removeByUid(uid: string) {
-  const idx = store.indexOfUid(uid);
-  if (idx < 0) return;
+  // 前端不认识这个 uid 就静默跳过：重复的 remove 事件（或别处已经删掉）不该
+  // 给用户弹一个「删除失败」。注意这里只用来判「有没有这个节点」，
+  // **不再把 uid 换算成下标送给后端**——见 store.removeNode 的说明。
+  if (store.indexOfUid(uid) < 0) return;
   try {
-    await store.removeNode(idx);
+    await store.removeNode(uid);
   } catch (e) {
     MessagePlugin.error("删除失败：" + errMessage(e));
   }
 }
 
 async function toggleByUid(uid: string, v: boolean) {
-  const idx = store.indexOfUid(uid);
-  if (idx < 0) return;
+  if (store.indexOfUid(uid) < 0) return;
   try {
-    await store.toggleNode(idx, v);
+    await store.toggleNode(uid, v);
   } catch (e) {
     MessagePlugin.error("切换失败：" + errMessage(e));
   }
@@ -199,10 +208,9 @@ async function commitRename(uid: string, fallback: string) {
   renamingUid.value = "";
   const name = renameText.value.trim();
   if (name === fallback) return;
-  const idx = store.indexOfUid(uid);
-  if (idx < 0) return;
+  if (store.indexOfUid(uid) < 0) return;
   try {
-    await store.renameNode(idx, name);
+    await store.renameNode(uid, name);
   } catch (e) {
     MessagePlugin.error("改名失败：" + errMessage(e));
   }
