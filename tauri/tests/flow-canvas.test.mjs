@@ -218,14 +218,14 @@ test("边投影用持久化的落点侧，并经过收敛", () => {
   );
 });
 
-test("成环时画布要提示用户，且提示里带节点名", () => {
+test("成环时画布要提示用户、把环上的边标出来，且提示里带节点名", () => {
   // ⚠️ 这里只能断言「提示存在」。**「不拦」断言不了**——那是 store 层的行为，
-  // 由 `app-store.test.mjs` 的「闭环时回报 createsCycle，而且环不被拦」覆盖。
+  // 由 `app-store.test.mjs` 的「闭环时回报环上的边，而且环不被拦」覆盖。
   // 分开写是因为「环必须能连上」比「环要提示」重要得多：拦掉环会把
   // 「等到条件成立再往下走」这类合法流程一起挡死。
   assert.match(
     canvasSrc,
-    /if\s*\(createsCycle\)\s*\{[\s\S]{0,240}?MessagePlugin\.warning\(/,
+    /if\s*\(cycleEdges\)\s*\{[\s\S]{0,400}?MessagePlugin\.warning\(/,
     "成环时没有提示用户"
   );
   // 提示要指名是哪两个节点，否则用户得自己在一堆边里找那个环
@@ -237,6 +237,27 @@ test("成环时画布要提示用户，且提示里带节点名", () => {
   // 画布与环检测必须共用同一套「哪些边算数」：各写一份会漂，漂了的表现是
   // 「画布上明明看着没环、却提示有环」
   assert.match(canvasSrc, /liveEdges\(store\.workflow\.nodes/, "边投影没有用 liveEdges");
+});
+
+test("环上的边要真的被标出来（只报两个节点名，节点一多用户照样找不到）", () => {
+  // 高亮靠的是「vEdges 算出来的 id」与「cycleEdges 映射出来的 id」能对上。
+  // 两边各写一遍 `${src}|${port}` 就是等着漂——所以 id 格式只允许有一处定义，
+  // 两个调用点都走它。这条断言把「只有一处」钉住。
+  const idDefs = canvasSrc.match(/`\$\{[A-Za-z0-9_.]+\.src\}\|\$\{[A-Za-z0-9_.]+\.port\}`/g) ?? [];
+  assert.equal(idDefs.length, 1, `边 id 的格式应只定义一处，实际 ${idDefs.length} 处：${idDefs}`);
+  assert.match(canvasSrc, /cycleIds\.value\s*=\s*cycleEdges\.map\(edgeId\)/, "没有把环上的边记成高亮");
+  assert.match(canvasSrc, /const hot = new Set\(cycleIds\.value\)/, "vEdges 没有读高亮集合");
+  // 红色 + 加粗 + 虚线流动：静止的细线在一屏边里仍然会被忽略
+  assert.match(canvasSrc, /stroke:\s*"#e34d59",\s*strokeWidth:\s*2\.4/, "环上的边没有换色加粗");
+  assert.match(canvasSrc, /animated:\s*inLoop/, "环上的边没有虚线流动");
+  // 高亮是「刚才那一下」的反馈，不是常驻装饰：下一次交互必须清掉，
+  // 否则它会一直留着，用户分不清哪个是刚连的、哪个是早就有的。
+  // 逐个 handler 检查而不是数总数——数总数的话删掉一处、另一处多写一遍也能凑够。
+  for (const fn of ["onConnectStart", "onNodeDragStop", "onNodeClick", "onPaneClick"]) {
+    const body = canvasSrc.match(new RegExp(`function ${fn}\\([^)]*\\)\\s*\\{[\\s\\S]{0,320}?\\n\\}`));
+    assert.ok(body, `找不到 ${fn} 的函数体`);
+    assert.match(body[0], /clearCycleHighlight\(\)/, `${fn} 里没有清掉环高亮`);
+  }
 });
 
 test("nodes-initialized 事件必须接到 tryFit 上（否则视野永远不适应）", () => {

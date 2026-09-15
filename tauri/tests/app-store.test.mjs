@@ -39,7 +39,7 @@ function loadModule(relPath, resolveShim) {
 const compiled = compileTs("../src/stores/app.ts");
 // 真实的出口名常量模块（无依赖，可直接求值）
 const flowPorts = loadModule("../src/flow/ports.ts");
-// 真实的环检测模块（同样无依赖；store.addEdge 用它算 createsCycle）
+// 真实的环检测模块（同样无依赖；store.addEdge 用它算 cycleEdges）
 const flowCycle = loadModule("../src/flow/cycle.ts");
 const { createPinia } = require("pinia");
 
@@ -503,7 +503,7 @@ test("addEdge 把落点侧原样送给后端（画布据此决定线画在目标
   });
 });
 
-test("连线：闭环时回报 createsCycle，而且环**不被拦**", async () => {
+test("连线：闭环时回报环上的边，而且环**不被拦**", async () => {
   const nodes = [
     { type: "delay", params: {}, enabled: true, uid: "a" },
     { type: "delay", params: {}, enabled: true, uid: "b" },
@@ -521,12 +521,14 @@ test("连线：闭环时回报 createsCycle，而且环**不被拦**", async () 
   // 不置的话第一条断言会因为「图里一个节点都没有」而**假通过**。
   store.applyWorkflow(wfOf(nodes, []));
 
-  assert.equal((await store.addEdge("a", "b")).createsCycle, false, "直链不成环");
-  assert.equal(
-    (await store.addEdge("b", "a")).createsCycle,
-    true,
-    "回边成环要回报给调用方"
-  );
+  assert.equal((await store.addEdge("a", "b")).cycleEdges, null, "直链不成环");
+  const loop = (await store.addEdge("b", "a")).cycleEdges;
+  assert.ok(loop, "回边成环要把环上的边回报给调用方");
+  // 回报的必须**是一条闭合走法**，而不是「环上随便哪些边」：画布拿它直接标红，
+  // 标错一条用户就会顺着看错方向。第 0 条是刚连的那条。
+  assert.equal(loop[0].src, "b");
+  assert.equal(loop[0].dst, "a");
+  assert.equal(loop[loop.length - 1].dst, "b", "最后一条要回到起点才闭合");
   // 环是 v4 的一等公民（「等到条件成立再往下走」只能靠回边表达），所以 store
   // **照样落地**——拦掉就等于把合法用法一起挡了。提示只在画布层。
   assert.equal(store.workflow.edges.length, 2, "成环的边必须真的连上，不能被拦");
@@ -553,10 +555,10 @@ test("连线：被调小 case_count 后残留的边不参与环判定（否则�
 
   // 把那条残留边算进去的话，d→b 就成了环（b→d 已存在）——用户会收到一条关于
   // 「画布上根本看不见的边」的提示，无从下手。**这条断言是区分性的**：
-  // 一旦 store 不再用 liveEdges 过滤，它就会变成 true 而失败。
+  // 一旦 store 不再用 liveEdges 过滤，它就会变成一条非 null 的环而失败。
   assert.equal(
-    (await store.addEdge("d", "b")).createsCycle,
-    false,
+    (await store.addEdge("d", "b")).cycleEdges,
+    null,
     "拿看不见的边判环会误报"
   );
 });

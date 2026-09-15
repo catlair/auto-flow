@@ -8,7 +8,8 @@ import type {
   Workflow,
 } from "@/rpc/types";
 import { PORT_OUT, DEFAULT_TARGET_SIDE, liveEdges } from "@/flow/ports";
-import { createsCycle } from "@/flow/cycle";
+import type { GraphEdge } from "@/flow/ports";
+import { cycleEdges } from "@/flow/cycle";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -530,9 +531,12 @@ export const useAppStore = defineStore("app", {
      * 连一条边。同一个 (源节点, 出口) 后端只保留一条——**后连的替换先连的**。
      * 返回这次连线对图的影响，调用方据此决定提示什么：
      * - `replaced`：旧连线被顶掉了。不说一声的话用户会以为「连了两条」；
-     * - `createsCycle`：这条边让图里出现了环。**环是合法的**（回边是循环的唯一
-     *   表达方式），所以只提示、不拦——但「故意做循环」和「连错成环」在画布上
-     *   长得一模一样，区别要到运行时撞 `MAX_STEPS` 才显现，值得当场提一句。
+     * - `cycleEdges`：这条边让图里出现了环，值是**环上的全部边**（含刚连的这条）。
+     *   **环是合法的**（回边是循环的唯一表达方式），所以只提示、不拦——但
+     *   「故意做循环」和「连错成环」在画布上长得一模一样，区别要到运行时撞
+     *   `MAX_STEPS` 才显现，值得当场提一句。
+     *   **返回边而不是 `true`**：节点一多，光给两个节点名用户照样找不到那条回路，
+     *   把「找环」原样推回去等于没帮上忙。画布拿这些边直接标出来。
      *
      * `dstSide` 是画布上的落点侧（用户在哪一侧松手），**只影响线画在目标节点的
      * 哪条边上，不参与执行**；后端会把脏值收敛到默认侧。
@@ -542,20 +546,20 @@ export const useAppStore = defineStore("app", {
       dst: string,
       port: string = PORT_OUT,
       dstSide: string = DEFAULT_TARGET_SIDE
-    ): Promise<{ replaced: boolean; createsCycle: boolean }> {
+    ): Promise<{ replaced: boolean; cycleEdges: GraphEdge[] | null }> {
       // 两个判断都用**连线前**的图：
       // - `replaced` 只看「这个出口原来有没有边」，与图结构无关；
       //   注意这里用**全部**边而不是活边——后端按 (src, port) 替换时不看出口是否
       //   合法，被调小 case_count 后残留的那条同样会被顶掉，漏判会让用户以为连了两条。
-      // - `createsCycle` 问的是「dst 能否走到 src」，旧边从 src 出发，用不到它。
+      // - 环检测问的是「dst 能否走到 src」，旧边从 src 出发，用不到它。
       //   但必须用**活边**：残留的 `case:4` 边画布上不显示、执行器也不会走，
       //   拿它判环会提示一个用户根本看不见的环。
       const live = liveEdges(this.workflow.nodes, this.workflow.edges);
       const replaced = this.workflow.edges.some((e) => e.src === src && e.port === port);
-      const cyclic = createsCycle(live, src, dst);
+      const loop = cycleEdges(live, { src, port, dst });
       const cur = await rpc.request("edge.add", { src, dst, port, dst_side: dstSide });
       this.applyCurrent(cur);
-      return { replaced, createsCycle: cyclic };
+      return { replaced, cycleEdges: loop };
     },
     async removeEdge(src: string, port: string = PORT_OUT) {
       const cur = await rpc.request("edge.remove", { src, port });

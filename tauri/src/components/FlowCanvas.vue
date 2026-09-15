@@ -84,6 +84,32 @@ const vNodes = computed(() =>
 );
 
 /**
+ * 被标红的边 id（刚连出来的那个环）。**纯画布视图态**，不进 store、不落盘：
+ * 它是「刚才那一下」的反馈，不是工作流的属性。
+ *
+ * 由 `onConnect` 写入、由**下一次交互**清掉（起一条新连线 / 点空白 / 点节点 /
+ * 拖节点）。用「下一次交互」而不是定时器：定时器要么太短（还没看清就没了）、
+ * 要么太长（挡着后面的操作），而「我动手了就说明我看完了」是确定的信号，
+ * 也不需要为它引入一个可能泄漏的 `setTimeout`。
+ */
+const cycleIds = ref<string[]>([]);
+
+function clearCycleHighlight() {
+  if (cycleIds.value.length) cycleIds.value = [];
+}
+
+/**
+ * 边在画布上的 id。
+ *
+ * `vEdges` 与「把环上的边标出来」都要用这个格式——**两处各写一份迟早会漂**，
+ * 而漂了的表现是「提示说有环、画布上却一条都没标红」，用户只会觉得提示是错的。
+ * 后端不认这个 id（它按 `(src, port)` 寻址），所以格式由前端自己定。
+ */
+function edgeId(e: { src: string; port: string }): string {
+  return `${e.src}|${e.port}`;
+}
+
+/**
  * 边投影。只渲染**活边**——定义在 `liveEdges`（`@/flow/ports`），一句话是
  * 「两端节点都在、且出口名对源节点合法」。三类边因此不渲染：
  *
@@ -98,20 +124,31 @@ const vNodes = computed(() =>
  *
  * 过滤逻辑抽到 `liveEdges` 是因为**环检测要用同一套判断**：各写一份迟早会漂，
  * 而漂了的表现是「画布上看着没环、却提示有环」——这种没人能想明白的现象。
+ *
+ * 环上的边（`cycleIds`）换成红色加粗 + 虚线流动：刚连出环时只报两个节点名，
+ * 节点一多用户照样找不到那条回路——**提示要落到具体的东西上**。
  */
 const vEdges = computed(() => {
+  const hot = new Set(cycleIds.value);
   const out = [];
   for (const e of liveEdges(store.workflow.nodes, store.workflow.edges)) {
+    const id = edgeId(e);
+    const inLoop = hot.has(id);
     out.push({
-      id: `${e.src}|${e.port}`,
+      id,
       source: e.src,
       target: e.dst,
       sourceHandle: e.port,
       targetHandle: normalizeTargetSide(e.dst_side),
       label: portLabel(e.port),
       labelBgStyle: { fill: "#ffffff", fillOpacity: 0.85 },
-      labelStyle: { fontSize: "10px", fill: "#64748b" },
-      style: { stroke: "#94a3b8", strokeWidth: 1.4 },
+      labelStyle: { fontSize: "10px", fill: inLoop ? "#c9353f" : "#64748b" },
+      style: inLoop
+        ? { stroke: "#e34d59", strokeWidth: 2.4 }
+        : { stroke: "#94a3b8", strokeWidth: 1.4 },
+      // 虚线流动（库自带 `.vue-flow__edge.animated`）。静止的红线在一屏边里
+      // 仍然可能被忽略，动起来才一眼能认出来。
+      animated: inLoop,
       markerEnd: MarkerType.ArrowClosed,
     });
   }
@@ -141,6 +178,8 @@ function isValidConnection(c: Connection): boolean {
 const connecting = ref(false);
 function onConnectStart() {
   connecting.value = true;
+  // 又动手连线了，说明上一个环用户已经看过了。
+  clearCycleHighlight();
 }
 function onConnectEnd() {
   connecting.value = false;
@@ -159,7 +198,7 @@ function onConnect(c: Connection) {
   const side = normalizeTargetSide(c.targetHandle);
   void store
     .addEdge(c.source, c.target, port, side)
-    .then(({ replaced, createsCycle }) => {
+    .then(({ replaced, cycleEdges }) => {
       // 一个出口只允许一条边，后连的替换先连的。不说一声的话，
       // 用户会以为「连了两条」，实际旧的那条已经没了。
       if (replaced) MessagePlugin.info(`已替换「${portLabel(port)}」出口原有的连线`);
@@ -169,10 +208,13 @@ function onConnect(c: Connection) {
       // 10000 步上限才显现——那时用户已经不知道是哪一步连错的，所以当场提一句。
       // 文案说「出现了环」而不是「这是死循环」：分支没被选中的 case 上的环
       // 永远不会走到，静态判定死循环是不可判定的。
-      if (createsCycle) {
+      if (cycleEdges) {
+        // 光报两个节点名，节点一多用户照样找不到那条回路——把环上的边标出来，
+        // 提示才落到具体的东西上。下一次交互时清掉（见 clearCycleHighlight）。
+        cycleIds.value = cycleEdges.map(edgeId);
         MessagePlugin.warning(
           `「${nodeLabel(c.source)} → ${nodeLabel(c.target)}」让流程里出现了环，` +
-            `确认这是想要的循环、而不是连错`
+            `环上的连线已标红，确认这是想要的循环、而不是连错`
         );
       }
     })
@@ -184,16 +226,19 @@ function onConnect(c: Connection) {
  * workflow.changed 刷满通知队列，把运行状态类通知挤掉。
  */
 function onNodeDragStop(e: NodeDragEvent) {
+  clearCycleHighlight();
   void store
     .setNodePos(e.node.id, e.node.position.x, e.node.position.y)
     .catch((err) => MessagePlugin.error("保存位置失败：" + errMessage(err)));
 }
 
 function onNodeClick(e: NodeMouseEvent) {
+  clearCycleHighlight();
   store.selectNode(store.indexOfUid(e.node.id));
 }
 
 function onPaneClick() {
+  clearCycleHighlight();
   store.selectNode(-1);
 }
 
