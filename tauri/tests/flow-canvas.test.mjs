@@ -218,6 +218,27 @@ test("边投影用持久化的落点侧，并经过收敛", () => {
   );
 });
 
+test("成环时画布要提示用户，且提示里带节点名", () => {
+  // ⚠️ 这里只能断言「提示存在」。**「不拦」断言不了**——那是 store 层的行为，
+  // 由 `app-store.test.mjs` 的「闭环时回报 createsCycle，而且环不被拦」覆盖。
+  // 分开写是因为「环必须能连上」比「环要提示」重要得多：拦掉环会把
+  // 「等到条件成立再往下走」这类合法流程一起挡死。
+  assert.match(
+    canvasSrc,
+    /if\s*\(createsCycle\)\s*\{[\s\S]{0,240}?MessagePlugin\.warning\(/,
+    "成环时没有提示用户"
+  );
+  // 提示要指名是哪两个节点，否则用户得自己在一堆边里找那个环
+  assert.match(
+    canvasSrc,
+    /nodeLabel\(c\.source\)[\s\S]{0,80}?nodeLabel\(c\.target\)/,
+    "成环提示没有带节点名"
+  );
+  // 画布与环检测必须共用同一套「哪些边算数」：各写一份会漂，漂了的表现是
+  // 「画布上明明看着没环、却提示有环」
+  assert.match(canvasSrc, /liveEdges\(store\.workflow\.nodes/, "边投影没有用 liveEdges");
+});
+
 test("nodes-initialized 事件必须接到 tryFit 上（否则视野永远不适应）", () => {
   assert.match(
     canvasSrc,

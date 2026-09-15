@@ -124,3 +124,49 @@ export function canConnectFrom(type: string): boolean {
 export function canConnectTo(type: string): boolean {
   return type !== "start";
 }
+
+// ---------------------------------------------------------------------------
+// 活边：画布会渲染、执行器也会走的那些边
+// ---------------------------------------------------------------------------
+
+/** 判断「哪些边算数」所需的最小节点形状（结构兼容 `WorkflowNode`）。 */
+export interface GraphNode {
+  uid: string;
+  type: string;
+  params?: Record<string, unknown>;
+}
+
+/** 判断「哪些边算数」所需的最小边形状（结构兼容 `WorkflowEdge`）。 */
+export interface GraphEdge {
+  src: string;
+  port: string;
+  dst: string;
+  /** 画布落点侧。`liveEdges` **原样透传**边对象，所以这个字段跟着一起出来。 */
+  dst_side?: string;
+}
+
+/**
+ * 从一堆边里挑出**画布会渲染、执行器也会走**的那些（下称「活边」）。
+ *
+ * 排除两类：
+ * - **两端的节点不存在**（只有手工编辑过的 json 才可能出现）——画出来是悬空的；
+ * - **出口名对源节点已不合法**。`case_count` 从 5 调回 3 之后，`case:4`/`case:5`
+ *   上的边**仍留在文件里**（这是刻意的：调回去它还在）。但那个手柄不存在，
+ *   Vue Flow 找不到锚点会在控制台刷告警、并把线画在奇怪的位置；执行器也不会走到
+ *   它（`next_map` 按 `(src, port)` 查表，而分支根本不会发出那个出口）。
+ *
+ * 为什么要抽成一个函数：画布渲染（`FlowCanvas.vue` 的 `vEdges`）和环检测都要用
+ * 同一套「哪些边算数」的判断。各写一份迟早会漂，而漂了的表现是
+ * 「画布上明明看着没环、却提示有环」——这种没人能想明白的现象。
+ */
+export function liveEdges(
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[]
+): GraphEdge[] {
+  const byUid = new Map(nodes.map((n) => [n.uid, n]));
+  return edges.filter((e) => {
+    const src = byUid.get(e.src);
+    if (!src || !byUid.has(e.dst)) return false;
+    return exitPorts(src.type, src.params?.case_count).includes(e.port);
+  });
+}

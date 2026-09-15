@@ -28,7 +28,7 @@ import { Controls } from "@vue-flow/controls";
 import { MessagePlugin } from "tdesign-vue-next";
 import { useAppStore } from "@/stores/app";
 import { errMessage } from "@/rpc/client";
-import { PORT_OUT, portLabel, exitPorts, canConnectFrom, canConnectTo,
+import { PORT_OUT, portLabel, exitPorts, canConnectFrom, canConnectTo, liveEdges,
          TARGET_SIDES, TARGET_SIDE_LEFT, TARGET_SIDE_TOP, TARGET_SIDE_BOTTOM,
          normalizeTargetSide } from "@/flow/ports";
 import { nodeSummary } from "@/flow/summary";
@@ -84,25 +84,24 @@ const vNodes = computed(() =>
 );
 
 /**
- * 边投影。两类边不渲染：
+ * 边投影。只渲染**活边**——定义在 `liveEdges`（`@/flow/ports`），一句话是
+ * 「两端节点都在、且出口名对源节点合法」。三类边因此不渲染：
  *
  * - `dst` 为空：后端允许存「这个出口留空」，它与「这条边不存在」在执行上等价，
- *   画布上画一条没有终点的线只会让人以为连上了。
+ *   画布上画一条没有终点的线只会让人以为连上了。（空串不是任何节点的 uid，
+ *   所以被「两端节点都在」这一条顺带排除。）
  * - 源节点/目标节点已不在：手工编辑的 json 才可能出现，画出来是悬空的。
+ * - 出口名对源节点已不合法（如 `case_count` 从 5 调回 3）：那个手柄不存在，
+ *   Vue Flow 找不到锚点，会在控制台刷告警且画在奇怪的位置。
+ *   **边本身留着**——把 `case_count` 调回去它还在，只是执行器不会走到
+ *   （分支不会发出那个出口），这正是「不删数据、只不显示」的预期行为。
  *
- * 出口名对源节点已不合法（如 case_count 从 5 调回 3）时同样跳过：那个手柄
- * 不存在，Vue Flow 找不到锚点，会在控制台刷告警且画在奇怪的位置。
- * 边本身留着——把 case_count 调回去它还在，只是执行器不会走到（分支不会发出
- * 那个出口），这正是「不删数据、只不显示」的预期行为。
+ * 过滤逻辑抽到 `liveEdges` 是因为**环检测要用同一套判断**：各写一份迟早会漂，
+ * 而漂了的表现是「画布上看着没环、却提示有环」——这种没人能想明白的现象。
  */
 const vEdges = computed(() => {
-  const byUid = new Map(store.workflow.nodes.map((n) => [n.uid, n]));
   const out = [];
-  for (const e of store.workflow.edges) {
-    const src = byUid.get(e.src);
-    const dst = byUid.get(e.dst);
-    if (!src || !dst) continue;
-    if (!exitPorts(src.type, src.params?.case_count).includes(e.port)) continue;
+  for (const e of liveEdges(store.workflow.nodes, store.workflow.edges)) {
     out.push({
       id: `${e.src}|${e.port}`,
       source: e.src,
@@ -147,16 +146,35 @@ function onConnectEnd() {
   connecting.value = false;
 }
 
+/** 节点在提示文案里的显示名：自定义名优先，否则用类型名——与卡片上显示的完全一致。 */
+function nodeLabel(uid: string): string {
+  const n = store.workflow.nodes.find((x) => x.uid === uid);
+  if (!n) return uid;
+  return (n.name || "").trim() || defs.value[n.type]?.name || n.type;
+}
+
 function onConnect(c: Connection) {
   const port = c.sourceHandle || PORT_OUT;
   // 落点侧就是松手的那个手柄 id（两侧同名，无需映射）。缺省时收敛到默认侧。
   const side = normalizeTargetSide(c.targetHandle);
   void store
     .addEdge(c.source, c.target, port, side)
-    .then((replaced) => {
+    .then(({ replaced, createsCycle }) => {
       // 一个出口只允许一条边，后连的替换先连的。不说一声的话，
       // 用户会以为「连了两条」，实际旧的那条已经没了。
       if (replaced) MessagePlugin.info(`已替换「${portLabel(port)}」出口原有的连线`);
+      // 成环**只提示、不拦**：回边是 v4 里表达循环的唯一方式（「等到条件成立再
+      // 往下走」这类流程必须有它），拦掉就等于把合法用法一起挡了。
+      // 但「故意做循环」和「连错成环」在画布上长得一样，区别要到运行时撞
+      // 10000 步上限才显现——那时用户已经不知道是哪一步连错的，所以当场提一句。
+      // 文案说「出现了环」而不是「这是死循环」：分支没被选中的 case 上的环
+      // 永远不会走到，静态判定死循环是不可判定的。
+      if (createsCycle) {
+        MessagePlugin.warning(
+          `「${nodeLabel(c.source)} → ${nodeLabel(c.target)}」让流程里出现了环，` +
+            `确认这是想要的循环、而不是连错`
+        );
+      }
     })
     .catch((e) => MessagePlugin.error("连线失败：" + errMessage(e)));
 }

@@ -39,6 +39,8 @@ function loadModule(relPath, resolveShim) {
 const compiled = compileTs("../src/stores/app.ts");
 // 真实的出口名常量模块（无依赖，可直接求值）
 const flowPorts = loadModule("../src/flow/ports.ts");
+// 真实的环检测模块（同样无依赖；store.addEdge 用它算 createsCycle）
+const flowCycle = loadModule("../src/flow/cycle.ts");
 const { createPinia } = require("pinia");
 
 function setup(request) {
@@ -87,6 +89,7 @@ function setup(request) {
   load((name) => {
     if (name === "@/rpc/client") return { rpc, errMessage: (e) => String(e?.message ?? e) };
     if (name === "@/flow/ports") return flowPorts;
+    if (name === "@/flow/cycle") return flowCycle;
     if (name === "@tauri-apps/plugin-dialog") {
       return { open: () => { throw new Error("禁止打开系统对话框"); },
         save: () => { throw new Error("禁止打开系统对话框"); } };
@@ -451,12 +454,20 @@ test("连线：同一出口只留一条，替换时回报给调用方", async ()
     })
   );
 
-  assert.equal(await store.addEdge("c", "a", ports.PORT_TRUE), false, "首次连线不算替换");
+  assert.equal(
+    (await store.addEdge("c", "a", ports.PORT_TRUE)).replaced,
+    false,
+    "首次连线不算替换"
+  );
   assert.deepEqual(store.workflow.edges, [{ src: "c", port: "true", dst: "a" }]);
 
   // 同一出口再连一条：后端替换旧的，前端要能告诉用户「旧的那条没了」，
   // 否则用户会以为自己连了两条
-  assert.equal(await store.addEdge("c", "b", ports.PORT_TRUE), true, "同出口第二次要回报替换");
+  assert.equal(
+    (await store.addEdge("c", "b", ports.PORT_TRUE)).replaced,
+    true,
+    "同出口第二次要回报替换"
+  );
   assert.deepEqual(store.workflow.edges, [{ src: "c", port: "true", dst: "b" }]);
 
   // 另一个出口互不影响：条件节点两个出口本来就该各连一条
@@ -490,6 +501,64 @@ test("addEdge 把落点侧原样送给后端（画布据此决定线画在目标
     port: "out",
     dst_side: "bottom",
   });
+});
+
+test("连线：闭环时回报 createsCycle，而且环**不被拦**", async () => {
+  const nodes = [
+    { type: "delay", params: {}, enabled: true, uid: "a" },
+    { type: "delay", params: {}, enabled: true, uid: "b" },
+  ];
+  let edges = [];
+  const { store } = setup(
+    baseHandler(nodes, (method, params) => {
+      if (method !== "edge.add") return {};
+      edges = edges.filter((e) => !(e.src === params.src && e.port === params.port));
+      edges.push({ src: params.src, port: params.port, dst: params.dst });
+      return res(nodes, edges.map((e) => ({ ...e })));
+    })
+  );
+  // 必须显式置成「两个节点、还没连线」：`setup` 不会自己握手，store 初始是空的，
+  // 不置的话第一条断言会因为「图里一个节点都没有」而**假通过**。
+  store.applyWorkflow(wfOf(nodes, []));
+
+  assert.equal((await store.addEdge("a", "b")).createsCycle, false, "直链不成环");
+  assert.equal(
+    (await store.addEdge("b", "a")).createsCycle,
+    true,
+    "回边成环要回报给调用方"
+  );
+  // 环是 v4 的一等公民（「等到条件成立再往下走」只能靠回边表达），所以 store
+  // **照样落地**——拦掉就等于把合法用法一起挡了。提示只在画布层。
+  assert.equal(store.workflow.edges.length, 2, "成环的边必须真的连上，不能被拦");
+});
+
+test("连线：被调小 case_count 后残留的边不参与环判定（否则提示一个看不见的环）", async () => {
+  // 分支从 4 个情形调回 3 个之后，`case:4` 上的边**仍留在文件里**（刻意的：
+  // 调回去它还在），但画布不显示、执行器也不会走。
+  const nodes = [
+    { type: "branch", params: { case_count: 3 }, enabled: true, uid: "b" },
+    { type: "delay", params: {}, enabled: true, uid: "d" },
+  ];
+  const stale = [{ src: "b", port: "case:4", dst: "d" }];
+  let edges = stale.map((x) => ({ ...x }));
+  const { store } = setup(
+    baseHandler(nodes, (method, params) => {
+      if (method !== "edge.add") return {};
+      edges = edges.filter((e) => !(e.src === params.src && e.port === params.port));
+      edges.push({ src: params.src, port: params.port, dst: params.dst });
+      return res(nodes, edges.map((e) => ({ ...e })));
+    })
+  );
+  store.applyWorkflow(wfOf(nodes, stale));
+
+  // 把那条残留边算进去的话，d→b 就成了环（b→d 已存在）——用户会收到一条关于
+  // 「画布上根本看不见的边」的提示，无从下手。**这条断言是区分性的**：
+  // 一旦 store 不再用 liveEdges 过滤，它就会变成 true 而失败。
+  assert.equal(
+    (await store.addEdge("d", "b")).createsCycle,
+    false,
+    "拿看不见的边判环会误报"
+  );
 });
 
 test("设置与恢复起始节点", async () => {

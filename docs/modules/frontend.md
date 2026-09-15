@@ -8,7 +8,9 @@
 - `tauri/src/App.vue` — 布局（header + 三栏卡片 + 底部状态栏）
 - `tauri/src/components/` — FlowCanvas / ParamsPanel / RunPanel / RecordPanel /
   WorkflowMenu / PermissionBanner / ScheduleDialog / DiagnosticsPanel（8 个）
-- `tauri/src/flow/ports.ts` — 出口名与「某类节点有几个出口」（与后端逐字对齐）
+- `tauri/src/flow/ports.ts` — 出口名与「某类节点有几个出口」（与后端逐字对齐）+
+  `liveEdges`（「哪些边算数」的唯一判断：画布渲染与环检测共用）
+- `tauri/src/flow/cycle.ts` — 环检测纯模块（`reaches` / `createsCycle`），无 Vue/DOM 依赖
 - `tauri/src/flow/summary.ts` — 节点卡片上那行参数摘要
 - `tauri/src/flow/fitOnce.ts` — 「首次拿到非空工作流时适应一次视野」的状态机（纯模块，可单测）
 - `tauri/src/stores/app.ts` — Pinia：连接/运行/录制态、工作流镜像、全部 RPC 调用
@@ -33,6 +35,7 @@
 | F-UI-13 | 后端告警可见 | ✅ | `log.warning` 通知 → `backendNotes`（最近 20 条）→ 诊断面板成块显示 + 无横幅时弹 warn 横幅 |
 | F-UI-14 | 起点标记与设置 | ✅ | 起始节点带「起」徽标；「设为起点 / 默认起点」按钮 |
 | F-UI-15 | 旧文件迁移提示 | ✅ | `migrated_from_list` → 可关闭的提示条，只弹一次 |
+| F-UI-16 | 连线成环提示 | ✅ | 连上那一刻提示「出现了环，确认是想要的循环而不是连错」，带源/目标节点名；**只提示不拦**（回边合法） |
 
 ## 验收记录
 
@@ -97,6 +100,35 @@
   并模拟画布上「多选后按 Delete」的并发删除，断言后端真源只少了该少的那些。
   反向验证：把 `removeNode` 改回送 index，本条与
   `删除别的节点时，选中跟着 uid 走…` 一起失败。
+- **F-UI-16 连线成环提示**（2026-09-15）：`app-store.test.mjs` 的
+  `闭环时回报 createsCycle，而且环**不被拦**`（同时断言边数确实 +1——
+  **只测「能报出环」的话，把提示改成拦截也照样绿**）与
+  `被调小 case_count 后残留的边不参与环判定`；
+  `flow-canvas.test.mjs` 的 `成环时画布要提示用户，且提示里带节点名`
+  （源文件结构断言：`if (createsCycle)` 后跟 `MessagePlugin.warning`、
+  文案里有 `nodeLabel(c.source)` / `nodeLabel(c.target)`、边投影用的是 `liveEdges`）。
+  算法本身（可达性 / 自环 / 空 `dst` / 20000 节点长链 / 已有环收敛）在
+  `flow-cycle.test.mjs`（16 例），纯函数所以能真跑。
+  反向验证：`createsCycle` 改恒 `false` → 6 例失败；`liveEdges` 改不过滤 → 4 例失败。
+  两次都恢复后 `npm --prefix tauri test` → **110 passed**。
+- **F-UI-16 连线成环·目视**（2026-09-15）：`tauri dev` + 真 WebView 截图。夹具是
+  「甲→乙」两个延时节点（`/tmp/af-cycle-fixture.json`，`dst_side=top`），
+  再连一条「乙→甲」造环。截到的提示条为
+  **「乙 → 甲」让流程里出现了环，确认这是想要的循环、而不是连错**
+  ——橙色告警图标（不是 error 的红色）、带**节点名**而不是 uid。
+  同一次目视还确认了两件事：**环没有被拦**（连线后 `store.workflow.edges` 是 2 条，
+  画布上两条边都在，第二条从左侧扎进甲的手柄），以及**改用 `liveEdges` 之后
+  `vEdges` 照常渲染**（这条本来是这次重构最容易弄坏的地方）。
+  ⚠️ 环境上踩了两个坑（已写进 `auto-flow-verify` skill）：① `screencapture` 报
+  `could not create image from window`、全屏截图全黑 —— **是显示器休眠了**，
+  用 `caffeinate -d -u` 唤醒即可，别误判成权限问题；② 合成鼠标事件**点不到**
+  这个窗口——宿主 IDE 窗口始终在最前，`activateWithOptions_` / `CGSOrderWindow`
+  都没法把开发窗口提到它上面，点击全被宿主吃掉了（用「点节点卡片看是否选中」
+  判定过）。改为在临时夹具里对**手柄元素**派发一次真实的 `click`
+  （`.af-handle-out[data-nodeid=…]`），走的是库的 `handleClick` → `onConnect`
+  同一条链路，只是入口不是真鼠标。验收后临时块已删除，
+  `git diff tauri/src/main.ts` 为空，且重新构建的产物名与安装版一致
+  （`index-CrLt0gCp.js` / `index-LoUHUimE.css`）⇒ 夹具没有被带进交付物。
 
 ## 设计要点
 
@@ -198,6 +230,26 @@
     - **不要**改成 `opacity: 0` 藏起来：虽然照样能落点（命中判定用的是
       「手柄中心点与指针的距离」，与可见性无关），但用户根本不知道可以往那儿连。
 
+13. **连线成环要提示，但绝不拦**（F-UI-16）。算法与「为什么只提示不拦」的完整
+    推理在 [flow.md](flow.md) 设计要点 18，这里只记前端侧的实现约束：
+    - **判断在 store 的 `addEdge` 里做，不在画布组件里**。`replaced` 已经在同一个
+      返回值里了，两者都是「这次连线对图的影响」，分两处算会出现
+      「一个说替换了、一个说成环了」的对不上。所以返回值从 `boolean` 变成
+      `{replaced, createsCycle}`，**改签名会让所有调用点编译期报错**——
+      这比「悄悄少提示一句」好，故意不提供默认值。
+    - **两个判断用的边表不同，不能图省事合成一个**：`replaced` 用**全部**边
+      （后端按 `(src, port)` 替换时不看出口是否合法，被调小 `case_count` 后残留的
+      那条同样会被顶掉，漏判会让用户以为连了两条）；`createsCycle` 用**活边**
+      （`liveEdges`，见设计要点 6 与 flow.md 设计要点 14）。
+    - **提示文案带节点名**（`nodeLabel`：自定义名优先，否则用类型名——**与卡片上
+      显示的一模一样**）。只报 uid 等于让用户自己去对，节点一多就对不上了。
+      注意「同名节点」不构成歧义：这里只是帮人定位，不是身份标识。
+    - 用 `MessagePlugin.warning` 而不是 `error`：这不是失败，是「确认一下」。
+      用 error 会让用户以为连线没成功。
+    - **文案不能写「这是死循环」**：静态判定死循环是不可判定的（分支没被选中的
+      `case` 上的环永远不会走到）。写了就是在无法判定的问题上给结论，
+      用户一旦发现「提示了但根本没死循环」就会连真提示一起不信。
+
 ## 已知问题
 
 - WebView 输入框无法被系统级合成键盘可靠注入（自动化测试限制，人工输入正常）。
@@ -211,6 +263,8 @@
   它不是真正的布局验证，只是「别再写回那个已知错误写法」的回归门。
 - 引入 @vue-flow/core 后 bundle 从约 1.0 MB 涨到 1.63 MB（gzip 443 KB）。
   桌面应用从本地加载，可接受。
+- **成环提示只在「手动连线」这条路径上**（F-UI-16）。打开文件时不检查图里已有的环，
+  也不高亮环上的边——只报两个节点名。见 flow.md 的「已知问题」。
 
 ## 变更记录
 
@@ -240,4 +294,9 @@
   `position: relative` 移到 `.af-gnode`（原先手柄圆点压住「情形 1/2/3」的数字）。
   新增 `tauri/tests/flow-canvas.test.mjs`（9 + 3 例）；前端用例 71 → 83。
   同时删掉 `tauri/src/main.ts` 里那段仅用于目视验收的临时夹具
+- 2026-09-15 **连线成环时提示**（F-UI-16）：新增纯模块 `tauri/src/flow/cycle.ts`；
+  `ports.ts` 抽出 `liveEdges` 供画布与环检测共用；`store.addEdge` 返回值由
+  `boolean` 改为 `{replaced, createsCycle}`，画布据此弹 `MessagePlugin.warning`。
+  新增 `tauri/tests/flow-cycle.test.mjs`（16 例）+ store 2 例 + 画布结构断言 1 例；
+  前端用例 91 → 110
 
