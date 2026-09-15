@@ -90,6 +90,116 @@ def test_executor_order_and_repeat():
     assert ex.running is False
 
 
+# ---------- delay: 等待至时刻 ----------
+def test_delay_seconds_until_parses_and_rolls_to_tomorrow():
+    """HH:MM / HH:MM:SS / 宽松空白都能解析；已过或正等于当前时刻 → 明天。"""
+    from datetime import datetime as dt
+    from tasks.builtin import DelayTask
+    f = DelayTask._seconds_until
+    now = dt(2026, 9, 15, 10, 0, 0)
+    assert f("10:30", now) == 1800
+    assert f("9:30", dt(2026, 9, 15, 9, 30, 0)) == 86400      # 等于当前 → 明天
+    assert f("09:30:15", dt(2026, 9, 15, 9, 0, 0)) == 1815
+    assert f(" 10:30 ", now) == 1800                          # 首尾空白无所谓
+    for bad in ("", "9", "9:30:00:00", "aa:bb", "24:00", "09:60", "09:00:61"):
+        with pytest.raises(ValueError):
+            f(bad, now)
+
+
+def test_delay_until_mode_waits_in_wall_clock_chunks(monkeypatch):
+    """等待至时刻：按墙钟剩余分段等待、**不受 speed 缩放**、剩余为 0 时结束。
+
+    分段的理由：player.wait 走 monotonic，macOS 睡眠期间不走——等到明早 09:00
+    的节点在机器睡一觉醒来后会多等一整段睡眠时间。每段结束用墙钟重算剩余才扛得住。
+    """
+    from core.executor import RunContext
+    from tasks.builtin import DelayTask
+    ex = Executor()
+    waits = []
+    monkeypatch.setattr(ex.player, "wait", lambda s: waits.append(s))
+    remaining = [7.5]
+
+    def fake_until(at, now=None):
+        v, remaining[0] = remaining[0], 0.0
+        return v
+
+    monkeypatch.setattr(DelayTask, "_seconds_until", staticmethod(fake_until))
+    ctx = RunContext(params={"mode": "等待至时刻", "at": "09:00"},
+                     player=ex.player, speed=3.0)
+    DelayTask().run(ctx)
+    assert waits == [1.0], "7.5s 被 CHUNK_S 截到 1.0；第二段剩余 0 → 结束（speed=3 不得缩放）"
+
+
+def test_delay_until_mode_stops_mid_wait(monkeypatch):
+    """停止请求要在等待中即刻生效，不能等到「时刻到了」才停。"""
+    from core.executor import RunContext
+    from tasks.builtin import DelayTask
+    ex = Executor()
+    waits = []
+
+    def wait(s):
+        waits.append(s)
+        ex.stop_run()
+
+    monkeypatch.setattr(ex.player, "wait", wait)
+    monkeypatch.setattr(DelayTask, "_seconds_until",
+                        staticmethod(lambda at, now=None: 3600.0))
+    # 与 executor 生产接线一致（见 Executor._run_node 的 is_stopping=lambda: ...）
+    ctx = RunContext(params={"mode": "等待至时刻", "at": "09:00"}, player=ex.player,
+                     is_stopping=lambda: ex._stop.is_set())
+    DelayTask().run(ctx)
+    assert waits == [1.0]
+
+
+def test_delay_until_mode_exits_when_only_player_stopped(monkeypatch):
+    """只停了 player、没停 executor 时也必须退出。
+
+    回归：`player.wait` 在 player 自身被停时立刻返回，若此时 ctx.stopping 仍为
+    False，循环就会**每秒空转**到墙钟自然走完（等 09:00 就是几小时 100% CPU）。
+    """
+    from core.executor import RunContext
+    from tasks.builtin import DelayTask
+    ex = Executor()
+    waits = []
+
+    def wait(s):
+        waits.append(s)
+        # 兜底失效时的失败模式是**无限空转**（每秒一次 wait，永远退不出），
+        # 只靠末尾那句 `waits == [1.0]` 的话，整个 pytest 进程会先被超时杀掉，
+        # 报出来的是「测试超时」而不是「是谁坏了」。在第二次 wait 就断掉，
+        # 失败信息直接点名原因。（反向验证：删掉 builtin 里那道兜底 → 本用例失败）
+        assert len(waits) == 1, "兜底失效：只停 player 时在空转，循环退不出去"
+        ex.player.stop_playback()      # 只停 player，不动 executor._stop
+
+    monkeypatch.setattr(ex.player, "wait", wait)
+    monkeypatch.setattr(DelayTask, "_seconds_until",
+                        staticmethod(lambda at, now=None: 3600.0))
+    ctx = RunContext(params={"mode": "等待至时刻", "at": "09:00"}, player=ex.player)
+    DelayTask().run(ctx)
+    assert waits == [1.0], "应当立刻退出，而不是每秒空转"
+
+
+def test_delay_duration_mode_keeps_speed_scaling():
+    """老的「延时毫秒」用法不能被改坏：仍按 speed 缩放。"""
+    from core.executor import RunContext
+    from tasks.builtin import DelayTask
+    waits = []
+    player = Executor().player
+    player.wait = lambda s: waits.append(s)  # type: ignore[method-assign]
+    ctx = RunContext(params={"ms": 1000}, player=player, speed=2.0)
+    DelayTask().run(ctx)
+    assert waits == [0.5]
+
+
+def test_delay_params_carry_mode_and_show_if():
+    """参数面板按等待方式只显示相关字段（毫秒/时刻互斥）。"""
+    from tasks.builtin import DelayTask
+    by_key = {p.key: p for p in DelayTask().params}
+    assert by_key["mode"].options == ["延时毫秒", "等待至时刻"]
+    assert by_key["ms"].show_if == {"key": "mode", "eq": "延时毫秒"}
+    assert by_key["at"].show_if == {"key": "mode", "eq": "等待至时刻"}
+
+
 @pytest.mark.parametrize("node_repeat,workflow_repeat", [(1, 1), (3, 1), (3, 2), (0, 2)])
 def test_record_replay_repeats_once_per_executor_iteration(monkeypatch, node_repeat, workflow_repeat):
     """repeat 统一由执行器处理：总回放次数为节点次数 × 工作流次数。"""

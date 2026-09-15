@@ -161,12 +161,68 @@ class DelayTask(BaseTask):
     name = "延时等待"
     order = 30
 
+    # 等待至时刻的分段长度（秒）。每段结束都用**墙钟**重算剩余，而不是一次
+    # 睡到底：`player.wait` 走 monotonic 时钟，macOS 上系统睡眠期间它不走——
+    # 等到明早 09:00 的节点在机器睡眠后醒来会**多等一整段睡眠时间**。
+    # 分段重算让醒来后的下一段直接对准墙钟；顺带让停止检查保持高频响应。
+    CHUNK_S = 1.0
+
     def __init__(self) -> None:
         super().__init__()
-        self.params = [ParamDef("ms", "毫秒", "int", 500, min_value=0)]
+        self.params = [
+            ParamDef("mode", "等待方式", "select", "延时毫秒", ["延时毫秒", "等待至时刻"],
+                     tooltip="延时毫秒：固定时长 | 等待至时刻：等到当天的某个时间点，已过则等明天的"),
+            ParamDef("ms", "毫秒", "int", 500, min_value=0,
+                     show_if={"key": "mode", "eq": "延时毫秒"}),
+            ParamDef("at", "时刻", "text", "09:00",
+                     show_if={"key": "mode", "eq": "等待至时刻"},
+                     tooltip="24 小时制，HH:MM 或 HH:MM:SS；已过则等明天的这一刻"),
+        ]
 
     def run(self, ctx) -> None:
-        ctx.player.wait(float(ctx.params.get("ms", 500)) / 1000.0 / max(ctx.speed, 0.01))
+        if str(ctx.params.get("mode", "延时毫秒")) == "等待至时刻":
+            self._wait_until(ctx, str(ctx.params.get("at", "") or ""))
+        else:
+            ctx.player.wait(float(ctx.params.get("ms", 500)) / 1000.0 / max(ctx.speed, 0.01))
+
+    def _wait_until(self, ctx, at: str) -> None:
+        """等到墙钟时刻。注意**不受速度倍率缩放**——「等到 09:00」是日历语义，
+        把它除以 speed 就成了"等到假的时刻"。"""
+        while not ctx.stopping:
+            remain = self._seconds_until(at)
+            if remain <= 0:
+                return
+            ctx.player.wait(min(remain, self.CHUNK_S))
+            # 兜底：player 被单独停掉时 `wait` 会立刻返回，而此时 ctx.stopping 可能
+            # 还是 False。正常路径下两者同置（executor.stop_run 都设），但缺了这道
+            # 检查，异常路径就会**每秒空转**直到墙钟自然走完（几小时 100% CPU）。
+            if ctx.player.stopping:
+                return
+
+    @staticmethod
+    def _seconds_until(at: str, now=None) -> float:
+        """距 `at`（HH:MM 或 HH:MM:SS）的秒数；已过则算**明天**的同一时刻。
+
+        `now` 可注入以便测试。格式/范围错误抛 ValueError（进 run.error，
+        用户能在面板上看到原因，而不是静默等 0 秒直接放行）。
+        """
+        import datetime
+
+        parts = [s for s in str(at).strip().split(":") if s != ""]
+        if len(parts) not in (2, 3):
+            raise ValueError("时刻格式应为 HH:MM 或 HH:MM:SS，例如 09:30")
+        try:
+            h, mi = int(parts[0]), int(parts[1])
+            sec = int(parts[2]) if len(parts) == 3 else 0
+        except ValueError:
+            raise ValueError("时刻格式应为 HH:MM 或 HH:MM:SS，例如 09:30") from None
+        if not (0 <= h <= 23 and 0 <= mi <= 59 and 0 <= sec <= 59):
+            raise ValueError("时刻超出范围（时 0-23，分/秒 0-59）")
+        now = now or datetime.datetime.now()
+        target = now.replace(hour=h, minute=mi, second=sec, microsecond=0)
+        if target <= now:
+            target += datetime.timedelta(days=1)
+        return (target - now).total_seconds()
 
 
 @register

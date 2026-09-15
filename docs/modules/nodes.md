@@ -33,7 +33,7 @@
 | 5 | 开始 | start | ✅ | 无参数；入口标记，不能有入边 |
 | 10 | 鼠标操作 | mouse | ✅ | click/double_click/move/press/release，相对偏移 |
 | 20 | 键盘输入 | keyboard | ✅ | text / 单键 / 组合键（keys 参数 ptype=`keys` 带捕获按钮） |
-| 30 | 延时等待 | delay | ✅ | 毫秒；曾把 ms 当 s（回放慢 1000 倍，已修） |
+| 30 | 延时等待 | delay | ✅ | 两种等待方式：延时毫秒（毫秒）/ 等待至时刻（HH:MM[:SS]，已过则等明天）；两者按 `show_if` 互斥显示 |
 | 40 | 录制回放 | record_replay | ✅ | 事件序列内嵌；速度/重复/相对坐标独立可调 |
 | 50 | 图像匹配点击 | image_click | ✅ | mss 截屏 + cv2 模板匹配 |
 | 60 | 找文字点击 | ocr_click | ✅ | macOS Vision 离线 OCR，中英文 |
@@ -51,6 +51,8 @@
   v4 起边的两端也是 uid，见 `test_flowchart_edges_and_positions`。
 - **F-NOD-04**（2026-09-13）：真机选中分支节点，`case_count` 调到 2 时只显示
   `case1_*` / `case2_*`；调到 4 时多出两组。参数默认值缺失时也正确显示（见设计要点 4）。
+  同一条机制也用在 `delay` 上（2026-09-15）：「延时毫秒 / 等待至时刻」两个字段
+  按 `mode` 互斥显示。
 - **F-NOD-05**（2026-09-13）：真机在 `case1_value`（可编辑文本框）旁点「选择」，
   挑到的路径写回该字段——`file` 类型是只读的，装不下「也可能是文字」的取值。
 - **F-NOD-06**（2026-09-13）：`test_all_nodes_have_definitions` +
@@ -141,3 +143,8 @@
 - 2026-09-13 **v4 节点体系**：新增 `start`(5) / `branch`(85) / `end`(95)；
   `condition` 改用出口名；`COMMON_PARAMS` 清空（`run_when` 退场）；
   ParamDef 新增 `show_if` / `pick`（F-NOD-04/05/07/08）
+- 2026-09-15 **`delay` 增加「等待至时刻」**：`mode` 选「延时毫秒 / 等待至时刻」，
+  后者接 `at`（`HH:MM` 或 `HH:MM:SS`，已过则等明天的同一时刻），两个字段按
+  `show_if` 互斥显示。墙钟语义**不随速度倍率缩放**；等待按 1s 分段、每段用墙钟
+  重算剩余（`player.wait` 走 monotonic，macOS 睡眠期间不走，一次睡到底会在
+  系统睡醒后多等一整段）。新增 6 个用例
