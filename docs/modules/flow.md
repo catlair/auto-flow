@@ -11,6 +11,7 @@
 - `rpc/controller.py` — `edge.add` / `edge.remove` / `node.setPos` / `workflow.setStart`
 - `tauri/src/flow/ports.ts` — 前端唯一的出口名定义（与后端逐字对齐）
 - `tauri/src/components/FlowCanvas.vue` — 画布（@vue-flow/core）
+- `tauri/src/flow/fitOnce.ts` — 首次适应视野的时机状态机（等 `nodes-initialized` 才 fit）
 - `tauri/tests/flow-ports.test.mjs` — **跨语言常量对齐测试**（直接读 `core/events.py` 比对）
 
 ## 功能清单

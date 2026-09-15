@@ -30,6 +30,7 @@ import { useAppStore } from "@/stores/app";
 import { errMessage } from "@/rpc/client";
 import { PORT_OUT, portLabel, exitPorts, canConnectFrom, canConnectTo } from "@/flow/ports";
 import { nodeSummary } from "@/flow/summary";
+import { createFitOnce } from "@/flow/fitOnce";
 
 const store = useAppStore();
 
@@ -270,11 +271,28 @@ async function clearStart() {
 
 // 首次拿到非空工作流时自动适应一下视野。只在「从空变非空」时做，
 // 否则每次编辑都会把用户刚调整好的视野拉走。
-let fitted = false;
+//
+// 状态机本体在 @/flow/fitOnce（纯模块，可被单测钉住）。这里只负责把两个
+// **必须分开**的时机接上：
+//   maybeFit() —— store 里有节点了（数据到位）
+//   tryFit()   —— Vue Flow 发 nodes-initialized（尺寸量完，这时 fit 才有意义）
+// 早先把它写成「数据一到就 nextTick(fitView)」，节点尺寸还没量，等于没调——
+// 表现是打开已有工作流后只看到左上角一两个节点，其余在视野外。
+const fitOnce = createFitOnce(() => void flow.value?.fitView({ padding: 0.2 }));
+
 function maybeFit() {
-  if (fitted || !flow.value || !store.workflow.nodes.length) return;
-  fitted = true;
-  void nextTick(() => flow.value?.fitView({ padding: 0.2 }));
+  fitOnce.request(store.workflow.nodes.length > 0);
+}
+
+/**
+ * 真正执行 fitView 的时机。**必须等 Vue Flow 量完节点尺寸**才能调。
+ *
+ * 正确信号是 `nodesInitialized`：它在**所有节点都有非零尺寸**时才发；新增节点会
+ * 先把它落回 false、量完再变 true，所以每次拿到新节点都能等到一次。
+ */
+function tryFit() {
+  if (!flow.value) return;
+  fitOnce.commit();
 }
 
 function onFlowInit(instance: VueFlowStore) {
@@ -286,7 +304,7 @@ watch(
   () => store.workflow.nodes.length,
   (n) => {
     if (!n) {
-      fitted = false;
+      fitOnce.reset();
       return;
     }
     maybeFit();
@@ -339,6 +357,7 @@ watch(
         @pane-click="onPaneClick"
         @nodes-change="onNodesChange"
         @edges-change="onEdgesChange"
+        @nodes-initialized="tryFit"
       >
         <Background :gap="16" />
         <Controls position="bottom-right" />
@@ -460,6 +479,10 @@ watch(
 .af-gnode {
   min-width: 148px;
   max-width: 220px;
+  /* 必须是定位元素：Vue Flow 的手柄是 position:absolute + right:0 + translate(50%),
+     锚在**最近的定位祖先**的右边缘。不写的话手柄会锚到 .vue-flow__node 上，
+     而写了之后锚到卡片本身——两种出口（单出口/多出口）才落在同一条竖线上。 */
+  position: relative;
   background: #fff;
   border: 1px solid #dfe3e8;
   border-radius: 8px;
@@ -552,11 +575,14 @@ watch(
   padding-top: 2px;
 }
 .af-exit {
-  position: relative;
   height: 20px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  /* 给手柄让位。**不能**在这里写 position: relative——那会把手柄的锚点从卡片
+     挪到这一行上（手柄会内缩 10px 并**正好压住标签最后一个字**：「情形 1」的
+     数字被圆点盖掉，用户分不清哪条边是情形几）。留出的宽度 = 手柄半径 + 余量。 */
+  padding-right: 8px;
 }
 .af-exit-label {
   color: #64748b;
