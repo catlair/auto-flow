@@ -260,6 +260,43 @@ test("环上的边要真的被标出来（只报两个节点名，节点一多�
   }
 });
 
+test("常驻标环开关：默认关、走 edgesOnCycles、且清高亮不会把它一起清掉", () => {
+  // 这个开关解决 `cycleIds` 覆盖不到的场景：**打开别人的文件 / 手工编辑过的 json**
+  // 时想知道环在哪——那种时候没有任何「刚连上的边」，`cycleIds` 永远是空的。
+  //
+  // 默认**关**：环在 v4 合法，常开会把合法回边也涂红，等于对每份文件都暗示「这有错」。
+  assert.match(canvasSrc, /const showCycles = ref\(false\)/, "开关必须默认关");
+
+  // 常驻集合必须走「活边 + edgesOnCycles」：环检测与画布渲染共用同一套「哪些边算数」，
+  // 否则会出现「画布上看着没环却提示有环」那种没人能想明白的现象。
+  const allBody = canvasSrc.match(/const cycleAllIds = computed\(\(\) => \{[\s\S]{0,420}?\n\}\);/);
+  assert.ok(allBody, "找不到 cycleAllIds");
+  assert.match(allBody[0], /liveEdges\(/, "常驻集合没有过滤活边");
+  assert.match(allBody[0], /edgesOnCycles\(/, "常驻集合没有真的找环");
+  assert.match(allBody[0], /\.map\(edgeId\)/, "常驻集合没有用统一的边 id 格式");
+  // 关着的时候要短路，别白算一遍整张图的强连通分量
+  assert.match(allBody[0], /if \(!showCycles\.value\) return new Set<string>\(\)/);
+
+  // 两个来源取并集：开关开着时又连出一条新环，开关关掉后那条新环仍然可见。
+  assert.match(canvasSrc, /for \(const id of cycleAllIds\.value\) hot\.add\(id\)/,
+    "vEdges 没有把常驻集合并进高亮");
+
+  // ⚠️ 最容易写坏的一条：`clearCycleHighlight()` 是「下一次交互」的清理，
+  // 它**只能**清 `cycleIds`。顺手把常驻集合也清了，开关就白开了——每次点空白
+  // 红标记都消失，用户会以为开关坏了。
+  const clearBody = canvasSrc.match(/function clearCycleHighlight\(\) \{[\s\S]{0,200}?\n\}/);
+  assert.ok(clearBody, "找不到 clearCycleHighlight");
+  assert.match(clearBody[0], /cycleIds\.value = \[\]/, "clearCycleHighlight 没有清 cycleIds");
+  assert.doesNotMatch(clearBody[0], /cycleAllIds|showCycles/,
+    "clearCycleHighlight 把常驻标环也清掉了（开关会看起来是坏的）");
+
+  // 开关开着时按钮要显示条数：点了开关却什么都没变红时，用户得能分清
+  // 「确实没有环」和「开关没生效」。
+  assert.match(canvasSrc, /showCycles\.value \? `标出环（\$\{cycleAllIds\.value\.size\}）` : "标出环"/,
+    "按钮文案没有在开启时给出条数");
+  assert.match(canvasSrc, /@click="showCycles = !showCycles"/, "按钮没有接到开关上");
+});
+
 test("nodes-initialized 事件必须接到 tryFit 上（否则视野永远不适应）", () => {
   assert.match(
     canvasSrc,

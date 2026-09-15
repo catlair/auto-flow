@@ -12,6 +12,12 @@
 // 所以这里返回的是**环上的边本身**（`cycleEdges`），画布把它们标出来——
 // 提示要能落到具体的东西上，否则等于把「找环」这件事原样推回给用户。
 //
+// 模块回答**两个不同的问题**，别混（详见各自注释）：
+// - `cycleEdges(edges, next)`：「**刚连的这一条边**造出了哪个环」——
+//   依赖「连线前的图无环」这个前提，要给出**具体路径**（画布要标那一个环）。
+// - `edgesOnCycles(edges)`：「**整张图**里哪些边在环上」——
+//   打开别人的文件时图里本来就有环、没有「新边」可依，必须真的把环找出来。
+//
 // ⚠️ 判据是「**图上有环**」，不是「一定会执行的死循环」。后者不可判定：
 // 分支节点没被选中的 `case:N` 上的环永远不会走到。所以文案必须是
 // 「出现了环，确认一下」，不能写成「这是死循环」。
@@ -108,4 +114,122 @@ export function cycleEdges(
   const back = pathTo(edges, next.dst, next.src);
   if (!back) return null;
   return [next, ...back];
+}
+
+/**
+ * 图里**所有**处在某个环上的边（顺序与入参一致）。
+ *
+ * 与 `cycleEdges` 是两个问题，别混：
+ * - `cycleEdges` 回答「**刚连的这一条边**造出了哪个环」，前提是「连线前的图无环」，
+ *   所以只要问「`dst` 能否走回 `src`」，而且**要给出具体路径**（画布要标出来）。
+ * - 这个函数回答「**整张图**里哪些边在环上」。**那个前提在这里不成立**——
+ *   打开一份别人给的 / 手工编辑过的文件时，图里本来就有环，没有任何「新边」可依。
+ *   所以必须真的把环找出来。
+ *
+ * 判据：边 `u→v` 在某个环上 ⟺ **`v` 能走回 `u`** ⟺ **`u` 与 `v` 属于同一个强连通
+ * 分量**（自环 `u === v` 单独算——单个节点自成一个分量，但那不是环）。
+ * 证明方向一：同一分量 ⇒ `v ⇝ u`，与 `u→v` 拼起来就是闭合走法，边必在某个环上。
+ * 方向二：边在环上 ⇒ 环上从 `v` 走回 `u` ⇒ 互相可达 ⇒ 同一分量。
+ *
+ * 用**强连通分量**而不是「逐条边跑一次 `pathTo`」：后者是 O(E·(V+E))，图一大就
+ * （20000 节点长链上是 4 亿次）把界面卡住。SCC 是线性的，同样的图一遍扫完。
+ * 两个算法各回答各的问题，不构成「同一段遍历抄两遍」。
+ */
+export function edgesOnCycles(edges: readonly GraphEdge[]): GraphEdge[] {
+  const comp = stronglyConnectedComponents(edges);
+  const out: GraphEdge[] = [];
+  for (const e of edges) {
+    if (!e.dst) continue; // 悬空出口不构成边
+    if (e.src === e.dst) {
+      out.push(e); // 自环
+      continue;
+    }
+    // 两端都在同一个分量里 ⇒ 这条边在一个环上。
+    // （`u === v` 已在上面的自环分支处理掉，所以这里的同分量必然意味着分量 ≥ 2 个节点。）
+    if (comp.get(e.src) === comp.get(e.dst)) out.push(e);
+  }
+  return out;
+}
+
+/**
+ * Tarjan 强连通分量。返回「节点 → 分量编号」（同号即互相可达）。
+ *
+ * **迭代实现**，不是递归：图可以有 20000 个节点，递归会在长链上爆栈
+ * （和 `pathTo` 同一个理由）。所以显式维护一个帧栈，每帧记住「当前节点」与
+ * 「下一条要看的出边下标」——这正是递归调用栈里保存的东西。
+ *
+ * 只收「出现在某条边上」的节点：孤立的节点自成一个分量，对判「边在不在环上」
+ * 没有任何影响，收进来只是白算。
+ */
+function stronglyConnectedComponents(
+  edges: readonly GraphEdge[]
+): Map<string, number> {
+  const succ = new Map<string, string[]>();
+  const nodes = new Set<string>();
+  for (const e of edges) {
+    if (!e.dst) continue;
+    nodes.add(e.src);
+    nodes.add(e.dst);
+    const list = succ.get(e.src);
+    if (list) list.push(e.dst);
+    else succ.set(e.src, [e.dst]);
+  }
+
+  const index = new Map<string, number>(); // 首次访问序号，也是「未访问」的判据
+  const low = new Map<string, number>(); // 该节点能回溯到的最小序号
+  const comp = new Map<string, number>();
+  const stack: string[] = []; // 当前分量候选（Tarjan 的 SCC 栈）
+  const onStack = new Set<string>();
+  let counter = 0;
+  let compId = 0;
+
+  for (const root of nodes) {
+    if (index.has(root)) continue;
+    index.set(root, counter);
+    low.set(root, counter);
+    counter++;
+    stack.push(root);
+    onStack.add(root);
+
+    const frames: { node: string; i: number }[] = [{ node: root, i: 0 }];
+    while (frames.length) {
+      const frame = frames[frames.length - 1];
+      const outs = succ.get(frame.node) ?? [];
+      if (frame.i < outs.length) {
+        const w = outs[frame.i++];
+        if (!index.has(w)) {
+          index.set(w, counter);
+          low.set(w, counter);
+          counter++;
+          stack.push(w);
+          onStack.add(w);
+          frames.push({ node: w, i: 0 }); // 「递归」进 w
+        } else if (onStack.has(w)) {
+          // 回边/横叉边指向仍在栈上的节点：用它的序号（不是 low！）收紧 low。
+          const cur = low.get(frame.node)!;
+          const seen = index.get(w)!;
+          if (seen < cur) low.set(frame.node, seen);
+        }
+      } else {
+        frames.pop(); // w 的子树看完了，「返回」到父节点
+        if (frames.length) {
+          const parent = frames[frames.length - 1].node;
+          const p = low.get(parent)!;
+          const c = low.get(frame.node)!;
+          if (c < p) low.set(parent, c);
+        }
+        // low === index ⇒ 自己是所在分量的根：把栈上到它为止的节点一起出栈
+        if (low.get(frame.node) === index.get(frame.node)) {
+          for (;;) {
+            const w = stack.pop()!;
+            onStack.delete(w);
+            comp.set(w, compId);
+            if (w === frame.node) break;
+          }
+          compId++;
+        }
+      }
+    }
+  }
+  return comp;
 }

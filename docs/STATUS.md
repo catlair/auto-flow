@@ -14,7 +14,7 @@
 | 定时运行 | [schedule.md](modules/schedule.md) | ✅ | 测试 | 后端到点真跑，非仅通知 |
 | macOS 权限 | [permissions.md](modules/permissions.md) | ✅ | 真机 | TCC 按二进制授权；F18 回环自检 |
 | RPC 协议 | [rpc-protocol.md](modules/rpc-protocol.md) | ✅ | 176 测试 | 写锁防交错；广播 events 摘要化；后端 WARNING 转发为 `log.warning`；节点改动按 uid 寻址 |
-| 前端界面 | [frontend.md](modules/frontend.md) | ✅ | 真机目视 + 113 前端用例 | v4 画布（@vue-flow/core）；响应驱动刷新；诊断面板显示后端告警；`fitOnce` 管视野适应时机；连线落点左/上/下三边；连线成环提示 + 标红 |
+| 前端界面 | [frontend.md](modules/frontend.md) | ✅ | 真机目视 + 127 前端用例 | v4 画布（@vue-flow/core）；响应驱动刷新；诊断面板显示后端告警；`fitOnce` 管视野适应时机；连线落点左/上/下三边；连线成环提示 + 标红；「标出环」常驻开关（默认关） |
 | 打包/签名/部署 | [packaging.md](modules/packaging.md) | ✅ | 42 项产物/RPC 断言 | ⚠️ 修复后必须重打包部署；第 5 步 `check_installed.py` 收口 |
 | 旧 PySide6 UI | — | ⛔ | — | 2026-09-12 删除（ui/、main.py、旧脚本、PySide6 依赖） |
 | v3 有序列表模型 | — | ⛔ | — | 2026-09-13 被流程图取代（旧文件仍可打开并自动迁移，见 flow.md） |
@@ -22,8 +22,8 @@
 ## 近期计划（无主次排序）
 
 - 📋 条件分支扩展：比较类条件（变量 / 上一节点结果）而非仅「存在性检测」
-- 📋 环提示增强：**常驻标出所有环**的开关（默认关）——现在只在刚连上之后标红，
-  打开一份别人的文件时看不到任何标记，见 flow.md 已知问题
+- 📋 环提示增强：把「标出环」开关的**状态持久化**（现在重启应用回到默认关），
+  以及在工具栏之外再给个入口——它现在不主动暴露，用户不知道有这个按钮就等于没有
 - 📋 画布编辑增强：框选、复制粘贴、对齐吸附、节点分组
 - 📋 工作流变量系统：跨节点传值（计划书 §workflow_vars 曾有占位）
 - 📋 Windows 支持：core 逻辑平台无关，输入层需按平台抽象（pynput 可跨）

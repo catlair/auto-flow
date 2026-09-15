@@ -33,6 +33,7 @@ import { PORT_OUT, portLabel, exitPorts, canConnectFrom, canConnectTo, liveEdges
          normalizeTargetSide } from "@/flow/ports";
 import { nodeSummary } from "@/flow/summary";
 import { createFitOnce } from "@/flow/fitOnce";
+import { edgesOnCycles } from "@/flow/cycle";
 
 const store = useAppStore();
 
@@ -99,6 +100,46 @@ function clearCycleHighlight() {
 }
 
 /**
+ * 「常驻标出所有环」开关。**默认关**，且是**纯画布视图态**（不进 store、不落盘）：
+ * 它是看图的辅助，不是工作流的属性，也不该改变保存下来的文件。
+ *
+ * 为什么默认关而不是常开：环在 v4 是合法的，一份正常工作流里也可能有回边
+ * （「等到条件成立再往下走」只能这么表达）。常开会把合法的回边也涂红，
+ * 等于把「这里可能有错」的暗示强加给每一份文件。默认关 = 「我要看的时候才看」。
+ *
+ * 它解决的是 `cycleIds` 覆盖不到的场景：**打开一份别人的文件 / 手工编辑过的 json
+ * 时想知道环在哪**。那种时候没有任何「刚连上的边」，`cycleIds` 永远是空的。
+ */
+const showCycles = ref(false);
+
+/**
+ * 常驻模式下**所有**环上的边（id 集合）。
+ *
+ * 与 `cycleIds` 分开、不合并成一个状态，因为两者的**生命周期完全不同**：
+ * - `cycleIds`：「刚才那一下」的反馈，**下一次交互就清**；
+ * - 这个：跟着开关走，只要开着就一直在，且**随工作流变化实时重算**
+ *   （所以它是 `computed` 而不是一次性快照——用户开着手动删掉一条边，
+ *   环没了，红色也要跟着没）。
+ *
+ * ⚠️ `clearCycleHighlight()` **绝不能**顺手把它也清掉，否则开关就白开了
+ * （每次点空白红标记都消失，用户会以为开关坏了）。
+ */
+const cycleAllIds = computed(() => {
+  if (!showCycles.value) return new Set<string>();
+  const edges = liveEdges(store.workflow.nodes, store.workflow.edges);
+  return new Set(edgesOnCycles(edges).map(edgeId));
+});
+
+/**
+ * 开关按钮的文案。开着的时候**带上条数**：用户点了开关却什么都没变红时，
+ * 得能分清是「确实没有环」还是「开关没生效」——「标出环（0）」和「标出环（3）」
+ * 是完全不同的两个信息。
+ */
+const cycleToggleLabel = computed(() =>
+  showCycles.value ? `标出环（${cycleAllIds.value.size}）` : "标出环"
+);
+
+/**
  * 边在画布上的 id。
  *
  * `vEdges` 与「把环上的边标出来」都要用这个格式——**两处各写一份迟早会漂**，
@@ -125,11 +166,16 @@ function edgeId(e: { src: string; port: string }): string {
  * 过滤逻辑抽到 `liveEdges` 是因为**环检测要用同一套判断**：各写一份迟早会漂，
  * 而漂了的表现是「画布上看着没环、却提示有环」——这种没人能想明白的现象。
  *
- * 环上的边（`cycleIds`）换成红色加粗 + 虚线流动：刚连出环时只报两个节点名，
- * 节点一多用户照样找不到那条回路——**提示要落到具体的东西上**。
+ * 环上的边（`cycleIds` 或常驻的 `cycleAllIds`）换成红色加粗 + 虚线流动：刚连出环时
+ * 只报两个节点名，节点一多用户照样找不到那条回路——**提示要落到具体的东西上**。
+ *
+ * 两个来源取**并集**而不是互相覆盖：常驻开关开着时又连出一条新环，那条新环的边
+ * 本来就在常驻集合里（`edgesOnCycles` 算的是整张图），并集只是让「刚连的那一下」
+ * 在开关关掉后仍然可见——这正是 `cycleIds` 存在的意义。
  */
 const vEdges = computed(() => {
   const hot = new Set(cycleIds.value);
+  for (const id of cycleAllIds.value) hot.add(id);
   const out = [];
   for (const e of liveEdges(store.workflow.nodes, store.workflow.edges)) {
     const id = edgeId(e);
@@ -436,6 +482,15 @@ watch(
         @click="clearStart"
         >默认起点</t-button
       >
+      <!-- 常驻标环开关。用「描边 + 开启时变主色」表示按下态，与旁边两个按钮同款。 -->
+      <t-button
+        size="small"
+        variant="outline"
+        :theme="showCycles ? 'primary' : 'default'"
+        title="把流程里所有环上的连线标红（默认关；只影响显示，不改工作流）"
+        @click="showCycles = !showCycles"
+        >{{ cycleToggleLabel }}</t-button
+      >
     </div>
 
     <div class="af-canvas" :class="{ 'af-connecting': connecting }">
@@ -559,6 +614,9 @@ watch(
 .af-flow-bar {
   display: flex;
   align-items: center;
+  /* 画布面板很窄（约 340px），工具栏已经有「添加节点 + 设为起点 + 默认起点 +
+     标出环」四个控件，不换行会横向溢出把最后一个挤掉。 */
+  flex-wrap: wrap;
   gap: 6px;
   flex: none;
 }

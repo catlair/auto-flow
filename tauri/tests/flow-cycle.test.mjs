@@ -33,7 +33,7 @@ function loadModule(relPath) {
 // 所以这里不需要 shim。哪天它改成值导入，本文件会立刻因 require 解析失败而报错
 // ——正好是想要的那种「响亮失败」，而不是静默换一份实现。
 const ports = loadModule("../src/flow/ports.ts");
-const { pathTo, cycleEdges } = loadModule("../src/flow/cycle.ts");
+const { pathTo, cycleEdges, edgesOnCycles } = loadModule("../src/flow/cycle.ts");
 const { liveEdges, PORT_OUT } = ports;
 
 /** 造一条边（默认出口 `out`，省得每个用例都写一遍 port）。 */
@@ -217,4 +217,89 @@ test("环检测必须用活边：拿调小 case_count 后残留的边判环会�
 
   // 过滤后：那条边不活，图里其实没有环。
   assert.equal(cycleEdges(liveEdges(nodes, stale), e("d", "b")), null);
+});
+
+// ---------- edgesOnCycles：整张图里哪些边在环上 ----------
+//
+// 这组用例守的是一个**与 cycleEdges 完全不同**的问题。`cycleEdges` 能用
+// 「连线前的图无环」这个前提偷懒（新环必含新边），但这个前提在
+// 「打开别人的文件」时**不成立**——图里本来就有环，没有「新边」可依。
+// 所以最容易写错的地方是：**把「和环沾边」当成「在环上」**。
+// 下面几条专治这个：指向环的、从环里出去的、挂在环后面的，都**不算**。
+
+test("edgesOnCycles：无环的图返回空", () => {
+  assert.deepEqual(edgesOnCycles([e("a", "b"), e("b", "c"), e("a", "c")]), []);
+});
+
+test("edgesOnCycles：两节点互连，两条边都在环上", () => {
+  const edges = [e("a", "b"), e("b", "a")];
+  assert.deepEqual(edgesOnCycles(edges), edges);
+});
+
+test("edgesOnCycles：自环算环，且只算它自己", () => {
+  const self = e("a", "a");
+  assert.deepEqual(edgesOnCycles([self, e("b", "c")]), [self]);
+});
+
+test("edgesOnCycles：**指向**环的外来边不算（它只是入口，不是环的一部分）", () => {
+  const edges = [e("a", "b"), e("b", "a"), e("c", "a")];
+  assert.deepEqual(edgesOnCycles(edges), [edges[0], edges[1]]);
+});
+
+test("edgesOnCycles：**从**环里出去的边不算", () => {
+  const edges = [e("a", "b"), e("b", "a"), e("a", "c")];
+  assert.deepEqual(edgesOnCycles(edges), [edges[0], edges[1]]);
+});
+
+test("edgesOnCycles：挂在环后面的尾巴不算", () => {
+  // a→b→c→b：只有 b→c、c→b 在环上，a→b 只是入口。
+  const edges = [e("a", "b"), e("b", "c"), e("c", "b")];
+  assert.deepEqual(edgesOnCycles(edges), [edges[1], edges[2]]);
+});
+
+test("edgesOnCycles：两个不相交的环都算", () => {
+  const edges = [e("a", "b"), e("b", "a"), e("c", "d"), e("d", "c")];
+  assert.deepEqual(edgesOnCycles(edges), edges);
+});
+
+test("edgesOnCycles：共享节点的两个环都算（同一强连通分量里的边全在环上）", () => {
+  const edges = [e("a", "b"), e("b", "a"), e("a", "c"), e("c", "a")];
+  assert.deepEqual(edgesOnCycles(edges), edges);
+});
+
+test("edgesOnCycles：互相绕回来的三个节点，四条边全在环上", () => {
+  // b⇄c 是环，加上 b→a、a→b 之后 a 也进了同一个强连通分量
+  // ——这时 a→b 与 b→a 确实各自都在一个环上（a→b→a）。
+  const edges = [e("a", "b"), e("b", "c"), e("c", "b"), e("b", "a")];
+  assert.deepEqual(edgesOnCycles(edges), edges);
+});
+
+test("edgesOnCycles：空 dst 的边直接跳过（悬空出口不构成边）", () => {
+  assert.deepEqual(edgesOnCycles([e("a", ""), e("b", "a")]), []);
+});
+
+test("edgesOnCycles：结果按入参顺序、且是同一批对象（画布要直接 map(edgeId)）", () => {
+  const loop = [e("b", "a"), e("a", "b")];
+  const edges = [e("x", "y"), ...loop];
+  const got = edgesOnCycles(edges);
+  assert.equal(got.length, 2);
+  assert.equal(got[0], loop[0], "必须是入参里的同一个对象，不能重建");
+  assert.equal(got[1], loop[1]);
+});
+
+test("edgesOnCycles：20000 节点长链（无环）不爆栈也不慢", () => {
+  // 迭代实现的意义在这里：递归求强连通分量在长链上会直接爆栈。
+  // 顺带钉住复杂度——逐条边跑 pathTo 是 O(E²)，这个规模下要几亿次操作。
+  const N = 20000;
+  const chain = [];
+  for (let i = 0; i < N - 1; i++) chain.push(e("n" + i, "n" + (i + 1)));
+  assert.deepEqual(edgesOnCycles(chain), []);
+});
+
+test("edgesOnCycles：20000 节点长链加一条回边，全部边都在环上", () => {
+  const N = 20000;
+  const edges = [];
+  for (let i = 0; i < N - 1; i++) edges.push(e("n" + i, "n" + (i + 1)));
+  edges.push(e("n" + (N - 1), "n0")); // 从末尾连回头 → 整条链都在环上
+  assert.equal(edgesOnCycles(edges).length, N);
 });
