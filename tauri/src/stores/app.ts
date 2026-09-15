@@ -7,7 +7,7 @@ import type {
   Permissions,
   Workflow,
 } from "@/rpc/types";
-import { PORT_OUT } from "@/flow/ports";
+import { PORT_OUT, DEFAULT_TARGET_SIDE } from "@/flow/ports";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -528,10 +528,18 @@ export const useAppStore = defineStore("app", {
     /**
      * 连一条边。同一个 (源节点, 出口) 后端只保留一条——**后连的替换先连的**。
      * 返回是否发生了替换，调用方据此提示用户（否则旧连线无声消失）。
+     *
+     * `dstSide` 是画布上的落点侧（用户在哪一侧松手），**只影响线画在目标节点的
+     * 哪条边上，不参与执行**；后端会把脏值收敛到默认侧。
      */
-    async addEdge(src: string, dst: string, port: string = PORT_OUT): Promise<boolean> {
+    async addEdge(
+      src: string,
+      dst: string,
+      port: string = PORT_OUT,
+      dstSide: string = DEFAULT_TARGET_SIDE
+    ): Promise<boolean> {
       const replaced = this.workflow.edges.some((e) => e.src === src && e.port === port);
-      const cur = await rpc.request("edge.add", { src, dst, port });
+      const cur = await rpc.request("edge.add", { src, dst, port, dst_side: dstSide });
       this.applyCurrent(cur);
       return replaced;
     },

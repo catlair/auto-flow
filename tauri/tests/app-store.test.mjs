@@ -476,6 +476,19 @@ test("addEdge 不传出口时默认 out，与后端 edge_add 的默认值一致"
     src: "a",
     dst: "a",
     port: "out",
+    dst_side: "left",
+  });
+});
+
+test("addEdge 把落点侧原样送给后端（画布据此决定线画在目标节点的哪一侧）", async () => {
+  const nodes = [{ type: "delay", params: {}, enabled: true, uid: "a" }];
+  const { store, calls, ports } = setup(baseHandler(nodes, () => res(nodes)));
+  await store.addEdge("a", "a", ports.PORT_OUT, ports.TARGET_SIDE_BOTTOM);
+  assert.deepEqual(calls.find((c) => c.method === "edge.add").params, {
+    src: "a",
+    dst: "a",
+    port: "out",
+    dst_side: "bottom",
   });
 });
 

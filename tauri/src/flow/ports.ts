@@ -15,6 +15,45 @@ export const PORT_FALSE = "false";
 /** 分支节点：所有 case 都不成立。 */
 export const PORT_ELSE = "else";
 
+// ---------------------------------------------------------------------------
+// 目标落点侧（边从目标节点的哪一侧进入）
+//
+// 与后端 `core/events.py` 的 TARGET_SIDE_* 一一对应，靠 flow-ports.test.mjs 比对。
+// **纯画布展示语义，不参与执行**：执行器只认 (src, port) → dst。
+//
+// 为什么要持久化：画布多边都能落点，用户在哪儿松手线就从哪侧画进去。不存的话
+// 落库后只能画到固定一侧——**拖拽预览**用你松手的那侧、**落库后**却画到另一侧，
+// 用户会看到连线「跳」一下。
+//
+// 为什么**没有右侧**：右边是输出侧（出口手柄都在卡片右边缘）。单出口节点的出口
+// 手柄正好在右边缘中线，与右目标手柄**同点重合**——Vue Flow 按「离指针最近的手柄」
+// 判定落点，重合时行为不稳定，表现是「有时连得上有时连不上」。故入口只开放左/上/下。
+// ---------------------------------------------------------------------------
+
+export const TARGET_SIDE_LEFT = "left";
+export const TARGET_SIDE_TOP = "top";
+export const TARGET_SIDE_BOTTOM = "bottom";
+/** 顺序即画布上的展示顺序。 */
+export const TARGET_SIDES: string[] = [
+  TARGET_SIDE_LEFT,
+  TARGET_SIDE_TOP,
+  TARGET_SIDE_BOTTOM,
+];
+/** 默认侧（也是旧文件没这个字段时的取值）：左侧，与历史行为一致。 */
+export const DEFAULT_TARGET_SIDE = TARGET_SIDE_LEFT;
+
+/**
+ * 把任意输入收敛成合法的落点侧；空值/未知值回落到默认侧。
+ *
+ * 必须**收敛**而不是原样用：脏值会让 `targetHandle` 指向一个不存在的手柄，
+ * Vue Flow 找不到锚点就画不出这条边（只在控制台刷告警）——用户看到的是
+ * 「连线莫名消失」，比画错一侧严重得多。
+ */
+export function normalizeTargetSide(v: unknown): string {
+  const s = String(v ?? "").trim();
+  return TARGET_SIDES.includes(s) ? s : DEFAULT_TARGET_SIDE;
+}
+
 /** 分支节点第 i 个 case 的出口名（i 从 1 开始，与用户看到的序号一致）。 */
 export function casePort(i: number): string {
   return `case:${i}`;

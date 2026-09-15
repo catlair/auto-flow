@@ -167,3 +167,9 @@
 - 2026-09-15 断言补到 38 项（18 产物级 + 20 RPC 级）：节点改动改按 uid 寻址，
   新增「故意送错下标 + 正确 uid」的端到端断言（老 sidecar 上会照下标删错节点，
   已在真安装版上复现）
+- 2026-09-15 断言补到 42 项（20 产物级 + 22 RPC 级）：边的落点侧 `dst_side`。
+  产物级判 `core.events` 里 `left/top/bottom` 在、`right` **不在**、且
+  `normalize_target_side` 在；RPC 级实测 `edge.add` 真把 `dst_side` 存下来、
+  脏值（含 `right`）收敛到 `left`。这一组正是「不生效也不报错」——旧 sidecar
+  会**静默忽略** `dst_side`，画布照默认侧画，从外面看和「用户自己连到左边」一样。
+  同轮踩到并记录了「目视验收用了旧 sidecar 导致假失败」，见 `frontend.md` 验收记录

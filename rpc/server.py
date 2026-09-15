@@ -333,8 +333,11 @@ _HANDLERS = {
     "node.params.set": _ctl(lambda p: _CTRL.node_params_set(p.get("index", -1), p.get("key"),
                                                             p.get("value"), p.get("uid", ""))),
     "node.setPos": _ctl(lambda p: _CTRL.node_set_pos(p.get("uid", ""), p.get("x", 0), p.get("y", 0))),
+    # dst_side 缺省传空串，由 core.events.normalize_target_side 收敛到默认侧——
+    # 默认值只在一个地方定义，别在这里再抄一份字面量。
     "edge.add": _ctl(lambda p: _CTRL.edge_add(p.get("src", ""), p.get("dst", ""),
-                                              p.get("port", PORT_OUT))),
+                                              p.get("port", PORT_OUT),
+                                              p.get("dst_side", ""))),
     "edge.remove": _ctl(lambda p: _CTRL.edge_remove(p.get("src", ""), p.get("port", PORT_OUT))),
     "workflow.setStart": _ctl(lambda p: _CTRL.workflow_set_start(p.get("uid", ""))),
     "nodes.definitions": _ctl(lambda p: _CTRL.nodes_definitions()),

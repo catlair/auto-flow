@@ -63,6 +63,11 @@ export interface WorkflowEdge {
   port: string;
   /** 目标节点 uid；空串 = 该出口悬空（与「这条边不存在」在执行上等价） */
   dst: string;
+  /**
+   * 画布落点侧（`left`/`top`/`bottom`，见 `@/flow/ports`）——线从目标节点的
+   * 哪一侧画进去。**纯展示字段，不参与执行**；旧文件没有它，读出来是默认的左侧。
+   */
+  dst_side?: string;
 }
 
 export interface Workflow {

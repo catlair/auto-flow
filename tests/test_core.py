@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 from core.events import (MacroEvent, Node, Workflow, Edge,
-                         PORT_OUT, PORT_TRUE, PORT_FALSE, PORT_ELSE, case_port)
+                         PORT_OUT, PORT_TRUE, PORT_FALSE, PORT_ELSE, case_port,
+                         TARGET_SIDES, DEFAULT_TARGET_SIDE, normalize_target_side)
 from core.executor import Executor, RunContext
 from core.player import PlayOptions, Player
 from core import keymap
@@ -438,6 +439,48 @@ def test_migrated_flag_is_not_persisted(tmp_path):
     """迁移标记只在本次会话里提示用，不该被写进文件（否则每次打开都提示一次）。"""
     wf = Workflow(nodes=[Node(type="delay", params={})], migrated_from_list=True)
     assert "migrated_from_list" not in wf.to_dict()
+
+
+def test_edge_dst_side_round_trips_and_defaults(tmp_path):
+    """边的落点侧（画布上从目标节点哪一侧画进去）必须能存能读。
+
+    它是**纯展示字段**、不参与执行，所以最容易在改数据结构时被漏掉——而漏掉的
+    表现不是报错，是「打开文件后连线全跑到左边去了」，没人会当成 bug 去查。
+    """
+    p = str(tmp_path / "side.json")
+    wf = Workflow(nodes=[Node(type="delay", uid="a"), Node(type="delay", uid="b")],
+                  edges=[Edge(src="a", port=PORT_OUT, dst="b", dst_side="bottom")])
+    wf.save(p)
+    back = Workflow.load(p)
+    assert [e.dst_side for e in back.edges] == ["bottom"]
+
+    # 旧文件没有这个字段 → 读到默认侧，与「边一律从左边进」的历史行为一致
+    old = str(tmp_path / "old.json")
+    json.dump({"version": 4, "name": "old", "nodes": [
+        {"type": "delay", "params": {}, "uid": "a"},
+        {"type": "delay", "params": {}, "uid": "b"},
+    ], "edges": [{"src": "a", "port": PORT_OUT, "dst": "b"}]}, open(old, "w"))
+    assert [e.dst_side for e in Workflow.load(old).edges] == [DEFAULT_TARGET_SIDE]
+
+
+def test_normalize_target_side_converges_dirty_values():
+    """脏值必须收敛到默认侧。
+
+    存了脏值前端就找不到对应手柄，Vue Flow 直接画不出这条边（只在控制台刷告警），
+    用户看到的是「连线莫名消失」——比画错一侧严重得多。
+
+    「right」是**故意不在词表里**的：右边是输出侧（出口手柄都在卡片右边缘），
+    单出口节点的出口手柄正好在右边缘中线，与右目标手柄同点重合——Vue Flow 按
+    「离指针最近的手柄」判定落点，两点重合时行为不稳定。这条断言是防止有人
+    为了「四边对称」把它加回来。
+    """
+    assert "right" not in TARGET_SIDES, "右侧会与出口手柄同点重合，不能加进落点词表"
+    assert TARGET_SIDES[0] == DEFAULT_TARGET_SIDE, "第一个即默认侧，前端按这个顺序渲染"
+    for good in TARGET_SIDES:
+        assert normalize_target_side(good) == good
+    assert normalize_target_side(" left ") == "left", "前后空白应被吃掉"
+    for dirty in ["right", "middle", "LEFT", "", None, 123, "out", True]:
+        assert normalize_target_side(dirty) == DEFAULT_TARGET_SIDE, dirty
 
 
 def test_executor_stop_flag_stops_loop():

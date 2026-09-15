@@ -143,6 +143,19 @@ def _artifact_checks(recorder, inputsource, controller, server, vision,
     out.append(("core.events 有 _linear_positions（旧文件迁移会摆开坐标）",
                 events is not None
                 and "_linear_positions" in _co_names_recursive(events)))
+    # 边的落点侧（2026-09-15）：`dst_side` 是**纯展示字段**，旧 sidecar 不认识它，
+    # 读文件时会**静默丢掉**——表现是「打开文件后连线全跑到左边」，不报任何错。
+    # 所以既要判三个侧名在，也要判 `right` **不在**（右边是输出侧，会与出口手柄
+    # 同点重合，Vue Flow 判定落点不稳定）。`core/events.py` 里没有别的 "right" 字面量。
+    out.append(("core.events 定义了落点侧常量 left/top/bottom，且没有 right",
+                events is not None
+                and {"left", "top", "bottom"} <= ev_consts
+                and "right" not in ev_consts))
+    # 收敛函数是「脏值不炸」的唯一保证：少了它，前端 targetHandle 会指向不存在的
+    # 手柄，Vue Flow 直接画不出那条边（只在控制台刷告警）——用户看到「连线莫名消失」。
+    out.append(("core.events 有 normalize_target_side（落点侧脏值收敛）",
+                events is not None
+                and "normalize_target_side" in _co_names_recursive(events)))
     # 循环兜底：缺了它，连成环的图会让界面永远停在「运行中」，只能强杀进程。
     # 查 Executor 类体自身的常量表，而不是整个模块（模块里别处也可能有 10000）。
     ex_body = _sub_code(executor, "Executor") if executor is not None else None
@@ -408,6 +421,24 @@ def _live_checks(sidecar_path: str) -> list:
             out.append((f"node.setPos 对不存在的 uid 报错（返回 "
                         f"{(ghost.get('error') or {}).get('code')}）",
                         (ghost.get("error") or {}).get("code") == -32602))
+            # 边的落点侧必须真能存下来（2026-09-15）。旧 sidecar 会**静默忽略**
+            # 这个参数并回一个不含 dst_side 的边——画布于是画在默认侧，
+            # 从外面看和「用户自己连到左边」一模一样，不报任何错。
+            se = s.call("edge.add", {"src": "a", "dst": "b", "port": "out",
+                                     "dst_side": "bottom"})
+            se_edges = ((se.get("result") or {}).get("workflow") or {}).get("edges") or []
+            got_side = se_edges[0].get("dst_side") if se_edges else None
+            out.append((f"edge.add 存下 dst_side（得到 {got_side!r}）",
+                        se.get("error") is None and got_side == "bottom"))
+            # 脏值必须**收敛**到默认侧而不是原样存：存了前端就找不到对应手柄，
+            # 那条边直接画不出来（比画错一侧严重得多）。"right" 也是脏值——
+            # 右边是输出侧，会与出口手柄同点重合，故不在词表里。
+            sd = s.call("edge.add", {"src": "a", "dst": "b", "port": "out",
+                                     "dst_side": "right"})
+            sd_edges = ((sd.get("result") or {}).get("workflow") or {}).get("edges") or []
+            dirty_side = sd_edges[0].get("dst_side") if sd_edges else None
+            out.append((f"edge.add 把脏落点侧收敛到 left（得到 {dirty_side!r}）",
+                        sd.get("error") is None and dirty_side == "left"))
             # 自环必须被拒（-32602）；接受了会让执行器原地打转
             loop = s.call("edge.add", {"src": "a", "dst": "a", "port": "out"})
             out.append((f"edge.add 拒绝自环（返回 {(loop.get('error') or {}).get('code')}）",

@@ -15,7 +15,8 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
-from core.events import MacroEvent, Node, Workflow, Edge, PORT_OUT
+from core.events import (MacroEvent, Node, Workflow, Edge, PORT_OUT,
+                         DEFAULT_TARGET_SIDE, normalize_target_side)
 from core import executor as _executor_mod  # 仅类型/构造；真正运行在 P1-2
 
 # 节点菜单顺序（§9.4）**不再在这里维护**：唯一真源是各节点的 order
@@ -310,13 +311,18 @@ class AppController:
         return self.workflow_current()
 
     # ---- 画布：边 ----
-    def edge_add(self, src: str, dst: str, port: str = PORT_OUT) -> dict:
+    def edge_add(self, src: str, dst: str, port: str = PORT_OUT,
+                 dst_side: str = DEFAULT_TARGET_SIDE) -> dict:
         """连一条边。同一个 (源节点, 出口) 只保留一条——**后连的替换先连的**。
 
         不允许一个出口扇出多条：那要引入并行执行，而并行和「顺序执行 + 汇合」
         是两套模型，混在一起没人能预测行为。要并行请拆成两条路径再用汇合节点收回。
+
+        `dst_side` 只影响画布从哪一侧画这条线（用户在哪一侧松手），**不参与执行**；
+        脏值收敛到默认侧，否则前端找不到手柄、这条边根本画不出来。
         """
         src, dst, port = str(src or ""), str(dst or ""), str(port or PORT_OUT)
+        side = normalize_target_side(dst_side)
         if not src or not dst:
             raise ControllerError(-32602, "src / dst 必填")
         if src == dst:
@@ -326,7 +332,7 @@ class AppController:
             self._node_by_uid(dst)
             self.workflow.edges = [e for e in self.workflow.edges
                                    if not (e.src == src and e.port == port)]
-            self.workflow.edges.append(Edge(src=src, port=port, dst=dst))
+            self.workflow.edges.append(Edge(src=src, port=port, dst=dst, dst_side=side))
         self._broadcast_workflow()
         return self.workflow_current()
 

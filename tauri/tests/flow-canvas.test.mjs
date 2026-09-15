@@ -166,18 +166,31 @@ function ruleBody(src, selector) {
   return m[1].replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-test("出口行不能是定位元素，否则手柄锚到这一行、圆点正好压住标签最后一个字", () => {
+test("出口行必须是定位元素，否则每个出口的手柄都塌到卡片中线上", () => {
   const body = ruleBody(canvasSrc, ".af-exit");
-  // Vue Flow 的手柄是 position:absolute + right:0 + translate(50%,-50%)，锚在
-  // **最近的定位祖先**的右边缘。.af-exit 一旦 position:relative，锚点就从卡片
-  // 挪到这一行（内缩约 10px），圆点正好盖住「情形 1」的数字 —— 用户分不清
-  // 哪条边是情形几。
-  assert.ok(
-    !/position\s*:\s*(relative|absolute|fixed|sticky)/.test(body),
-    ".af-exit 又变成定位元素了，出口标签会被手柄圆点压住"
+  // Vue Flow 的 .vue-flow__handle-right 是 `top:50%; right:0`，而 `top:50%` 相对
+  // **最近的定位祖先**解析。`.af-exit` 不是定位元素时锚点会一路落到 `.af-gnode`
+  // 上，于是**每个出口的手柄都跑到卡片的中线上、几个完全重合**——表现是四个出口
+  // 只有一个圆点，而且 getClosestHandle 永远只命中第一个，
+  // **根本连不出「情形 2/3」**（2026-09-15 实测踩到，且当时被误判成「已修好」）。
+  assert.match(
+    body,
+    /position\s*:\s*relative/,
+    ".af-exit 不是定位元素，出口手柄会全部塌到卡片中线上"
   );
-  // 取而代之：留出宽度给手柄
+  // 同时要给手柄让位，别压住标签最后一个字：手柄中心落在行右边缘上，半径约 4.5px。
   assert.match(body, /padding-right\s*:\s*\d/, ".af-exit 没有为手柄留出右侧间距");
+});
+
+test("出口行要延伸到卡片内沿，多出口手柄才和单出口的在同一竖线上", () => {
+  const body = ruleBody(canvasSrc, ".af-exits");
+  // 卡片左右内边距是 10px。不加负外边距的话，出口行的右边缘会内缩 10px，
+  // 多出口的手柄就比单出口的靠里 10px——同一种「出口」画在两处。
+  assert.match(
+    body,
+    /margin\s*:\s*[^;]*-10px/,
+    ".af-exits 没有用负外边距抵消卡片内边距，多出口手柄会比单出口的缩进 10px"
+  );
 });
 
 test("节点卡片必须是定位元素，手柄才锚在卡片右边缘", () => {
@@ -189,6 +202,22 @@ test("节点卡片必须是定位元素，手柄才锚在卡片右边缘", () =>
   );
 });
 
+test("边投影用持久化的落点侧，并经过收敛", () => {
+  // 落点侧存了却不用 = 白存（用户拖到上面松手，打开文件后又全跑到左边）。
+  // 收敛也是必须的：脏值会让 targetHandle 指向不存在的手柄，边直接画不出来。
+  assert.match(
+    canvasSrc,
+    /targetHandle:\s*normalizeTargetSide\(e\.dst_side\)/,
+    "边投影没有用持久化的 dst_side"
+  );
+  // 手柄必须按 TARGET_SIDES 渲染：否则存了某一侧却没有对应手柄，那条边画不出来
+  assert.match(
+    canvasSrc,
+    /v-for="side in TARGET_SIDES"/,
+    "目标手柄没有按 TARGET_SIDES 渲染"
+  );
+});
+
 test("nodes-initialized 事件必须接到 tryFit 上（否则视野永远不适应）", () => {
   assert.match(
     canvasSrc,
@@ -196,4 +225,38 @@ test("nodes-initialized 事件必须接到 tryFit 上（否则视野永远不适
     "没有监听 nodes-initialized，fitView 永远不会在尺寸量完之后执行"
   );
   assert.match(canvasSrc, /createFitOnce\(/, "画布没用 fitOnce 状态机");
+});
+
+test("拖连线时上/下两个落点手柄必须提亮，否则用户以为只能连左边", () => {
+  // 上/下两个手柄平时 opacity: .3。**拖拽期间正是用户找落点的时候**，
+  // 这时还淡显就等于「有落点却看不见」——功能加了跟没加一样。
+  assert.match(canvasSrc, /function onConnectStart\(/, "没有 onConnectStart");
+  assert.match(canvasSrc, /function onConnectEnd\(/, "没有 onConnectEnd");
+  assert.match(
+    canvasSrc,
+    /@connect-start="onConnectStart"/,
+    "没监听 connect-start：拖拽时落点手柄不会提亮"
+  );
+  assert.match(
+    canvasSrc,
+    /@connect-end="onConnectEnd"/,
+    "没监听 connect-end：提亮状态会一直留着，松手后所有手柄都是亮的"
+  );
+  // 光有状态没用，得挂成 class，CSS 才生效
+  assert.match(
+    canvasSrc,
+    /:class="\{ 'af-connecting': connecting \}"/,
+    "画布没把 connecting 挂成 class，CSS 无从生效"
+  );
+  // 基准淡显不能被顺手改掉（改成 0 就看不见落点了）
+  assert.match(
+    ruleBody(canvasSrc, ".af-handle-in-extra"),
+    /opacity\s*:\s*0\.3/,
+    "上/下落点手柄的基准透明度变了；改成 0 会让用户根本不知道能往那儿连"
+  );
+  assert.match(
+    canvasSrc,
+    /\.af-connecting\s+\.af-handle-in-extra\s*\{[^}]*opacity\s*:\s*1/,
+    "拖拽期间没有把落点手柄提亮（.af-connecting 规则缺失或不生效）"
+  );
 });

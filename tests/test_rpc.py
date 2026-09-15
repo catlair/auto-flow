@@ -251,13 +251,27 @@ def test_flowchart_edges_and_positions() -> None:
         b = _call(p, "node.add", {"type": "condition"}, req_id=3)["result"]["node"]["uid"]
         c = _call(p, "node.add", {"type": "delay"}, req_id=4)["result"]["node"]["uid"]
 
-        # 连边
+        # 连边。`dst_side` 是画布落点侧（线从目标节点哪一侧画进去），缺省 left
         e1 = _call(p, "edge.add", {"src": a, "dst": b, "port": "out"}, req_id=5)
-        assert e1["result"]["workflow"]["edges"] == [{"src": a, "port": "out", "dst": b}]
+        assert e1["result"]["workflow"]["edges"] == [
+            {"src": a, "port": "out", "dst": b, "dst_side": "left"}]
 
         # 同一个 (源, 出口) 再连一次 = **替换**，不是新增（不允许扇出）
-        e2 = _call(p, "edge.add", {"src": a, "dst": c, "port": "out"}, req_id=6)
-        assert e2["result"]["workflow"]["edges"] == [{"src": a, "port": "out", "dst": c}]
+        # 同时验证落点侧确实被存下来（画布据此决定线画在哪一侧）
+        e2 = _call(p, "edge.add", {"src": a, "dst": c, "port": "out",
+                                   "dst_side": "bottom"}, req_id=6)
+        assert e2["result"]["workflow"]["edges"] == [
+            {"src": a, "port": "out", "dst": c, "dst_side": "bottom"}]
+
+        # 脏的落点侧必须**收敛**到默认值，不能原样存：存了前端就找不到对应手柄，
+        # Vue Flow 直接画不出这条边（只在控制台刷告警），用户看到「连线莫名消失」。
+        # 注意 "right" 也是脏值——右边是输出侧，会与出口手柄同点重合，故不在词表里。
+        # "left " 前后有空白，strip 后就是合法值，同样应得到 left。
+        for dirty in ["right", "middle", "", None, 123, "LEFT", "left "]:
+            ed = _call(p, "edge.add", {"src": a, "dst": c, "port": "out",
+                                       "dst_side": dirty}, req_id=61)
+            got = ed["result"]["workflow"]["edges"][0]["dst_side"]
+            assert got == "left", f"dst_side={dirty!r} 没收敛到默认侧，得到 {got!r}"
 
         # 同一个源的不同出口互不影响（条件的 true / false 各自一条）
         _call(p, "edge.add", {"src": b, "dst": c, "port": "true"}, req_id=7)

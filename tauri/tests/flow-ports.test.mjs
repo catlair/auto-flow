@@ -61,6 +61,52 @@ test("case 出口名与后端 case_port() 一致，上限也一致", () => {
 });
 
 // --------------------------------------------------------------------------- //
+// 目标落点侧：同样是跨语言协议——前端按它渲染手柄、按它提交边，后端按它存
+// --------------------------------------------------------------------------- //
+test("落点侧与 core/events.py 的 TARGET_SIDE_* 逐一对齐", () => {
+  for (const name of ["TARGET_SIDE_LEFT", "TARGET_SIDE_TOP", "TARGET_SIDE_BOTTOM"]) {
+    const backend = pyConst(name);
+    assert.ok(backend !== null, `后端 core/events.py 里找不到 ${name}`);
+    assert.equal(ports[name], backend, `${name} 与后端不一致`);
+  }
+});
+
+test("落点侧的顺序与默认侧两边一致（前端按这个顺序渲染手柄）", () => {
+  const m = /^TARGET_SIDES\s*=\s*\(([^)]*)\)/m.exec(eventsPy);
+  assert.ok(m, "后端找不到 TARGET_SIDES 元组");
+  const names = m[1].split(",").map((s) => s.trim()).filter(Boolean);
+  assert.deepEqual(
+    names,
+    ["TARGET_SIDE_LEFT", "TARGET_SIDE_TOP", "TARGET_SIDE_BOTTOM"],
+    "后端的落点侧顺序变了，前端渲染顺序要跟着改"
+  );
+  assert.deepEqual(ports.TARGET_SIDES, names.map((n) => ports[n]));
+  assert.match(eventsPy, /^DEFAULT_TARGET_SIDE\s*=\s*TARGET_SIDE_LEFT/m,
+    "后端默认落点侧不是左侧");
+  assert.equal(ports.DEFAULT_TARGET_SIDE, ports.TARGET_SIDE_LEFT);
+});
+
+test("右侧不能进落点词表——它和出口手柄同点重合", () => {
+  // 右边是输出侧（出口手柄都在卡片右边缘）。单出口节点的出口手柄正好在右边缘
+  // 中线，与右目标手柄同点重合；Vue Flow 按「离指针最近的手柄」判定落点，
+  // 两点重合时行为不稳定，表现是「有时连得上有时连不上」。所以入口只开放 左/上/下。
+  assert.ok(!ports.TARGET_SIDES.includes("right"), "右侧不该在落点词表里");
+  assert.ok(!/^TARGET_SIDE_RIGHT\s*=/m.test(eventsPy), "后端又定义了 TARGET_SIDE_RIGHT");
+});
+
+test("落点侧的脏值收敛到默认侧，不会产出不存在的手柄", () => {
+  // 不收敛的话 targetHandle 会指向一个不存在的手柄，Vue Flow 找不到锚点就画不出
+  // 这条边（只在控制台刷告警）——用户看到的是「连线莫名消失」。
+  for (const dirty of ["right", "middle", "", null, undefined, 123, "LEFT", "out"]) {
+    assert.equal(ports.normalizeTargetSide(dirty), ports.DEFAULT_TARGET_SIDE, String(dirty));
+  }
+  assert.equal(ports.normalizeTargetSide(" bottom "), "bottom", "前后空白应被吃掉");
+  for (const good of ports.TARGET_SIDES) {
+    assert.equal(ports.normalizeTargetSide(good), good);
+  }
+});
+
+// --------------------------------------------------------------------------- //
 // exitPorts：前端唯一一处按节点类型决定「有几个出口」的地方
 // --------------------------------------------------------------------------- //
 test("出口列表按节点类型给出，顺序即画布上的上下顺序", () => {

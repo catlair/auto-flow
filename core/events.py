@@ -30,6 +30,35 @@ PORT_TRUE = "true"      # 条件：成立
 PORT_FALSE = "false"    # 条件：不成立
 PORT_ELSE = "else"      # 分支：所有 case 都不成立
 
+# 边「从目标节点的哪一侧进入」——**纯画布展示语义，不参与执行**。
+# 执行器只认 (src, port) → dst；这一侧只决定线画在目标节点的哪条边上。
+#
+# 为什么要持久化：画布多边都能落点，用户在哪儿松手，线就该从哪一侧画进去。
+# 不存的话画布只能固定从某一侧进，**拖拽时的预览**用的是你松手的那一侧、
+# **落库后**却画到固定那一侧——用户会看到连线「跳」一下。
+#
+# 为什么没有「右侧」：右边是**输出侧**（出口手柄都在卡片右边缘上）。单出口节点的
+# 出口手柄正好在右边缘中线，与右目标手柄**同点重合**——Vue Flow 靠「离指针最近的
+# 手柄」判定落点，两点重合时谁被选中取决于距离是否严格相等，行为不稳定，
+# 表现是「有时候连得上有时候连不上」。所以入口只开放 左/上/下。
+TARGET_SIDE_LEFT = "left"
+TARGET_SIDE_TOP = "top"
+TARGET_SIDE_BOTTOM = "bottom"
+# 顺序即画布上的展示顺序。前后端各一份，靠 tauri/tests/flow-ports.test.mjs 比对。
+TARGET_SIDES = (TARGET_SIDE_LEFT, TARGET_SIDE_TOP, TARGET_SIDE_BOTTOM)
+# 默认侧（也是旧文件没这个字段时的取值）：左侧，与「边一律从左边进」的历史行为一致。
+DEFAULT_TARGET_SIDE = TARGET_SIDE_LEFT
+
+
+def normalize_target_side(v: Any) -> str:
+    """把任意输入收敛成合法的落点侧；空值/未知值回落到默认侧。
+
+    必须**收敛**而不是原样存：脏值会让前端找不到对应手柄，Vue Flow 直接画不出
+    这条边（只在控制台刷告警），用户看到的是「连线莫名消失」——比画错一侧严重得多。
+    """
+    s = str(v or "").strip()
+    return s if s in TARGET_SIDES else DEFAULT_TARGET_SIDE
+
 
 def case_port(i: int) -> str:
     """分支节点的第 i 个 case 出口名（i 从 1 开始，与用户看到的序号一致）。"""
@@ -120,19 +149,26 @@ class Edge:
 
     `dst` 为空串表示「这个出口没有下一跳」。之所以允许存下来，是为了让画布上
     「我留空了这个出口」和「这条边不存在」看起来一样——反正执行器都不会往下走。
+
+    `dst_side` 是**纯画布展示字段**：这条边从目标节点的哪一侧画进去。执行器不看它，
+    它只影响连线画在哪儿（用户在四边哪一侧松手就从哪一侧进）。旧文件没有这个字段，
+    读出来就是默认的左侧——与历史行为一致。
     """
     src: str
     port: str = PORT_OUT
     dst: str = ""
+    dst_side: str = DEFAULT_TARGET_SIDE
 
     def to_dict(self) -> dict:
-        return {"src": self.src, "port": self.port, "dst": self.dst}
+        return {"src": self.src, "port": self.port, "dst": self.dst,
+                "dst_side": self.dst_side}
 
     @staticmethod
     def from_dict(d: dict) -> "Edge":
         return Edge(src=str(d.get("src") or ""),
                     port=str(d.get("port") or PORT_OUT),
-                    dst=str(d.get("dst") or ""))
+                    dst=str(d.get("dst") or ""),
+                    dst_side=normalize_target_side(d.get("dst_side")))
 
 
 @dataclass

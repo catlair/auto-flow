@@ -28,7 +28,9 @@ import { Controls } from "@vue-flow/controls";
 import { MessagePlugin } from "tdesign-vue-next";
 import { useAppStore } from "@/stores/app";
 import { errMessage } from "@/rpc/client";
-import { PORT_OUT, portLabel, exitPorts, canConnectFrom, canConnectTo } from "@/flow/ports";
+import { PORT_OUT, portLabel, exitPorts, canConnectFrom, canConnectTo,
+         TARGET_SIDES, TARGET_SIDE_LEFT, TARGET_SIDE_TOP, TARGET_SIDE_BOTTOM,
+         normalizeTargetSide } from "@/flow/ports";
 import { nodeSummary } from "@/flow/summary";
 import { createFitOnce } from "@/flow/fitOnce";
 
@@ -36,8 +38,24 @@ const store = useAppStore();
 
 /** 自定义节点类型名。用常量而不是到处写字面量，改名时不会漏掉一处。 */
 const NODE_TYPE = "af";
-/** 目标手柄的 id。必须与模板里 `<Handle type="target" :id>` 一致，否则边渲染不出来。 */
-const TARGET_HANDLE = "in";
+/**
+ * 目标手柄的 id **就是落点侧名**（`left`/`top`/`bottom`）。
+ *
+ * 两侧同名有两个好处：`Edge.dst_side` 存什么、`targetHandle` 就传什么，中间
+ * 不需要映射表；也就不存在「映射表和手柄对不上」这种只能靠肉眼发现的错。
+ *
+ * ⚠️ 各侧必须用**不同的 id**。Vue Flow 解析边的锚点走的是
+ * `handles.find(h => h.id === handleId)`——同 id 只会命中**第一个**（DOM 顺序）。
+ * 若共用一个 id：拖拽预览连在你松手的那一侧、松手后边却跳到第一个手柄上，
+ * 用户会看到连线「跳」一下。这正是落点侧值得持久化的原因。
+ *
+ * 没有「右侧」的理由见 `@/flow/ports` 的说明（右边是输出侧，会与出口手柄同点重合）。
+ */
+const TARGET_SIDE_POSITION: Record<string, Position> = {
+  [TARGET_SIDE_LEFT]: Position.Left,
+  [TARGET_SIDE_TOP]: Position.Top,
+  [TARGET_SIDE_BOTTOM]: Position.Bottom,
+};
 
 const flow = shallowRef<VueFlowStore | null>(null);
 const wrapEl = ref<HTMLElement | null>(null);
@@ -90,7 +108,7 @@ const vEdges = computed(() => {
       source: e.src,
       target: e.dst,
       sourceHandle: e.port,
-      targetHandle: TARGET_HANDLE,
+      targetHandle: normalizeTargetSide(e.dst_side),
       label: portLabel(e.port),
       labelBgStyle: { fill: "#ffffff", fillOpacity: 0.85 },
       labelStyle: { fontSize: "10px", fill: "#64748b" },
@@ -114,10 +132,27 @@ function isValidConnection(c: Connection): boolean {
   return c.source !== c.target;
 }
 
+/**
+ * 是否正在拖一条连线。拖拽期间把上/下两个淡显的落点手柄提亮。
+ *
+ * 平时淡显是为了不让每个节点都挂三个圆点显得乱，但**拖拽时正是用户最需要
+ * 看见落点的时候**——这时候还淡显等于「有落点却看不见」，用户会以为
+ * 只能连到左边，这个功能就白加了。所以：静止时淡、悬停时亮、拖拽时全亮。
+ */
+const connecting = ref(false);
+function onConnectStart() {
+  connecting.value = true;
+}
+function onConnectEnd() {
+  connecting.value = false;
+}
+
 function onConnect(c: Connection) {
   const port = c.sourceHandle || PORT_OUT;
+  // 落点侧就是松手的那个手柄 id（两侧同名，无需映射）。缺省时收敛到默认侧。
+  const side = normalizeTargetSide(c.targetHandle);
   void store
-    .addEdge(c.source, c.target, port)
+    .addEdge(c.source, c.target, port, side)
     .then((replaced) => {
       // 一个出口只允许一条边，后连的替换先连的。不说一声的话，
       // 用户会以为「连了两条」，实际旧的那条已经没了。
@@ -340,7 +375,7 @@ watch(
       >
     </div>
 
-    <div class="af-canvas">
+    <div class="af-canvas" :class="{ 'af-connecting': connecting }">
       <VueFlow
         :nodes="vNodes"
         :edges="vEdges"
@@ -352,6 +387,8 @@ watch(
         :default-viewport="{ x: 40, y: 40, zoom: 1 }"
         @init="onFlowInit"
         @connect="onConnect"
+        @connect-start="onConnectStart"
+        @connect-end="onConnectEnd"
         @node-drag-stop="onNodeDragStop"
         @node-click="onNodeClick"
         @pane-click="onPaneClick"
@@ -369,13 +406,20 @@ watch(
           >
             <!-- 开始节点没有入边：它本身就是入口，能连进来就意味着「别处还能跳进来」，
                  而执行器只从 start 字段进——画布看着连通、实际不会执行。 -->
-            <Handle
-              v-if="p.data.canIn"
-              type="target"
-              :id="TARGET_HANDLE"
-              :position="Position.Left"
-              class="af-handle af-handle-in"
-            />
+            <!-- 左/上/下三边都能落点：用户在哪儿松手，边就从哪一侧画进去（落点侧会持久化）。
+                 左侧是默认侧、常显；上/下平时淡显、**悬停节点或正在拖连线时**变清晰
+                 ——既让人发现「这里也能连」，又不至于每个节点都挂三个圆点显得乱。 -->
+            <template v-if="p.data.canIn">
+              <Handle
+                v-for="side in TARGET_SIDES"
+                :key="side"
+                type="target"
+                :id="side"
+                :position="TARGET_SIDE_POSITION[side]"
+                class="af-handle af-handle-in"
+                :class="{ 'af-handle-in-extra': side !== TARGET_SIDE_LEFT }"
+              />
+            </template>
 
             <div class="af-gnode-head">
               <span v-if="p.data.isEntry" class="af-badge" title="起始节点">起</span>
@@ -479,9 +523,10 @@ watch(
 .af-gnode {
   min-width: 148px;
   max-width: 220px;
-  /* 必须是定位元素：Vue Flow 的手柄是 position:absolute + right:0 + translate(50%),
-     锚在**最近的定位祖先**的右边缘。不写的话手柄会锚到 .vue-flow__node 上，
-     而写了之后锚到卡片本身——两种出口（单出口/多出口）才落在同一条竖线上。 */
+  /* 必须是定位元素：Vue Flow 的手柄是 position:absolute，锚在**最近的定位祖先**
+     上。卡片要作为「单出口手柄」和「左/上/下目标手柄」的锚点；不写的话它们会
+     一路锚到 .vue-flow__node 上（位置随库的节点容器走）。多出口手柄锚在各自的
+     .af-exit 行上，理由见那里。 */
   position: relative;
   background: #fff;
   border: 1px solid #dfe3e8;
@@ -566,23 +611,29 @@ watch(
   outline: none;
 }
 
-/* 多出口：一行一个。手柄用绝对定位挂在行右端——
-   `.af-exit` 是 position:relative，库自带的 .vue-flow__handle-right
-   （top:50%; right:0; translate(50%,-50%)）于是落在这一行的中线上。 */
+/* 多出口：一行一个，每行右端一个手柄。
+   ⚠️ `.af-exit` **必须**是定位元素：手柄的 `.vue-flow__handle-right` 是
+   `top:50%; right:0`，而 `top:50%` 相对**最近的定位祖先**解析。少了 position，
+   锚点会一路落到 `.af-gnode` 上，于是**每个出口的手柄都跑到卡片的中线上、
+   几个重合在一起**——表现是四个出口只有一个圆点，而且 `getClosestHandle`
+   永远只命中第一个，**根本连不出「情形 2/3」**（2026-09-15 实测踩到）。
+   有了它，手柄才落在各自那一行的中线上。
+   `.af-exits` 用负外边距抵消卡片的左右内边距，让出口行一直延伸到卡片内沿——
+   这样多出口的手柄才和单出口的落在**同一条竖线**上（否则会内缩 10px）。 */
 .af-exits {
-  margin-top: 4px;
+  margin: 4px -10px 0;
   border-top: 1px dashed #eceef1;
   padding-top: 2px;
 }
 .af-exit {
+  position: relative;
   height: 20px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  /* 给手柄让位。**不能**在这里写 position: relative——那会把手柄的锚点从卡片
-     挪到这一行上（手柄会内缩 10px 并**正好压住标签最后一个字**：「情形 1」的
-     数字被圆点盖掉，用户分不清哪条边是情形几）。留出的宽度 = 手柄半径 + 余量。 */
-  padding-right: 8px;
+  /* 给手柄让位，别压住标签最后一个字：手柄中心落在行右边缘（= 卡片内沿）上，
+     半径约 4.5px，留 10px 足够。 */
+  padding-right: 10px;
 }
 .af-exit-label {
   color: #64748b;
@@ -599,5 +650,18 @@ watch(
 }
 .af-handle-in {
   background: #94a3b8;
+}
+
+/* 上 / 下两个落点手柄：平时淡显，悬停节点或**正在拖连线**时变清晰——既让人发现
+   「这两边也能连」，又不至于每个节点都挂三个圆点显得乱。
+   ⚠️ **不要**改成 opacity: 0 藏起来：虽然照样能落点（命中判定用的是「手柄中心点
+   与指针的距离」，与可见性无关），但用户根本不知道可以往那儿连，等于白加。 */
+.af-handle-in-extra {
+  opacity: 0.3;
+  transition: opacity 0.12s;
+}
+.af-gnode:hover .af-handle-in-extra,
+.af-connecting .af-handle-in-extra {
+  opacity: 1;
 }
 </style>
