@@ -118,6 +118,23 @@ test("出口列表按节点类型给出，顺序即画布上的上下顺序", ()
   assert.deepEqual(ports.exitPorts("end"), []);
 });
 
+test("条件组与条件节点共用 true/false 出口", () => {
+  // 两者对用户都是「一个判断、两条路」，出口形状一致才不用在画布上区分
+  // 两种连线方式；出口名相同也意味着后端的边表不用为新节点做任何特殊处理。
+  assert.deepEqual(ports.exitPorts("condition_group"), ["true", "false"]);
+  assert.deepEqual(
+    ports.exitPorts("condition_group"),
+    ports.exitPorts("condition")
+  );
+  // 条件组的出口与项数无关：cond_count 改了手柄不该跟着变（边上只可能是
+  // true/false，不像 branch 的 case:N 会随数量增删）
+  assert.deepEqual(ports.exitPorts("condition_group", 6), ["true", "false"]);
+  assert.equal(ports.isValidPort("condition_group", "true"), true);
+  assert.equal(ports.isValidPort("condition_group", "case:1"), false);
+  assert.equal(ports.canConnectFrom("condition_group"), true);
+  assert.equal(ports.canConnectTo("condition_group"), true);
+});
+
 test("未知节点类型退化为「唯一出口 out」，而不是没有出口", () => {
   // 返回空数组会让节点一个手柄都没有，直接连不出线——比给个默认出口更糟
   assert.deepEqual(ports.exitPorts("未来才有的类型"), ["out"]);
@@ -182,6 +199,18 @@ const defs = {
     order: 40,
     common_params: [],
     params: [{ key: "events", label: "事件", ptype: "events" }],
+  },
+  condition_group: {
+    type: "condition_group",
+    name: "条件组",
+    order: 82,
+    common_params: [],
+    params: [
+      { key: "cond_count", label: "条件数量", ptype: "int", default: 2 },
+      { key: "combine", label: "组合方式", ptype: "select", default: "全部成立(与)" },
+      { key: "cond1_kind", label: "条件 1 检测方式", ptype: "select" },
+      { key: "cond1_value", label: "条件 1 取值", ptype: "text" },
+    ],
   },
 };
 

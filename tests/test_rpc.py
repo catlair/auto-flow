@@ -16,6 +16,9 @@ import time
 
 import pytest
 
+# 菜单顺序的唯一真源（含节点数量锁）在 test_core；这里引用而不是另抄一份。
+from test_core import BUILTIN_MENU_ORDER
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin", reason="sidecar 仅支持 macOS"
 )
@@ -221,10 +224,11 @@ def test_workflow_new_and_node_crud() -> None:
         # nodes.definitions 含 common_params，且顺序严格等于 §9.4 的菜单顺序
         defs = _call(p, "nodes.definitions", req_id=9)
         assert defs["id"] == 9
-        assert [d["type"] for d in defs["result"]] == [
-            "start", "mouse", "keyboard", "delay", "record_replay",
-            "image_click", "ocr_click", "yolo_click", "condition", "branch", "note", "end",
-        ]
+        # 期望顺序**不在本文件里再抄一遍**：菜单顺序的唯一真源是 test_core 的
+        # BUILTIN_MENU_ORDER（它同时锁住节点数量）。抄两份的后果是新增节点时
+        # 只改了一处，另一处失败——而失败信息看起来像「RPC 顺序错了」，
+        # 排查方向完全被带偏。
+        assert [d["type"] for d in defs["result"]] == BUILTIN_MENU_ORDER
         # 顺序由 definition()['order'] 提供，前端不再自己排
         assert [d["order"] for d in defs["result"]] == sorted(
             d["order"] for d in defs["result"])

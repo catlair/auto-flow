@@ -11,6 +11,7 @@ import pytest
 
 from core.events import (MacroEvent, Node, Workflow, Edge,
                          PORT_OUT, PORT_TRUE, PORT_FALSE, PORT_ELSE, case_port,
+                         MAX_GROUP_CONDITIONS,
                          TARGET_SIDES, DEFAULT_TARGET_SIDE, normalize_target_side)
 from core.executor import Executor, RunContext
 from core.player import PlayOptions, Player
@@ -348,6 +349,187 @@ def test_executor_branch_falls_back_to_else(monkeypatch):
     )
     ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
     assert ran == [0, 3]
+
+
+def _group_wf(combine, values, count=None, **extra):
+    """建一张「条件组 + true 分支(delay 1) + false 分支(delay 2)」的图。
+
+    返回 (workflow, seen)：`seen` 由 fake 检测器填，用来断言**到底测了哪几项**。
+    """
+    p = {"cond_count": count if count is not None else len(values),
+         "combine": combine}
+    p.update({f"cond{i}_value": v for i, v in enumerate(values, 1)})
+    p.update(extra)
+    return _graph(
+        ("condition_group", p),   # 0
+        ("delay", {"ms": 1}),     # 1 ← true
+        ("delay", {"ms": 2}),     # 2 ← false
+        edges=[(0, PORT_TRUE, 1), (0, PORT_FALSE, 2)],
+    )
+
+
+def _fake_detect(monkeypatch, hits, seen):
+    """把 find_template 换成「路径在 hits 里才算找到」，并记录检测顺序。"""
+    from core import vision
+
+    def fake(conf, template_path=""):
+        seen.append(template_path)
+        return type("M", (), {"found": template_path in hits})()
+
+    monkeypatch.setattr(vision, "find_template", fake)
+
+
+def test_executor_condition_group_and_short_circuits(monkeypatch):
+    """「与」：碰到第一个不成立就出结果，**后面那项不再检测**。
+
+    短路不只是省时间（一次检测 = 截屏 + 匹配，是本节点里最贵的操作）：它还
+    让「顺序」有了含义——用户把哪项排前面就是让它先被看。不短路的话顺序对
+    结果毫无影响，用户就没法用它表达优先级（与 branch 的「先到先得」同理）。
+    """
+    seen: list = []
+    _fake_detect(monkeypatch, {"a.png"}, seen)      # b、c 都不在
+    ex = Executor()
+    ran: list = []
+    wf = _group_wf("全部成立(与)", ["a.png", "b.png", "c.png"])
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 2], "与：有项不成立 → 走 false"
+    assert seen == ["a.png", "b.png"], "b 不成立后就不该再测 c"
+
+
+def test_executor_condition_group_or_short_circuits(monkeypatch):
+    """「或」：碰到第一个成立就出结果，后面那项不再检测。"""
+    seen: list = []
+    _fake_detect(monkeypatch, {"b.png"}, seen)      # 只有第二项成立
+    ex = Executor()
+    ran: list = []
+    wf = _group_wf("任一成立(或)", ["a.png", "b.png", "c.png"])
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 1], "或：有项成立 → 走 true"
+    assert seen == ["a.png", "b.png"], "b 成立后就不该再测 c"
+
+
+def test_executor_condition_group_and_all_true(monkeypatch):
+    """「与」全部成立走 true，而且**每一项都测过**（没有提前停）。"""
+    seen: list = []
+    _fake_detect(monkeypatch, {"a.png", "b.png", "c.png"}, seen)
+    ex = Executor()
+    ran: list = []
+    wf = _group_wf("全部成立(与)", ["a.png", "b.png", "c.png"])
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 1]
+    assert seen == ["a.png", "b.png", "c.png"]
+
+
+def test_executor_condition_group_or_all_false(monkeypatch):
+    """「或」全不成立走 false——与上一条互为对照，证明真的在看组合结果。"""
+    seen: list = []
+    _fake_detect(monkeypatch, set(), seen)
+    ex = Executor()
+    ran: list = []
+    wf = _group_wf("任一成立(或)", ["a.png", "b.png", "c.png"])
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 2]
+    assert seen == ["a.png", "b.png", "c.png"]
+
+
+def test_condition_group_clamps_cond_count(monkeypatch):
+    """cond_count 被钳制在 [2, MAX]：超上限不会去读不存在的 condN_* 键。
+
+    用「或 + 全不成立」当探针：它不会短路，所以**检测次数就等于实际项数**。
+    """
+    seen: list = []
+    _fake_detect(monkeypatch, set(), seen)
+    ex = Executor()
+    wf = _group_wf("任一成立(或)", ["a.png"] * MAX_GROUP_CONDITIONS, count=99)
+    ex.run_workflow(wf)
+    assert len(seen) == MAX_GROUP_CONDITIONS, "超上限要钳到 MAX，不能照 99 项去读"
+
+    seen.clear()
+    wf2 = _group_wf("任一成立(或)", ["a.png", "b.png"], count=1)
+    ex2 = Executor()
+    ex2.run_workflow(wf2)
+    assert len(seen) == 2, "低于下限要抬到 2（只有 1 项的条件组等价于条件节点）"
+
+
+def test_condition_group_missing_combine_defaults_to_and(monkeypatch):
+    """老文件/手工编辑的 json 没有 combine 键时按默认的「与」算。
+
+    落到「或」是静默的行为漂移：面板上显示的是「全部成立(与)」，执行却按
+    「任一成立」——用户看到的和跑出来的不一致，且没有任何报错。
+    """
+    seen: list = []
+    _fake_detect(monkeypatch, {"a.png"}, seen)
+    ex = Executor()
+    ran: list = []
+    wf = _graph(
+        ("condition_group", {"cond_count": 2,
+                             "cond1_value": "a.png", "cond2_value": "b.png"}),  # 无 combine
+        ("delay", {"ms": 1}),
+        ("delay", {"ms": 2}),
+        edges=[(0, PORT_TRUE, 1), (0, PORT_FALSE, 2)],
+    )
+    ex.run_workflow(wf, on_node=lambda i, t: ran.append(i))
+    assert ran == [0, 2], "缺 combine 应按「与」算：b 不成立 → false"
+
+
+def test_condition_group_stopping_goes_false(monkeypatch):
+    """停机检查在检测**之前**：已停机时一次检测都不做，直接走 false。
+
+    顺序反了的话，用户按下停止后还要等一整轮检测（截屏 + 匹配）才退出，
+    而这一轮的结论还会被用来选出口——停机期间的动作全是白做的。
+    """
+    seen: list = []
+    _fake_detect(monkeypatch, {"a.png"}, seen)
+    ex = Executor()
+    ex.stop_run()                      # 与真实停机同一条路径
+    ports: list = []
+    ctx = RunContext(params={"cond_count": 2, "combine": "全部成立(与)",
+                             "cond1_value": "a.png", "cond2_value": "b.png"},
+                     player=ex.player, set_port=ports.append)
+    get_task("condition_group").run(ctx)
+    assert ports == [PORT_FALSE]
+    assert seen == [], "已停机就不该再做任何检测"
+
+
+def test_condition_group_timeout_zero_evaluates_once(monkeypatch):
+    """timeout_s=0：只求值一轮，不成立即走 false，不会反复检测。
+
+    这是「不等待」的语义，也是默认值。若把它当成「无限等」，默认建出来的
+    条件组会一直卡住不往下走。
+    """
+    seen: list = []
+    _fake_detect(monkeypatch, set(), seen)
+    ex = Executor()
+    waits: list = []
+    monkeypatch.setattr(ex.player, "wait", waits.append)
+    ports: list = []
+    ctx = RunContext(params={"cond_count": 3, "combine": "任一成立(或)",
+                             "cond1_value": "a.png", "cond2_value": "b.png",
+                             "cond3_value": "c.png"},
+                     player=ex.player, set_port=ports.append)
+    get_task("condition_group").run(ctx)
+    assert ports == [PORT_FALSE]
+    assert len(seen) == 3, "只求值一轮（3 项各一次）"
+    assert waits == [], "超时为 0 时不该进入等待循环"
+
+
+def test_condition_group_definition_shape():
+    """节点定义：order 夹在 condition 与 branch 之间，条件数量带上限。"""
+    defs = {d["type"]: d for d in all_definitions()}
+    g = defs["condition_group"]
+    assert g["name"] == "条件组"
+    assert defs["condition"]["order"] < g["order"] < defs["branch"]["order"]
+
+    params = {p["key"]: p for p in g["params"]}
+    assert params["cond_count"]["max"] == MAX_GROUP_CONDITIONS
+    assert params["cond_count"]["min"] == 2
+    assert params["combine"]["options"] == ["全部成立(与)", "任一成立(或)"]
+    # 第 N 项的 show_if 必须挂在 cond_count 上：面板平铺 6 项，不收起会太长
+    assert params[f"cond{MAX_GROUP_CONDITIONS}_value"]["show_if"] == {
+        "key": "cond_count", "gte": MAX_GROUP_CONDITIONS}
+    assert params["cond1_value"]["pick"] is True
+    # 超出上限的键不该存在——它们永远不会被渲染，只会误导读文件的人
+    assert f"cond{MAX_GROUP_CONDITIONS + 1}_kind" not in params
 
 
 def test_executor_merges_when_two_edges_point_at_one_node(monkeypatch):
@@ -777,17 +959,18 @@ def test_node_defaults_applied():
 
 
 # §9.4：菜单顺序 = 开始 → 鼠标 → 键盘 → 延时 → 录制回放 → 图像 → OCR → YOLO
-#         → 条件 → 多路分支 → 注释 → 结束
+#         → 条件 → 条件组 → 多路分支 → 注释 → 结束
 BUILTIN_MENU_ORDER = [
     "start", "mouse", "keyboard", "delay", "record_replay",
-    "image_click", "ocr_click", "yolo_click", "condition", "branch", "note", "end",
+    "image_click", "ocr_click", "yolo_click", "condition", "condition_group",
+    "branch", "note", "end",
 ]
 
 
 def test_node_menu_order_is_explicit():
     """内置节点的菜单顺序 = §9.4 规定顺序（产品需求的回归护栏）。
 
-    注意：**这条用例无法区分「按 order 排」与「按注册顺序排」**——给 9 个类都
+    注意：**这条用例无法区分「按 order 排」与「按注册顺序排」**——给所有类都
     补上 @register 之后，源码里的定义顺序恰好就等于期望顺序，两种机制结果相同，
     删掉排序它照样通过（实测假绿）。真正验证「顺序由 order 决定」的是下面
     test_order_overrides_registration_order。

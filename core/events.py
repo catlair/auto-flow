@@ -69,6 +69,10 @@ def case_port(i: int) -> str:
 # 两个参数（检测方式 + 取值），所以这个数字直接决定参数面板的长度。
 MAX_BRANCH_CASES = 6
 
+# 条件组节点的条件项上限。理由与 MAX_BRANCH_CASES 完全相同：面板平铺渲染，
+# 每项占两个参数（检测方式 + 取值），这个数字直接决定面板长度。
+MAX_GROUP_CONDITIONS = 6
+
 
 @dataclass
 class MacroEvent:

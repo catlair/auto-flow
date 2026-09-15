@@ -89,9 +89,13 @@ export function clampCaseCount(v: unknown): number {
  * `caseCount` 只对 branch 有意义（它是节点参数，用户可改）。
  * 未知类型按操作节点处理（唯一出口 `out`）——比返回空数组安全：
  * 返回空数组会让节点一个手柄都没有，直接连不出线。
+ *
+ * `condition_group` 与 `condition` 共用 `true`/`false`：两者对用户都是
+ * 「一个判断、两条路」，出口形状一致才不用在画布上区分两种连线方式。
+ * 出口名相同也意味着**后端的边表不用为新节点做任何特殊处理**。
  */
 export function exitPorts(type: string, caseCount: unknown = MIN_BRANCH_CASES): string[] {
-  if (type === "condition") return [PORT_TRUE, PORT_FALSE];
+  if (type === "condition" || type === "condition_group") return [PORT_TRUE, PORT_FALSE];
   if (type === "branch") {
     const n = clampCaseCount(caseCount);
     const out: string[] = [];

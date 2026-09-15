@@ -46,8 +46,9 @@ class BaseTask:
     注册先后。**新增节点必须显式给 order**；不给就用默认 100 落到菜单末尾。
 
     内置节点按 10 递增留出空档，插新节点时不必重排既有值。新增内置节点时
-    记得把它补进 `tests/test_core.py::BUILTIN_MENU_ORDER`——那里只覆盖已知的
-    9 个内置节点，漏加不会报错。
+    记得把它补进 `tests/test_core.py::BUILTIN_MENU_ORDER`——那里只列了已知的
+    内置节点，漏加**不会报错**（切片断言照样过），只有紧跟其后的
+    `len(defs) == n` 那道锁会拦下来。
     """
     type: str = ""
     name: str = ""

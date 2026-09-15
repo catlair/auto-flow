@@ -1,13 +1,14 @@
 """内置任务节点：开始/结束、鼠标、键盘、延时、录制回放、图像/文字/YOLO 查找、
-条件、多路分支、注释。
+条件、条件组、多路分支、注释。
 
 每个类用 `@register` 注册，并用 `order` 声明它在「添加节点」菜单里的位置。
 菜单顺序是：开始 → 鼠标 → 键盘 → 延时 → 录制回放 → 图像 → OCR → YOLO
-→ 条件 → 多路分支 → 注释 → 结束。新增节点请给一个 order 值，否则会落到菜单末尾。
+→ 条件 → 条件组 → 多路分支 → 注释 → 结束。新增节点请给一个 order 值，否则会落到菜单末尾。
 
 **节点有「出口」**（v4 起工作流是流程图，见 `core/events.py`）：操作类节点只有
-`out` 一个出口；`condition` 有 `true`/`false`；`branch` 有 `case:1..N` 与 `else`；
-`end` 没有出口。节点通过 `ctx.set_port(name)` 声明本次该走哪个出口，不调用就默认 `out`。
+`out` 一个出口；`condition` 与 `condition_group` 有 `true`/`false`；`branch` 有
+`case:1..N` 与 `else`；`end` 没有出口。节点通过 `ctx.set_port(name)` 声明本次该走
+哪个出口，不调用就默认 `out`。
 """
 from __future__ import annotations
 
@@ -17,14 +18,14 @@ from typing import Optional
 
 from tasks.base import BaseTask, ParamDef, register
 from core.player import PlayOptions
-from core.events import (MacroEvent, MAX_BRANCH_CASES,
+from core.events import (MacroEvent, MAX_BRANCH_CASES, MAX_GROUP_CONDITIONS,
                          PORT_OUT, PORT_TRUE, PORT_FALSE, PORT_ELSE, case_port)
 from core.keymap import name_to_key
 
 # 全局热键名：回放录制事件时跳过，避免回放又触发热键
 HOTKEY_NAMES = {"F9", "F10", "F11"}
 
-# 「检测方式」三个选项被 condition 与 branch 共用，抽出来避免两处漂移
+# 「检测方式」三个选项被 condition、condition_group 与 branch 共用，抽出来避免两处漂移
 CHECK_KINDS = ["图像存在", "文字存在", "目标存在(YOLO)"]
 CASE_VALUE_TOOLTIP = ("图像存在 = 模板图路径（可点「选择」挑文件）；"
                       "文字存在 = 要找的文字；目标存在(YOLO) = 目标类别，留空=任意")
@@ -402,9 +403,9 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
             model_path: str = "") -> bool:
     """执行一次「图像存在 / 文字存在 / 目标存在(YOLO)」检测。
 
-    `condition` 与 `branch` **共用这一份实现**——两者对同一种检测方式的语义
-    必须完全一致，否则「条件成立」和「分支命中」会在同一张屏上给出不同答案，
-    而用户完全无从判断该信哪个。`value` 的含义随 `kind` 变：
+    `condition`、`condition_group` 与 `branch` **共用这一份实现**——三者对同一种
+    检测方式的语义必须完全一致，否则「条件成立」「条件组成立」和「分支命中」会在
+    同一张屏上给出不同答案，而用户完全无从判断该信哪个。`value` 的含义随 `kind` 变：
     图像存在=模板图路径；文字存在=要找的文字；YOLO=目标类别（留空=任意）。
     """
     from core import vision, ocr, yolo
@@ -465,6 +466,93 @@ class ConditionTask(BaseTask):
                 ctx.set_port(PORT_FALSE)
                 return
             if check():
+                ctx.set_port(PORT_TRUE)
+                return
+            if _time.monotonic() >= deadline:
+                ctx.set_port(PORT_FALSE)
+                return
+            ctx.player.wait(0.3)
+
+
+@register
+class ConditionGroupTask(BaseTask):
+    """条件组：把多个检测按「与 / 或」合成一个判断，成立走 `true`、不成立走 `false`。
+
+    为什么要有它：`condition` 一次只能测一个东西。想表达「A 在**且** B 在」，
+    只能串两个条件节点——而条件的出口是二选一的，串起来要么把中间那个 `false`
+    再接一个条件（画布迅速变成一团线），要么接受「第一个不成立时没有统一失败
+    出口」。一个节点里放 N 项、由 `combine` 决定怎么合，画布上就还是「一个判断、
+    两个出口」，路径数不随条件数膨胀。
+
+    求值**必须短路**：一次检测 = 截屏 + 模板匹配/OCR/推理，是本节点里最贵的操作。
+    「与」碰到第一个不成立就没有再测的必要（结果已定），「或」碰到第一个成立同理。
+    用户把哪项排前面因此获得了「优先被检测」的含义——不短路的话顺序完全不影响
+    结果，用户就没法用它表达优先级（与 `branch` 的「先到先得」是同一个道理）。
+
+    刻意**没有**「至少 N 项成立」这类参数：那属于多路分支的范畴（同一份检测结果
+    要分出三种以上走法）。两个节点各管一件事，比在一个节点里堆参数好理解。
+    """
+    type = "condition_group"
+    name = "条件组"
+    order = 82
+
+    # 「组合方式」的两个取值。抽成常量是为了让 run() 与参数定义引用同一份字面量——
+    # 两处各写一遍，改了参数面板上的选项却忘了改判断，表现是「选了『与』却按『或』
+    # 算」，没有任何报错。
+    COMBINE_AND = "全部成立(与)"
+    COMBINE_OR = "任一成立(或)"
+    COMBINE_KINDS = (COMBINE_AND, COMBINE_OR)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.params = [
+            ParamDef("cond_count", "条件数量", "int", 2,
+                     min_value=2, max_value=MAX_GROUP_CONDITIONS,
+                     tooltip=f"最多 {MAX_GROUP_CONDITIONS} 项"),
+            ParamDef("combine", "组合方式", "select", self.COMBINE_AND,
+                     list(self.COMBINE_KINDS),
+                     tooltip="「与」= 全部成立才算成立；「或」= 任一成立即算成立"),
+        ]
+        for i in range(1, MAX_GROUP_CONDITIONS + 1):
+            show = {"key": "cond_count", "gte": i}
+            self.params.append(ParamDef(
+                f"cond{i}_kind", f"条件 {i} 检测方式", "select", "图像存在",
+                list(CHECK_KINDS), show_if=show))
+            self.params.append(ParamDef(
+                f"cond{i}_value", f"条件 {i} 取值", "text", "",
+                show_if=show, pick=True, tooltip=CASE_VALUE_TOOLTIP))
+        self.params.append(ParamDef("confidence", "置信度", "float", 0.8, min_value=0.05))
+        self.params.append(ParamDef("timeout_s", "等待超时(秒)", "float", 0.0, min_value=0.0,
+                                    tooltip=">0 时在超时时间内反复求值，组合结果成立即走 true"))
+
+    def run(self, ctx) -> None:
+        import time as _time
+        p = ctx.params
+        n = max(2, min(int(p.get("cond_count", 2) or 2), MAX_GROUP_CONDITIONS))
+        conf = float(p.get("confidence", 0.8))
+        # 缺字段/脏值一律回落到默认的「与」：旧文件里没有 combine 键时必须和
+        # 面板上的默认值表现一致，否则「我什么都没改，行为却不一样」。
+        combine = str(p.get("combine") or self.COMBINE_AND)
+        is_and = combine != self.COMBINE_OR
+        deadline = _time.monotonic() + float(p.get("timeout_s", 0.0))
+
+        def evaluate() -> bool:
+            for i in range(1, n + 1):
+                hit = _detect(str(p.get(f"cond{i}_kind", "图像存在")),
+                              str(p.get(f"cond{i}_value", "")), confidence=conf)
+                if is_and:
+                    if not hit:
+                        return False   # 与：一项不成立，整体已定，后面的不用测
+                elif hit:
+                    return True        # 或：一项成立，整体已定，后面的不用测
+            # 循环走完说明没有触发短路：与 = 全部成立；或 = 全部不成立
+            return is_and
+
+        while True:
+            if ctx.player.stopping:
+                ctx.set_port(PORT_FALSE)
+                return
+            if evaluate():
                 ctx.set_port(PORT_TRUE)
                 return
             if _time.monotonic() >= deadline:
