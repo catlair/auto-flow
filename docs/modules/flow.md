@@ -7,7 +7,7 @@
 
 - `core/events.py` — `Workflow{nodes,edges,start}` / `Edge` / 出口名常量 / `_linear_edges` + `_linear_positions`（迁移）
 - `core/executor.py` — `entry_uid` / `next_map` / `_walk`（图遍历）
-- `tasks/builtin.py` — 承载出口的节点：`start` / `condition` / `branch` / `end`
+- `tasks/builtin.py` — 承载出口的节点：`start` / `condition` / `condition_group` / `branch` / `end`
 - `rpc/controller.py` — `edge.add` / `edge.remove` / `node.setPos` / `workflow.setStart`
 - `tauri/src/flow/ports.ts` — 前端唯一的出口名定义（与后端逐字对齐）+ `liveEdges`
   （「哪些边算数」的唯一判断，画布渲染与环检测共用）
@@ -27,6 +27,7 @@
 | F-FLW-03 | 一个出口一条边（无扇出） | ✅ | `edge.add` 替换同 `(src, port)` 的旧边，并向调用方回报「发生了替换」 |
 | F-FLW-04 | 汇合 | ✅ | 两条边指向同一节点即汇合，无特殊语法 |
 | F-FLW-05 | 条件分派 | ✅ | `condition` 节点按检测结果写 `true` / `false` 出口 |
+| F-FLW-05b | 条件组分派 | ✅ | `condition_group` 把最多 6 项检测按「与 / 或」合成一个结果，出口**沿用** `true` / `false`（与 `condition` 同形 ⇒ 边表不用为新节点做任何特殊处理） |
 | F-FLW-06 | 多路分支 | ✅ | `branch` 按顺序取第一个命中的 `case:N`，都不命中走 `else` |
 | F-FLW-07 | 显式终点 | ✅ | `end` 节点终止当前路径并上报一次 |
 | F-FLW-08 | 循环 + 步数上限 | ✅ | 允许回边；`MAX_STEPS=10000` 兜底，撞上限即停机并报错 |
@@ -47,6 +48,23 @@
   `test_executor_merges_when_two_edges_point_at_one_node`
 - **F-FLW-06**（2026-09-13）：`test_executor_branch_routes_to_matching_case`、
   `test_executor_branch_falls_back_to_else`
+- **F-FLW-05b**（2026-09-16，条件组）：`tests/test_core.py` 9 例——与/或各自的
+  **短路次序**、全部成立、全部不成立、`cond_count` 上下钳制、缺 `combine` 回落成「与」、
+  停机时走 `false` 且**一次检测都不做**、`timeout_s=0` 只求值一轮、definition 形状。
+  前端 1 例（`flow-ports.test.mjs`：出口形状与 `condition` 完全相同、且与 `cond_count`
+  无关）+ 1 例摘要。
+  **反向验证**：把 `evaluate()` 换成「结果正确但每一项都测」（不短路）→ 只有两条短路
+  用例失败，而它们的**结果断言仍然通过**——证明这两条锁的确实是「不再检测」，
+  不只是「结果对」；摘掉 `ports.ts` 里 `condition_group` 的出口分支 → 只有那一条前端
+  断言失败。
+  **真机验收**（2026-09-16，对**已安装的** `Auto Flow.app`）：
+  ① 菜单里「条件组」正落在「条件判断」与「多路分支」之间；
+  ② 画布上节点卡片两个出口手柄**各占一行**（`成立`/`不成立`），没有塌成一点；
+  ③ 参数面板渲染出 条件数量 / 组合方式 / 条件 1..N 的检测方式与取值（带「选择」）/
+     置信度 / 等待超时——且 `cond_count=2` 时**只渲染 2 组**（定义里是 6 组），
+     用步进箭头加到 3 后**第三组当场出现** ⇒ `show_if` 在交付物上生效；
+  ④ `check_installed.py` 新增 4 项 RPC 断言全 ✓（含短路行为），对**旧产物**
+     跑时第 ① 条 ✗（证明断言有区分度），见 `packaging.md`。
 - **F-FLW-07**（2026-09-13）：`test_executor_end_node_stops_that_path`
 - **F-FLW-08**（2026-09-13）：`test_executor_runaway_cycle_is_stopped_and_reported`
   （断言**至少**跑了 `MAX_STEPS - 2` 步，不只是「停了」）、
@@ -410,3 +428,8 @@
   `edgesOnCycles`（迭代 Tarjan 求强连通分量，线性）；画布加默认关的「标出环」按钮，
   开启后按条数显示，覆盖「打开别人的文件想知道环在哪」这个 `cycleEdges` 够不到的
   场景。它只改显示，不动工作流
+- 2026-09-15 新增 `condition_group`（条件组，F-FLW-05b）：多项检测按「与 / 或」合成，
+  出口**沿用** `condition` 的 `true` / `false`。这是**刻意**的选择——出口名相同，
+  后端的 `next_map` 与边表就不用为新节点加任何分支，前端 `exitPorts` 也只多一个
+  `||`。若给它单独造一套出口名，等于把「一个判断、两条路」这件事在两个语言里
+  各写两遍。求值短路，用户的排序因此获得「优先被检测」的含义
