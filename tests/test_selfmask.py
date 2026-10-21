@@ -66,3 +66,63 @@ def test_captures_returns_masked_images(monkeypatch):
     assert len(caps) == 1
     assert caps[0].image[5:15, 5:15].max() == 0, "captures() 没把自身窗口遮掉"
     assert caps[0].image[0, 0].min() == 200
+
+
+# ---- 遮挡关系（真机事故：把游戏一起涂黑了）----
+#
+# 事故现场：Auto Flow 窗口 (90,34,1100x720)、游戏窗口 (4,98,800x482) 在它**前面**。
+# 早期实现按「窗口矩形」整块涂黑，于是游戏画面 74% 被涂掉，「开始匹配」明明在屏上
+# 却认不出来，脚本在大厅里空转。正确做法是减掉挡在前面的窗口。
+
+
+def test_fully_covered_window_is_not_masked():
+    """自己的窗口整个被前面的窗口盖住 → 什么都不该遮。"""
+    rects = selfmask.rects_from_windows([
+        {"owner": "燕云十六声", "x": 0, "y": 0, "w": 1280, "h": 832},
+        {"owner": "Auto Flow", "x": 90, "y": 34, "w": 1100, "h": 720},
+    ])
+    assert rects == [], "被完全盖住的窗口不该产生遮罩"
+
+
+def test_occluding_window_carves_the_mask():
+    """游戏窗口挡在前面时，只有**露出来**的那部分被遮。"""
+    rects = selfmask.rects_from_windows([
+        {"owner": "燕云十六声", "x": 4, "y": 98, "w": 800, "h": 482},
+        {"owner": "Auto Flow", "x": 90, "y": 34, "w": 1100, "h": 720},
+    ])
+    assert rects, "自己的窗口还有露出来的部分，应该产生遮罩"
+    area = sum(w * h for _, _, w, h in rects)
+    # 1100*720 = 792000；被挡掉的部分 = (800-90)*(482-98)… 这里只断言「明显小于整块」
+    assert area < 792000 * 0.75, "遮罩面积没减去前面的窗口"
+    # 游戏窗口中心绝不能落在任何遮罩块里
+    gx, gy = 400, 300
+    for (x, y, w, h) in rects:
+        assert not (x <= gx < x + w and y <= gy < y + h), "游戏画面被涂黑了"
+
+
+def test_own_window_behind_nothing_is_fully_masked():
+    """没有别的窗口挡着时，自己整块都要遮。"""
+    rects = selfmask.rects_from_windows([
+        {"owner": "Auto Flow", "x": 10, "y": 10, "w": 100, "h": 50},
+    ])
+    assert rects == [(10, 10, 100, 50)]
+
+
+def test_ignores_transparent_and_nonzero_layer_windows():
+    """透明窗口 / 菜单栏那层（layer≠0）既不算遮挡，也不产生遮罩。"""
+    rects = selfmask.rects_from_windows([
+        {"owner": "控制中心", "layer": 25, "x": 0, "y": 0, "w": 1280, "h": 29},
+        {"owner": "某悬浮窗", "alpha": 0.0, "x": 0, "y": 0, "w": 1280, "h": 832},
+        {"owner": "Auto Flow", "x": 0, "y": 30, "w": 200, "h": 100},
+    ])
+    assert rects == [(0, 30, 200, 100)], "透明窗口/菜单栏不该参与遮挡计算"
+
+
+def test_minus_returns_original_when_no_overlap():
+    assert selfmask._minus((0, 0, 10, 10), (50, 50, 5, 5)) == [(0, 0, 10, 10)]
+
+
+def test_minus_splits_into_at_most_four_pieces():
+    pieces = selfmask._minus((0, 0, 100, 100), (25, 25, 50, 50))
+    assert len(pieces) == 4
+    assert sum(w * h for _, _, w, h in pieces) == 100 * 100 - 50 * 50

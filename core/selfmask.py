@@ -29,11 +29,41 @@ _cache: dict = {"t": 0.0, "rects": []}
 _noted = {"done": False}
 
 
+def _minus(rect: tuple, cut: tuple) -> list:
+    """矩形相减：从 `rect` 里挖掉 `cut`，返回剩下的若干块（最多 4 块）。"""
+    ax, ay, aw, ah = rect
+    bx, by, bw, bh = cut
+    ax2, ay2 = ax + aw, ay + ah
+    bx2, by2 = bx + bw, by + bh
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    if ix1 >= ix2 or iy1 >= iy2:
+        return [rect]                      # 不相交，原样保留
+    out = []
+    if iy1 > ay:
+        out.append((ax, ay, aw, iy1 - ay))          # 上条
+    if iy2 < ay2:
+        out.append((ax, iy2, aw, ay2 - iy2))        # 下条
+    if ix1 > ax:
+        out.append((ax, iy1, ix1 - ax, iy2 - iy1))  # 左块
+    if ix2 < ax2:
+        out.append((ix2, iy1, ax2 - ix2, iy2 - iy1))  # 右块
+    return out
+
+
 def own_window_rects(force: bool = False) -> list:
-    """本进程可见窗口的矩形列表，全局**逻辑**坐标 `(left, top, w, h)`。
+    """本进程**实际可见**的那部分窗口矩形，全局逻辑坐标 `(left, top, w, h)`。
+
+    为什么不是「窗口矩形直接当遮罩」：窗口列表是前到后有序的，而我们的窗口经常
+    **被游戏窗口挡住一部分**。整块遮掉会把挡在前面的游戏画面一起涂黑——真机实测
+    出现过「屏幕 74% 变黑、OCR 一个字都读不出来」，表现为脚本在大厅里空转、
+    「开始匹配」明明在屏上却认不到。
+
+    所以逐个窗口从前往后扫：遇到挡在**我们前面**的窗口（别的 App、layer 0、不透明），
+    就把它的矩形从我们的遮罩里减掉。剩下的才是「我们自己真正露出来的部分」。
 
     取不到窗口列表（没有屏幕录制权限、WindowServer 异常）时返回空列表——
-    此时按「不遮」处理，行为退回改动之前，绝不因为遮罩把识别整体搞挂。
+    按「不遮」处理，行为退回改动之前，绝不因为遮罩把识别整体搞挂。
     """
     now = time.monotonic()
     if not force and now - _cache["t"] < _TTL_S:
@@ -43,22 +73,52 @@ def own_window_rects(force: bool = False) -> list:
         import Quartz
         opts = (Quartz.kCGWindowListOptionOnScreenOnly
                 | Quartz.kCGWindowListExcludeDesktopElements)
+        windows = []
         for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
-            owner = str(w.get("kCGWindowOwnerName", "") or "").lower()
-            if not any(k in owner for k in _OWNER_KEYS):
-                continue
-            # 只遮普通窗口层（layer 0）：面板、菜单栏、悬浮窗不是我们的识别目标，
-            # 误遮反而可能把游戏画面挖掉一块。
-            if int(w.get("kCGWindowLayer", 0) or 0) != 0:
-                continue
             b = w.get("kCGWindowBounds") or {}
-            wd, ht = int(b.get("Width", 0)), int(b.get("Height", 0))
-            if wd <= 0 or ht <= 0:
-                continue
-            rects.append((int(b.get("X", 0)), int(b.get("Y", 0)), wd, ht))
+            windows.append({
+                "layer": w.get("kCGWindowLayer", 0),
+                "alpha": w.get("kCGWindowAlpha", 1.0),
+                "owner": w.get("kCGWindowOwnerName", ""),
+                "x": b.get("X", 0), "y": b.get("Y", 0),
+                "w": b.get("Width", 0), "h": b.get("Height", 0),
+            })
+        rects = rects_from_windows(windows)
     except Exception:  # noqa: BLE001  遮罩是保护措施，失败就退回不遮
         rects = []
     _cache.update(t=now, rects=rects)
+    return rects
+
+
+def rects_from_windows(windows: list) -> list:
+    """窗口列表（**前到后**有序，元素是 dict）→ 需要涂黑的矩形列表。
+
+    纯函数：不碰 Quartz，用例可以直接喂数组。规则见 `own_window_rects`：
+    自己的窗口要遮，但必须减掉挡在它前面的那些窗口——否则游戏窗口在我们的窗口
+    前面时，游戏画面会被一起涂黑（真机事故：屏幕 74% 变黑、大厅里「开始匹配」
+    认不出来，脚本一直空转）。
+    """
+    rects: list = []
+    front_cuts: list = []
+    for w in windows or []:
+        if int(w.get("layer", 0) or 0) != 0:
+            continue
+        if float(w.get("alpha", 1.0) or 0.0) <= 0.01:
+            continue
+        wd, ht = int(w.get("w", 0) or 0), int(w.get("h", 0) or 0)
+        if wd <= 0 or ht <= 0:
+            continue
+        rect = (int(w.get("x", 0) or 0), int(w.get("y", 0) or 0), wd, ht)
+        owner = str(w.get("owner", "") or "").lower()
+        if any(k in owner for k in _OWNER_KEYS):
+            pieces = [rect]
+            for cut in front_cuts:
+                nxt = []
+                for r in pieces:
+                    nxt.extend(_minus(r, cut))
+                pieces = nxt
+            rects.extend(pieces)
+        front_cuts.append(rect)
     return rects
 
 
