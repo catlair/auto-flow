@@ -6,6 +6,15 @@ import type { ParamDef } from "@/rpc/types";
 import { MessagePlugin } from "tdesign-vue-next";
 
 import { errMessage } from "@/rpc/client";
+import {
+  DUR_UNITS,
+  TIME_FORMAT,
+  normalizeTime,
+  partOf,
+  withPart,
+  type DurUnit,
+} from "@/flow/duration";
+import { recOptions, type RecOption } from "@/flow/recording";
 const store = useAppStore();
 const capturing = ref(false);
 let unsub: (() => void) | null = null;
@@ -71,6 +80,52 @@ async function setVal(p: ParamDef, v: any) {
   } catch (e) {
     MessagePlugin.error("设置参数失败：" + errMessage(e));
   }
+}
+
+// ---- 时长参数（ptype="duration"）：值是一个毫秒总数，面板上摊成时/分/秒/毫秒 ----
+// 「等 1 小时 30 分」手算成 5400000 毫秒没人愿意干，四格让用户直接填。
+function durPart(v: any, u: DurUnit): number {
+  return partOf(v, u);
+}
+
+/**
+ * 改一格 = 读当前毫秒数 → 换掉这一段 → 写回。**必须串行**。
+ *
+ * `store.setParam` 是「发 RPC → 等响应 → 回写本地状态」，用户在同一秒里连着改
+ * 「分」和「秒」时，第二次 `curValue()` 读到的可能还是**没算上第一次**的旧值
+ * （响应还没回来），于是第一次的修改被覆盖——界面上表现为「改完分，分又跳回去了」。
+ * 按 `uid:key` 排队，让第二次读值发生在第一次写回之后。
+ */
+const durChain = new Map<string, Promise<void>>();
+
+function setDurPart(p: ParamDef, u: DurUnit, v: number) {
+  const uid = selected.value?.uid;
+  if (!uid) return;
+  const chainKey = `${uid}:${p.key}`;
+  const prev = durChain.get(chainKey) ?? Promise.resolve();
+  const next = prev.then(async () => {
+    await setVal(p, withPart(curValue(p), u, v));
+  });
+  durChain.set(chainKey, next);
+  // 队尾自我回收，否则用户开过的每个节点都会在 Map 里留一条
+  next.finally(() => {
+    if (durChain.get(chainKey) === next) durChain.delete(chainKey);
+  });
+}
+
+// ---- 时刻参数（ptype="time"）：进选择器前先补齐秒 ----
+function timeValue(p: ParamDef): string {
+  return normalizeTime(curValue(p));
+}
+
+// ---- 录制参数（ptype="recording"）：值是一个**录制库 id** ----
+/**
+ * 下拉选项。**当前值不在库里时也会有一项**（标 `missing`）——否则 t-select 在
+ * 「值不在选项里」时显示成空白，看着像「这个字段没填」，而节点其实还引着一个
+ * 已经被删掉的录制（问题要到回放时才暴露）。
+ */
+function recOpts(p: ParamDef): RecOption[] {
+  return recOptions(store.recordingLib, curValue(p));
 }
 
 async function pickFile(p: ParamDef) {
@@ -164,6 +219,63 @@ onBeforeUnmount(() => unsub?.());
           <t-option v-for="o in p.options || []" :key="o" :value="o" :label="o" />
         </t-select>
 
+        <!-- 时长：时 / 分 / 秒 / 毫秒 四格，值仍是**一个毫秒总数**（后端 delay 读 `ms`）。
+             四格只是渲染层，换算在 flow/duration.ts 里，已保存的流程零迁移。 -->
+        <div v-else-if="p.ptype === 'duration'" class="af-duration">
+          <div v-for="u in DUR_UNITS" :key="u.key" class="af-duration-cell">
+            <t-input-number
+              :value="durPart(curValue(p), u)"
+              :min="0"
+              :max="u.max"
+              :step="1"
+              @change="(v: number) => setDurPart(p, u, v)"
+              size="small"
+              theme="column"
+            />
+            <span class="af-duration-unit">{{ u.label }}</span>
+          </div>
+        </div>
+
+        <!-- 时刻：只能**选**不能手打（allowInput=false）。手输 "9:3"、"９点" 这类
+             会一路走到后端 _seconds_until 才抛 ValueError（进 run.error），
+             选择器从源头消掉这种输入。 -->
+        <t-time-picker
+          v-else-if="p.ptype === 'time'"
+          :value="timeValue(p)"
+          :format="TIME_FORMAT"
+          :clearable="false"
+          :allow-input="false"
+          size="small"
+          @change="(v: string) => setVal(p, v)"
+        />
+
+        <!-- 录制：从**录制库**里选一条（值存的是 id，节点不复制事件）。
+             选项是「名字（N 条）」——只显示名字的话，两段同名录制（同一秒录了两次、
+             或复制过库目录）在下拉里完全一样，选哪个全靠猜。 -->
+        <div v-else-if="p.ptype === 'recording'" class="af-rec-pick">
+          <t-select
+            :value="curValue(p)"
+            :placeholder="recOpts(p).length ? '选择录制' : '录制库还是空的'"
+            size="small"
+            style="flex: 1; min-width: 0"
+            @change="(v: string) => setVal(p, v)"
+          >
+            <t-option
+              v-for="o in recOpts(p)"
+              :key="o.value"
+              :value="o.value"
+              :label="o.label"
+            />
+          </t-select>
+          <t-button
+            size="small"
+            variant="outline"
+            title="到侧栏「录制」页的录制库里管理"
+            @click="store.refreshRecordingLib()"
+            >刷新</t-button
+          >
+        </div>
+
         <t-input
           v-else-if="p.ptype === 'events'"
           :value="eventsLabel(curValue(p))"
@@ -229,5 +341,31 @@ onBeforeUnmount(() => unsub?.());
   font-size: 12px;
   color: #555;
   margin-bottom: 4px;
+}
+/* 四格横排，等宽；单位名放格子下方而不是上方，省一行高度 */
+.af-duration {
+  display: flex;
+  gap: 6px;
+}
+.af-duration-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.af-duration-cell :deep(.t-input-number) {
+  width: 100%;
+}
+.af-duration-unit {
+  font-size: 11px;
+  color: #888;
+  line-height: 1;
+}
+/* 录制下拉 + 刷新按钮：下拉吃掉剩余宽度，按钮窄且不换行 */
+.af-rec-pick {
+  display: flex;
+  gap: 6px;
 }
 </style>

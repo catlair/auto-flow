@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { nextTick, ref, watch } from "vue";
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -43,6 +43,20 @@ async function onToggleRun() {
 }
 
 const typeLabel = (t: string) => store.nodeDefsByName[t]?.name ?? t;
+
+/** 轨迹列表的 DOM 句柄：新条目进来后要把它滚到底，否则永远停在最早那几步。 */
+const traceList = ref<HTMLElement | null>(null);
+const fmtTime = (t: number) =>
+  new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
+const fmtDelta = (ms: number) => (ms > 0 ? "+" + (ms / 1000).toFixed(1) + "s" : "");
+watch(
+  () => store.runTrace.length,
+  async () => {
+    await nextTick();
+    const el = traceList.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  },
+);
 </script>
 
 <template>
@@ -65,14 +79,27 @@ const typeLabel = (t: string) => store.nodeDefsByName[t]?.name ?? t;
     </div>
     <div v-if="store.running" class="af-run-state">
       <div class="af-run-node">
-        <span class="af-dot pulse" /> 运行中：{{ typeLabel(store.runNodeType) || "…" }}
+        <span class="af-dot pulse" /> 运行中：{{ store.runNodeName || typeLabel(store.runNodeType) || "…" }}
       </div>
+      <div v-if="store.runNodeDetail" class="af-run-detail">{{ store.runNodeDetail }}</div>
       <t-progress
         v-if="store.runProgress.total > 0"
         :percentage="Math.round((store.runProgress.done / store.runProgress.total) * 100)"
         size="small"
         theme="line"
       />
+    </div>
+    <div v-if="store.runTrace.length" class="af-run-trace">
+      <div class="af-trace-head">
+        {{ store.running ? "运行轨迹" : "上次运行" }} · {{ store.runTrace.length }} 步
+      </div>
+      <div ref="traceList" class="af-trace-list">
+        <div v-for="(it, i) in store.runTrace" :key="i" class="af-trace-row">
+          <span class="af-trace-time">{{ fmtTime(it.t) }}</span>
+          <span class="af-trace-name" :title="it.detail">{{ it.name }}</span>
+          <span class="af-trace-delta">{{ fmtDelta(it.deltaMs) }}</span>
+        </div>
+      </div>
     </div>
     <t-button block :theme="store.running ? 'danger' : 'primary'" @click="onToggleRun">
       {{ store.running ? "■ 停止运行 (F10)" : "▶ 运行 (F10)" }}
@@ -107,6 +134,57 @@ const typeLabel = (t: string) => store.nodeDefsByName[t]?.name ?? t;
   50% {
     opacity: 0.3;
   }
+}
+.af-run-detail {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #4a6fa5;
+  word-break: break-all;
+}
+.af-run-trace {
+  margin: 0 0 8px;
+  border: 1px solid #e6ebf2;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.af-trace-head {
+  padding: 5px 8px;
+  font-size: 11px;
+  color: #666;
+  background: #f7f9fc;
+  border-bottom: 1px solid #e6ebf2;
+}
+.af-trace-list {
+  max-height: 190px;
+  overflow-y: auto;
+  font-size: 11px;
+}
+.af-trace-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 8px;
+  border-bottom: 1px solid #f2f5f9;
+}
+.af-trace-row:last-child {
+  border-bottom: none;
+}
+.af-trace-time {
+  color: #999;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.af-trace-name {
+  flex: 1 1 auto;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.af-trace-delta {
+  flex: 0 0 auto;
+  color: #0a7a3f;
+  font-variant-numeric: tabular-nums;
 }
 .af-hotkeys {
   margin-top: 8px;

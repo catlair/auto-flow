@@ -17,7 +17,10 @@ class ParamDef:
                  show_if: Optional[dict] = None, pick: bool = False) -> None:
         self.key = key
         self.label = label
-        self.ptype = ptype          # text / int / float / bool / select / events / point / keys / file
+        # text / int / float / bool / select / events / point / keys / file
+        # / duration（毫秒总数，面板上是「时/分/秒/毫秒」四格）
+        # / time（"HH:MM:SS"，面板上是时刻选择器）
+        self.ptype = ptype
         self.default = default
         self.options = options or []
         self.tooltip = tooltip

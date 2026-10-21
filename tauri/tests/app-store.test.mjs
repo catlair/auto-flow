@@ -41,12 +41,16 @@ const compiled = compileTs("../src/stores/app.ts");
 const flowPorts = loadModule("../src/flow/ports.ts");
 // 真实的环检测模块（同样无依赖；store.addEdge 用它算 cycleEdges）
 const flowCycle = loadModule("../src/flow/cycle.ts");
+// 真实的工作流库纯逻辑模块（无依赖；store 用它的 normalizeMetas / wfExportName）
+const flowWorkflow = loadModule("../src/flow/workflow.ts");
 const { createPinia } = require("pinia");
 
-function setup(request) {
+function setup(request, dialog = {}) {
   const calls = [];
   const notifyHandlers = new Set();
   const statusHandlers = new Set();
+  const invokes = [];
+  const listeners = [];
   const defaultRequest = async (method) => {
     switch (method) {
       case "app.info":
@@ -55,6 +59,13 @@ function setup(request) {
         return [];
       case "workflow.current":
         return { workflow: workflow(), running: false, recording: false };
+      case "workflow.new":
+        // path: null 是**真实**的后端取值（新建后还没落盘），别改成 ""
+        return { workflow: workflow(), path: null, lib_id: "", dirty: false };
+      case "workflow.save":
+        return { path: "/tmp/wf/a1.json", lib_id: "a1", dirty: false, item: null };
+      case "workflow.lib.list":
+        return { items: [], current: "", dirty: false, dir: "/tmp/wf" };
       case "schedule.get":
         return { schedule: null, nextFire: "" };
       case "hotkey.set":
@@ -90,9 +101,22 @@ function setup(request) {
     if (name === "@/rpc/client") return { rpc, errMessage: (e) => String(e?.message ?? e) };
     if (name === "@/flow/ports") return flowPorts;
     if (name === "@/flow/cycle") return flowCycle;
+    if (name === "@/flow/workflow") return flowWorkflow;
+    // `invoke` 记下来：窗口/托盘类命令没有 RPC 帧可看，只能这样断言"到底发了什么"。
+    // 真跑 Node 时它本来就会抛（window 未定义），所以替身不影响其它用例的语义。
+    if (name === "@tauri-apps/api/core") {
+      return { invoke: (cmd, args) => { invokes.push({ cmd, args }); return Promise.resolve(); } };
+    }
+    if (name === "@tauri-apps/api/event") {
+      return { listen: async (ev, h) => { listeners.push({ ev, h }); return () => {}; } };
+    }
     if (name === "@tauri-apps/plugin-dialog") {
-      return { open: () => { throw new Error("禁止打开系统对话框"); },
-        save: () => { throw new Error("禁止打开系统对话框"); } };
+      // 默认**禁止**打开系统对话框：真弹出来会挂住测试。需要走导入/导出的用例
+      // 显式传 dialog 替身，让「到底传了什么 defaultPath」可断言。
+      return {
+        open: dialog.open ?? (() => { throw new Error("禁止打开系统对话框"); }),
+        save: dialog.save ?? (() => { throw new Error("禁止打开系统对话框"); }),
+      };
     }
     return require(name);
   }, module, module.exports);
@@ -102,7 +126,10 @@ function setup(request) {
     mod: module.exports,
     ports: flowPorts,
     calls,
+    invokes,
+    listeners,
     emitStatus: (up, detail = "") => statusHandlers.forEach((h) => h(up, detail)),
+    emitTauri: (ev, payload) => listeners.filter((l) => l.ev === ev).forEach((l) => l.h(payload)),
     methods: () => calls.map((c) => c.method),
   };
 }
@@ -857,3 +884,383 @@ test("空 message 的 log.warning 不产生空条目、不动横幅", () => {
   assert.equal(store.backendNotes.length, 0);
   assert.equal(store.banner, "");
 });
+
+// --------------------------------------------------------------------------- //
+// 托盘（菜单栏）
+//
+// 窗口藏起来之后，托盘是**唯一**能看见/操作的地方，所以这里的错都不会当场
+// 报错，而是表现为「点菜单没反应」「角标一直亮着」。其中事件名/命令名是
+// **跨语言协议**：Rust 发什么、前端听什么，两边写错都不会编译失败。
+// --------------------------------------------------------------------------- //
+const rustSrc = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+const appVueSrc = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+
+test("托盘状态同步：只有真的翻转才发 IPC", () => {
+  const { store, invokes } = setup();
+  store.recording = false;
+  // 第一推：recording 是 false，与 trayRecording(null) 不同 → 推一次
+  store.syncTray();
+  assert.deepEqual(invokes.at(-1), {
+    cmd: "af_tray_state",
+    args: { recording: false },
+  });
+  // 再推同样的值不该再发。录制中事件流每秒造成几十次状态变更，去重不能省。
+  store.syncTray();
+  store.syncTray();
+  assert.equal(invokes.length, 1, "重复状态不该重复发 IPC");
+
+  // 真翻转了要推
+  store.recording = true;
+  store.syncTray();
+  assert.equal(invokes.length, 2);
+  assert.equal(invokes.at(-1).args.recording, true);
+});
+
+test("隐藏到托盘：发 af_hide_window", () => {
+  const { store, invokes } = setup();
+  store.hideToTray();
+  assert.equal(invokes.at(-1).cmd, "af_hide_window");
+});
+
+test("托盘事件名与命令名，前后端逐字一致", () => {
+  // 事件名：Rust 在**录制开关那一支**里 emit 的名字 ↔ 前端 listen(...) 的名字。
+  // 只取这一支、不扫全文件：`set_status` 里还有个 `app.emit("rpc_up")`，
+  // 扫第一个匹配会取到它，于是这条测试变成验错对象、永远是绿的。
+  const arm = /MENU_TOGGLE_RECORD\s*=>\s*\{([\s\S]*?)\n\s*\}/.exec(rustSrc);
+  assert.ok(arm, "找不到录制开关的处理分支");
+  const emitted = /app\.emit\(\s*"([^"]+)"/.exec(arm[1]);
+  assert.ok(emitted, "录制开关没有 emit 事件");
+  assert.ok(
+    storeSrcIncludes(`listen<string>("${emitted[1]}"`),
+    `前端没有监听 ${emitted[1]}`
+  );
+
+  // 命令名：Rust `#[tauri::command] fn X` ↔ generate_handler 注册 ↔ 前端 invoke
+  const handler = /generate_handler!\[([\s\S]*?)\]/.exec(rustSrc);
+  assert.ok(handler, "找不到 generate_handler");
+  for (const cmd of ["af_tray_state", "af_hide_window"]) {
+    assert.match(rustSrc, new RegExp(`fn ${cmd}\\(`), `Rust 缺 ${cmd}`);
+    assert.ok(handler[1].includes(cmd), `generate_handler 里缺 ${cmd}`);
+    assert.ok(storeSrcIncludes(`invoke("${cmd}"`), `前端没有调用 ${cmd}`);
+  }
+});
+
+test("关闭窗口只隐藏不退出，且在 setup 里建了托盘", () => {
+  // 点 × 若真的退掉，定时任务/录制/正在跑的回放会无声断在半路
+  assert.match(rustSrc, /CloseRequested\s*\{\s*api/, "关窗没有拦截");
+  assert.match(rustSrc, /api\.prevent_close\(\)/, "关窗没有 prevent_close");
+  assert.match(rustSrc, /window\.hide\(\)/, "关窗没有隐藏");
+  // 托盘创建失败不能阻断启动（它只是"收起来"的入口）
+  assert.match(rustSrc, /if let Err\([^)]*\)\s*=\s*setup_tray\(&handle\)/, "托盘失败没有兜底");
+  // 窗口藏起来后点 Dock：系统发 Reopen，而 Tauri **不会**自动把窗口叫回来。
+  // 不接这一下，用户点 Dock 会"什么都没发生"。
+  assert.match(rustSrc, /RunEvent::Reopen/, "没接 Reopen：点 Dock 唤不回窗口");
+  // `Reopen` 只在 macOS 上存在，所以那一支必须被 cfg 门住，否则其它平台编译不过
+  assert.match(
+    rustSrc,
+    /#\[cfg\(target_os = "macos"\)\]\s*\n\s*if let tauri::RunEvent::Reopen/,
+    "Reopen 那一支没有 macos 门控（其它平台编译不过）"
+  );
+  // `tray-icon` 是非默认 feature：不开它 `tauri::tray` 整个模块编译期就不存在
+  assert.match(
+    readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
+    /features\s*=\s*\[[^\]]*"tray-icon"/,
+    "Cargo 里没开 tray-icon feature"
+  );
+});
+
+test("托盘菜单里有恢复窗口和退出，且录制开关不顺手弹出窗口", () => {
+  for (const text of ["显示主窗口", "退出 Auto Flow", "开始录制"]) {
+    assert.ok(rustSrc.includes(text), `托盘子菜单缺「${text}」`);
+  }
+  // 录制开关**不**调 show_main：把窗口收起来在别处操作正是托盘存在的意义
+  const arm = /MENU_TOGGLE_RECORD\s*=>\s*\{([\s\S]*?)\n\s*\}/.exec(rustSrc);
+  assert.ok(arm, "找不到录制开关的处理分支");
+  assert.ok(!arm[1].includes("show_main"), "录制开关不该把窗口弹出来");
+});
+
+test("界面上有「隐藏到托盘」的入口（否则用户不知道 × 只是收起）", () => {
+  assert.ok(appVueSrc.includes("hideToTray"), "界面没有隐藏入口");
+});
+
+test("托盘图标有没有出现在菜单栏、角标记没记上：只能靠运行期日志回答", () => {
+  // 「图标在不在菜单栏里」「录制中角标有没有真的设上去」都是**问不到**的问题：
+  // 产物断言里命令名/id 被 LLVM 内联成立即数比较（二进制搜不到，见 setup_tray 的注释），
+  // 屏幕截图又受显示器休眠/锁屏影响。唯一能自动化回答它们的是运行期日志，所以这几行是
+  // **功能的一部分**，不是调试残留——被删掉时用户报「找不到图标」就没有现场可查了。
+  //
+  // 建成功必须留一行：托盘建失败只是"图标没出现"，与"根本没建"在日志里同样空白。
+  assert.match(rustSrc, /log_line\("托盘已创建/, "建托盘成功没留日志：失败与没建分不清");
+
+  // rect 必须取自托盘本体。`TrayIcon::rect()` 由 AppKit 给出，None 就是没有状态项；
+  // 自造字段（窗口位置、缓存坐标）在图标其实不存在时也会给个数，等于没验。
+  assert.match(rustSrc, /tray\.rect\(\)/, "没有 tray.rect()：问不到图标在不在菜单栏");
+
+  // 状态行必须**同时**带上：推来的状态、打算设的角标、三个 set_* 的结果。
+  // 只有 rect 的话，「图标在、但角标没设上去」（set_title 静默失败）与「图标不在」
+  // 在日志里长得一模一样，等于把最需要区分的两种故障混成了一种。
+  for (const [needle, why] of [
+    ["托盘状态项 recording={recording}", "状态行没带推来的 recording：分不清该不该有角标"],
+    ["角标={badge:?}", "状态行没带打算设的角标值：看不出设的是不是错的"],
+    ["set_title={badge_ok}", "状态行没带 set_title 的结果：角标静默失败会被当成正常"],
+    ["set_tooltip={tip_ok}", "状态行没带 set_tooltip 的结果"],
+    ["set_menu={menu_ok:?}", "状态行没带菜单文案改写的结果"],
+  ]) {
+    assert.ok(rustSrc.includes(needle), why);
+  }
+  assert.match(
+    rustSrc,
+    /log_line\(&format!\(\s*\n?\s*"托盘状态项 recording=/,
+    "状态行没进日志：用户报「找不到图标」时没有现场"
+  );
+
+  // 光有字段名不够：把结果写死成 `true` 也能让上面全部通过，而那正是"谎报成功"。
+  // 所以要求这三个值**取自真实调用**的返回值。
+  assert.match(
+    rustSrc,
+    /let badge_ok = tray\.set_title\(badge\)\.is_ok\(\);/,
+    "角标结果不是取自 set_title 的返回值：静默失败会被谎报成成功"
+  );
+  assert.match(
+    rustSrc,
+    /let tip_ok = tray\.set_tooltip\(Some\(tip\)\)\.is_ok\(\);/,
+    "工具提示结果不是取自 set_tooltip 的返回值"
+  );
+  assert.match(
+    rustSrc,
+    /\.map\(\|h\| h\.toggle\.set_text\(text\)\.is_ok\(\)\)/,
+    "菜单文案结果不是取自 set_text 的返回值"
+  );
+
+  // 角标取值必须**两边都写对**：录制中设上、非录制时清掉。
+  // 只设不清的话角标会一直亮着 → 用户以为还在录，实际早就停了（比没有角标更坏）。
+  const badgeArm = /let \(tip, badge\) = if recording \{([\s\S]*?)\} else \{([\s\S]*?)\};/.exec(
+    rustSrc
+  );
+  assert.ok(badgeArm, "找不到角标取值分支");
+  assert.match(badgeArm[1], /"●"/, "录制中那一支没设角标（录制时看不到任何提示）");
+  assert.match(badgeArm[2], /\bNone\b/, "非录制那一支没清角标：会一直亮着，像是还在录");
+
+  // `tray_by_id` 返回 None 是**另一种**故障（build 成功但 id 被改/被移出），
+  // 与"图标被系统藏起来"表现一样，必须留下一行区分得开的记录，且要带上
+  // recording —— 这一支的两侧表现（该有角标时没有 / 本不该有）完全不同。
+  assert.match(
+    rustSrc,
+    /log_line\(&format!\(\s*\n?\s*"托盘状态项查不到（tray_by_id 返回 None）recording=/,
+    "句柄查不到没有单独日志：与图标不显示分不开"
+  );
+});
+
+function storeSrcIncludes(needle) {
+  return readFileSync(new URL("../src/stores/app.ts", import.meta.url), "utf8").includes(needle);
+}
+
+// --------------------------------------------------------------------------- #
+// 工作流库（后端 core/workflow_lib.py）
+// --------------------------------------------------------------------------- #
+const libList = (extra = {}) => ({
+  items: [{ id: "a1", name: "甲", node_count: 2, edge_count: 1, updated_at: "2026-09-15 11:20:33" }],
+  current: "",
+  dirty: false,
+  dir: "/tmp/wf",
+  ...extra,
+});
+
+test("新建把 force 原样送过去（前端的「丢弃改动」靠它）", async () => {
+  const { store, calls } = setup();
+  await store.newWorkflow();
+  await store.newWorkflow(true);
+  assert.deepEqual(
+    calls.filter((c) => c.method === "workflow.new"),
+    [
+      { method: "workflow.new", params: { force: false } },
+      { method: "workflow.new", params: { force: true } },
+    ]
+  );
+});
+
+test("新建之后不能沿用上一份的库 id", async () => {
+  // 后端给的 path 是 **null**（还没落盘）。若用 `typeof cur.path === "string"` 判断，
+  // 这一帧会被整个跳过——界面仍显示着上一份的库 id，用户按「保存」时以为存的是
+  // 新那份，实际覆盖掉了刚才打开的那份流程。
+  const { store } = setup();
+  store.workflowLibCurrent = "上一份";
+  store.workflowPath = "/tmp/wf/old.json";
+  store.workflowDirty = true;
+  await store.newWorkflow();
+  assert.equal(store.workflowLibCurrent, "");
+  assert.equal(store.workflowPath, "");
+  assert.equal(store.workflowDirty, false);
+});
+
+test("保存把 path / lib_id / dirty 抄进 store，并立刻重拉库列表", async () => {
+  const { store, calls } = setup((m) => {
+    if (m === "workflow.save")
+      return Promise.resolve({ path: "/tmp/wf/a1.json", lib_id: "a1", dirty: false, item: null });
+    if (m === "workflow.lib.list") return Promise.resolve(libList({ current: "a1" }));
+    return Promise.resolve({});
+  });
+  store.workflowDirty = true;
+  await store.saveWorkflow();
+  assert.equal(store.workflowPath, "/tmp/wf/a1.json");
+  assert.equal(store.workflowLibCurrent, "a1");
+  assert.equal(store.workflowDirty, false);
+  assert.equal(store.workflowLib.length, 1);
+  // 首次保存会在库里**新建**一条：不重拉的话用户接着打开「工作流库」
+  // 会发现刚存的那份不在列表里，然后以为没存上、再存一遍
+  assert.deepEqual(calls.map((c) => c.method), ["workflow.save", "workflow.lib.list"]);
+});
+
+test("打开库里的一条：应用工作流 + 位置，并清掉选中", async () => {
+  const { store, calls } = setup((m) =>
+    m === "workflow.lib.open"
+      ? Promise.resolve({
+          workflow: workflow([{ type: "delay", params: {}, enabled: true }]),
+          path: "/tmp/wf/a1.json",
+          lib_id: "a1",
+          dirty: false,
+          running: false,
+          recording: false,
+        })
+      : Promise.resolve({})
+  );
+  store.selectedIndex = 2;
+  await store.openWorkflowFromLib("a1");
+  assert.equal(store.workflowLibCurrent, "a1");
+  assert.equal(store.workflowPath, "/tmp/wf/a1.json");
+  assert.equal(store.workflowDirty, false);
+  assert.equal(store.workflow.nodes.length, 1);
+  assert.equal(store.selectedIndex, -1);
+  assert.deepEqual(calls, [{ method: "workflow.lib.open", params: { id: "a1", force: false } }]);
+});
+
+test("运行中不许从库里切一份跑（否则会把正在跑的这份停掉）", async () => {
+  // toggleRun 按 running 决定「启动」还是「停止」：不拦的话用户以为在启动
+  // 另一份，实际把正在跑的停了。拦下来时**一个请求都不该发**。
+  const { store, calls } = setup();
+  store.running = true;
+  await assert.rejects(() => store.runWorkflowFromLib("a1"), /正在运行中/);
+  assert.deepEqual(calls, []);
+});
+
+test("更名当前那份要同步标题栏，更名别人那份不能动标题栏", async () => {
+  const { store, calls } = setup((m) => {
+    if (m === "workflow.lib.rename")
+      return Promise.resolve({ item: { id: "a1", name: "新名字" }, current: "a1", dirty: false });
+    if (m === "workflow.lib.list") return Promise.resolve(libList({ current: "a1" }));
+    return Promise.resolve({});
+  });
+  store.workflowLibCurrent = "a1";
+  await store.renameWorkflowInLib("a1", "新名字");
+  assert.equal(store.workflow.name, "新名字");
+  assert.deepEqual(calls.map((c) => c.method), ["workflow.lib.rename", "workflow.lib.list"]);
+
+  const other = setup((m) =>
+    m === "workflow.lib.rename"
+      ? Promise.resolve({ item: { id: "b2", name: "别人的" }, current: "a1", dirty: false })
+      : Promise.resolve(libList())
+  );
+  other.store.workflowLibCurrent = "a1";
+  await other.store.renameWorkflowInLib("b2", "别人的");
+  assert.equal(other.store.workflow.name, "未命名", "改别人的名字动到了当前这份");
+});
+
+test("删除后清空当前库 id（文件没了，画布还在）", async () => {
+  const { store, calls } = setup((m) => {
+    if (m === "workflow.lib.delete")
+      return Promise.resolve({
+        deleted: "a1",
+        trash: "/tmp/trash/a1.json",
+        current: "",
+        dirty: true,
+      });
+    if (m === "workflow.lib.list")
+      return Promise.resolve(libList({ items: [], current: "", dirty: true }));
+    return Promise.resolve({});
+  });
+  store.workflowLibCurrent = "a1";
+  store.workflowDirty = false;
+  await store.deleteWorkflowFromLib("a1");
+  assert.equal(store.workflowLibCurrent, "");
+  // 画布上的内容没被清（后端只清路径），所以现在是「有未保存的改动」
+  assert.equal(store.workflowDirty, true);
+  assert.deepEqual(calls.map((c) => c.method), ["workflow.lib.delete", "workflow.lib.list"]);
+});
+
+test("导出：默认文件名洗过，取消时一个请求都不发", async () => {
+  let opts = null;
+  const { store, calls } = setup(
+    (m) =>
+      Promise.resolve(
+        m === "workflow.lib.list"
+          ? libList({
+              current: "a1",
+              // 名字里带 `/`：直接用它会成为 defaultPath，而保存对话框会把文件
+              // **悄悄写进一个子目录**，用户以为自己只是沿用了原来的名字
+              items: [{ id: "a1", name: "登录/测试", node_count: 0, edge_count: 0 }],
+            })
+          : {}
+      ),
+    { save: (o) => { opts = o; return Promise.resolve("/tmp/out.json"); } }
+  );
+  await store.refreshWorkflowLib();
+  const p = await store.exportWorkflow("a1");
+  assert.equal(p, "/tmp/out.json");
+  assert.equal(opts.defaultPath, "登录_测试.json");
+  assert.deepEqual(calls.find((c) => c.method === "workflow.lib.export").params, {
+    path: "/tmp/out.json",
+    id: "a1",
+  });
+
+  const cancelled = setup(() => Promise.resolve({}), { save: () => Promise.resolve(null) });
+  assert.equal(await cancelled.store.exportWorkflow(), "");
+  assert.deepEqual(cancelled.calls, [], "取消之后还发了请求");
+});
+
+test("导入：取消不发请求；成功时重拉列表且不切换当前工作流", async () => {
+  const { store, calls } = setup(
+    (m) =>
+      Promise.resolve(
+        m === "workflow.lib.import"
+          ? { item: { id: "new1", name: "导进来的" }, items: [] }
+          : libList({ current: "a1" })
+      ),
+    { open: () => Promise.resolve("/tmp/in.json") }
+  );
+  store.workflowLibCurrent = "a1";
+  assert.equal(await store.importWorkflowFromFile(), "new1");
+  assert.deepEqual(calls.map((c) => c.method), ["workflow.lib.import", "workflow.lib.list"]);
+  assert.equal(store.workflowLibCurrent, "a1", "导入把当前工作流换掉了");
+
+  const cancelled = setup(() => Promise.resolve({}), { open: () => Promise.resolve(null) });
+  assert.equal(await cancelled.store.importWorkflowFromFile(), "");
+  assert.deepEqual(cancelled.calls, []);
+});
+
+test("库列表遇到坏数据不崩，也不把当前库 id 弄丢", async () => {
+  const { store } = setup((m) =>
+    Promise.resolve(
+      m === "workflow.lib.list"
+        ? { items: "not-a-list", current: "a1", dirty: "yes", dir: 5 }
+        : {}
+    )
+  );
+  store.workflowDirty = true;
+  await store.refreshWorkflowLib();
+  assert.deepEqual(store.workflowLib, []);
+  assert.equal(store.workflowLibCurrent, "a1");
+  assert.equal(store.workflowLibDir, "5");
+  assert.equal(store.workflowDirty, true, "dirty 不是布尔值就不该动它");
+});
+
+test("dirty 只在后端给了布尔值时才覆盖", () => {
+  const { store } = setup();
+  store.workflowDirty = true;
+  // 重连前缓存的旧帧 / 旧版后端都不带 dirty，`!!undefined` 会把标记清掉，
+  // 表现为「改了一堆东西，标记却忽然没了」
+  notify(store, "workflow.changed", workflow());
+  assert.equal(store.workflowDirty, true, "缺 dirty 的帧把标记清掉了");
+  notify(store, "workflow.changed", { ...workflow(), dirty: false });
+  assert.equal(store.workflowDirty, false);
+});
+

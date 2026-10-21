@@ -9,7 +9,14 @@ import ts from "typescript";
 // 它们没有 Vue 依赖，可以直接编译求值，不需要 WebView。
 const require = createRequire(import.meta.url);
 
-function loadTs(relPath) {
+/**
+ * 编译并求值一个 TS 模块。
+ *
+ * `deps` 是**同项目模块**的替身：它们在 src 下，是 `.ts` 而不是 `.js`，
+ * Node 的 require 认不出来。谁依赖谁就显式列出来，比给 loader 装一套路径解析
+ * 规则简单，也让「这个模块依赖了谁」在测试里看得见。
+ */
+function loadTs(relPath, deps = {}) {
   const src = readFileSync(new URL(relPath, import.meta.url), "utf8");
   const out = ts.transpileModule(src, {
     compilerOptions: {
@@ -21,12 +28,19 @@ function loadTs(relPath) {
   const fn = runInThisContext(`(function(require, module, exports) {\n${out}\n})`, {
     filename: relPath.replace(/[^\w]/g, "_") + ".cjs",
   });
-  fn((name) => require(name), mod, mod.exports);
+  fn((name) => (name in deps ? deps[name] : require(name)), mod, mod.exports);
   return mod.exports;
 }
 
 const ports = loadTs("../src/flow/ports.ts");
-const summary = loadTs("../src/flow/summary.ts");
+// summary 对 duration / recording 都是**值**导入：时长参数在卡片上要显示成
+// 「1时30分」而不是毫秒总数，引用录制库的节点要显示录制名而不是一串 id。
+// 两者自己都无依赖（recording 只用到 duration），所以按依赖顺序递进去。
+const durationMod = loadTs("../src/flow/duration.ts");
+const summary = loadTs("../src/flow/summary.ts", {
+  "./duration": durationMod,
+  "./recording": loadTs("../src/flow/recording.ts", { "./duration": durationMod }),
+});
 
 // --------------------------------------------------------------------------- //
 // 与后端 core/events.py 的常量对齐
@@ -241,6 +255,61 @@ test("事件数组摘要显示条数——本地真源是数组，对外视图�
   assert.equal(summary.nodeSummary(node("replay", { events: { count: 7 } }), defs), "7 个事件");
 });
 
+test("空事件数组不显示「0 个事件」", () => {
+  // 引用录制库的节点把 events 存成 []（事件在那条录制里）。显示「0 个事件」会让
+  // 卡片看起来像「这个节点是空的」，而它其实引用着一段完整录制。
+  assert.equal(summary.nodeSummary(node("replay", { events: [] }), defs), "");
+  assert.equal(summary.nodeSummary(node("replay", { events: { count: 0 } }), defs), "");
+});
+
+test("引用录制库的节点：卡片上显示录制名，不显示 id", () => {
+  const rdefs = {
+    record_replay: {
+      type: "record_replay",
+      name: "录制回放",
+      order: 40,
+      common_params: [],
+      params: [
+        { key: "source", label: "录制来源", ptype: "select", default: "内嵌" },
+        { key: "recording_id", label: "选择录制", ptype: "recording" },
+        { key: "events", label: "事件序列", ptype: "events" },
+      ],
+    },
+  };
+  // 后端 _public_node 会跟着 id 补一个 recording_name
+  assert.equal(
+    summary.nodeSummary(
+      node("record_replay", { source: "录制库", recording_id: "20260915-190433-a1b2c3", recording_name: "登录群聊", events: [] }),
+      rdefs
+    ),
+    "录制库 · 登录群聊"
+  );
+  // 名字没拿到（那条已被删 / 定义刚拉到）时不能退化成显示 id——
+  // 一串 20260915-190433-a1b2c3 比不显示更糟：用户会以为自己认得出来。
+  assert.equal(
+    summary.nodeSummary(
+      node("record_replay", { source: "录制库", recording_id: "20260915-190433-a1b2c3", events: [] }),
+      rdefs
+    ),
+    "录制库"
+  );
+});
+
+test("条件组摘要走通用规则，一眼能看出「几项、怎么组合」", () => {
+  // 刻意**不给**条件组写专用格式化：summary 的设计就是与类型无关，专用表会
+  // 随着新增节点悄悄过时（模块头注释里写明了这个取舍）。这条用例锁的是
+  // 「通用规则对条件组给出的摘要够用」——前两个参数正好是项数与组合方式。
+  const s = summary.nodeSummary(
+    node("condition_group", {
+      cond_count: 2,
+      combine: "全部成立(与)",
+      cond1_kind: "图像存在",
+    }),
+    defs
+  );
+  assert.ok(s.startsWith("2 · 全部成立(与)"), s);
+});
+
 test("摘要过长会截断，不会把节点卡片撑破", () => {
   const long = "x".repeat(200);
   const s = summary.nodeSummary(node("delay", { ms: long }), defs);
@@ -250,4 +319,45 @@ test("摘要过长会截断，不会把节点卡片撑破", () => {
 
 test("参数值里的空串与空白不会被当成有效内容", () => {
   assert.equal(summary.nodeSummary(node("delay", { ms: "   " }), defs), "");
+});
+
+// --------------------------------------------------------------------------- //
+// duration 参数的摘要
+//
+// 后端 delay 的 `ms` ptype 是 duration，存的是**毫秒总数**。参数面板上它是
+// 「时/分/秒/毫秒」四格，卡片上只印一个 5400000 谁也读不出来——换控件把输入
+// 变方便了，别把卡片反而变难懂。格式化放在 flow/duration.ts，与面板同一份实现。
+// --------------------------------------------------------------------------- //
+const durDefs = {
+  d: {
+    type: "d",
+    name: "d",
+    order: 1,
+    common_params: [],
+    params: [{ key: "ms", label: "等待时长", ptype: "duration" }],
+  },
+};
+const durNode = (ms) => ({ type: "d", params: { ms }, enabled: true, uid: "u" });
+
+test("时长参数在卡片上显示成「1时30分」，而不是毫秒总数", () => {
+  assert.equal(summary.nodeSummary(durNode(5400000), durDefs), "1时30分");
+  assert.equal(summary.nodeSummary(durNode(3600000), durDefs), "1时");
+  assert.equal(summary.nodeSummary(durNode(500), durDefs), "500毫秒");
+  // 0 是合法值（「不等待」），不能被当成空值跳过
+  assert.equal(summary.nodeSummary(durNode(0), durDefs), "0毫秒");
+});
+
+test("时长摘要只由 ptype 决定，与节点类型无关", () => {
+  // summary.ts 刻意做成「与节点类型无关」。有人为了 delay 顺手加一张按 type
+  // 分派的格式化表时，这条会挡住——那张表会随着新节点悄悄过时。
+  const other = {
+    x: {
+      type: "x",
+      name: "x",
+      order: 1,
+      common_params: [],
+      params: [{ key: "ms", label: "随便什么", ptype: "duration" }],
+    },
+  };
+  assert.equal(summary.nodeSummary({ type: "x", params: { ms: 90000 } }, other), "1分30秒");
 });

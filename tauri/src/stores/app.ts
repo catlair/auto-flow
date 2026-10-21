@@ -10,7 +10,11 @@ import type {
 import { PORT_OUT, DEFAULT_TARGET_SIDE, liveEdges } from "@/flow/ports";
 import type { GraphEdge } from "@/flow/ports";
 import { cycleEdges } from "@/flow/cycle";
+import type { RecMeta } from "@/flow/recording";
+import { normalizeMetas, wfExportName } from "@/flow/workflow";
+import type { WorkflowMeta } from "@/flow/workflow";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const PROTOCOL_VERSION = 1;
@@ -36,6 +40,28 @@ export type BackendNote = {
 };
 
 type CapturedKeyHandler = (name: string) => void;
+
+/**
+ * 运行轨迹里的一条：**哪一步、叫什么、隔了多久**。
+ *
+ * 为什么要有它：`run.node` 只带类型，界面上只能显示「找文字点击」——用户建了六个
+ * 点击节点，根本分不清现在是哪一个，于是每次卡住都得去翻日志。后端现在把节点的
+ * 自定义名和参数摘要一起发过来（见 controller.node_digest），这里攒成一条时间线，
+ * 「现在在干什么」和「刚才走到哪一步」就都能直接看。
+ */
+export type RunTraceItem = {
+  /** 本地时间戳（ms），只用于显示与算间隔 */
+  t: number;
+  /** 节点自定义名（没起名时回落成类型名） */
+  name: string;
+  /** 参数摘要，如「文字「继续」」「20.0s」「判据：A / B」 */
+  detail: string;
+  /** 距上一步的毫秒数（第一条为 0） */
+  deltaMs: number;
+};
+
+/** 轨迹上限：一次长跑几千步，全留着会一直涨内存，也翻不动。 */
+export const RUN_TRACE_LIMIT = 200;
 
 /**
  * 实际的起始节点 uid——**必须与后端 `Executor.entry_uid` 完全一致**，
@@ -105,14 +131,67 @@ export const useAppStore = defineStore("app", {
     schedule: null as any,
     nextFire: "",
     recordBuffer: [] as any[],
+    /**
+     * 录制库列表（**不含 events**，见后端 `recording_lib.list_meta`）。
+     *
+     * 放在 store 而不是 RecordPanel 里：参数面板的「选择录制」下拉也要用同一份，
+     * 两处各拉一次会出现「库里刚存的那条在参数面板里选不到」。
+     */
+    recordingLib: [] as RecMeta[],
+    /**
+     * 当前编辑缓冲对应库里的哪一条（后端 `_lib_info()`）。
+     * `dirty=true` = 内存里的序列已经和库里那份不一样了（改过但没更新）。
+     * `editing=true` = 正在「直接编辑」这一条（每次编辑自动写回库里）。
+     */
+    recordingLibCurrent: null as {
+      id: string;
+      name: string;
+      dirty: boolean;
+      editing?: boolean;
+    } | null,
+    /** 库目录路径，面板上显示出来方便用户自己去备份/拷走。 */
+    recordingLibDir: "" as string,
+    /**
+     * 工作流库列表（**不含 nodes/edges**，见后端 `workflow_lib.list_meta`）。
+     *
+     * 与 `recordingLib` 同理由放在 store：菜单的未保存标记、库弹层、定时运行里
+     * 选工作流都读同一份，各拉各的会出现「刚存的那份在下拉里选不到」。
+     */
+    workflowLib: [] as WorkflowMeta[],
+    /** 当前这份对应库里哪一条（后端 `id_of_path`）。空串 = 还没入库。 */
+    workflowLibCurrent: "" as string,
+    /** 工作流库目录，弹层里显示出来方便用户自己备份/拷走。 */
+    workflowLibDir: "" as string,
+    /** 当前工作流在磁盘上的路径（空 = 还没落盘过）。 */
+    workflowPath: "" as string,
+    /**
+     * 有没有未保存的改动。**真源在后端**（`workflow_dirty()`，判据是版本号），
+     * 这里只是镜像——与 `running` / `recording` 同样的处理。
+     * 前端自己记「我改过没有」是不行的：定时任务会直接在后台换掉整棵工作流树，
+     * 那条路上前端什么都没发过。
+     */
+    workflowDirty: false as boolean,
     runProgress: { done: 0, total: 0 } as { done: number; total: number },
     runNodeType: "" as string,
+    /** 当前节点的自定义名与参数摘要（后端 run.node 带过来） */
+    runNodeName: "" as string,
+    runNodeDetail: "" as string,
+    /** 本次运行的节点轨迹（时间正序，最多 RUN_TRACE_LIMIT 条；跑完保留供回看） */
+    runTrace: [] as RunTraceItem[],
     banner: "" as string,
     bannerKind: "ok" as "ok" | "warn" | "error",
     // key.captured 订阅（ParamsPanel 捕获键时接收回填）
     _captured: new Set<CapturedKeyHandler>(),
     // 合并并发握手（首连与 rpc_up 事件可能同时触发）
     _handshaking: false,
+    /**
+     * 最近一次**同步给托盘**的录制态。
+     *
+     * 托盘菜单的「开始/停止录制」文案与菜单栏角标由 Rust 持有，前端每次状态变化
+     * 都推一次会变成高频 IPC（录制中事件流每秒几十条状态变更）。用这个值做去重：
+     * 只有真的翻转了才推。
+     */
+    trayRecording: null as boolean | null,
   }),
   getters: {
     selectedNode(state) {
@@ -240,7 +319,52 @@ export const useAppStore = defineStore("app", {
           if (detail) console.error("[rpc_down]", detail);
         }
       });
+      // 托盘菜单的「开始/停止录制」：Rust 只发事件，状态仍由这里翻转
+      // （否则会出现「托盘说在录、界面说停了」这种两边各存一份的分叉）。
+      // listen 失败（非 Tauri 环境、capability 缺失）不该影响启动——托盘是辅助入口。
+      try {
+        await listen<string>("tray_action", (e) => {
+          if (e.payload !== "toggle_record") return;
+          // `by: "hotkey"` 而不是 "button"：托盘点击发生在**菜单栏**，
+          // 永远不会落在主窗矩形内，所以没有"点停止按钮"需要从序列尾部裁掉。
+          // 传 "button" 会让后端去找最后一个窗口内的按下——那可能是用户的真实操作，
+          // 从它处截掉后半段（2026-09-12 那次事故就是这么来的）。
+          void this.toggleRecord({ by: "hotkey" });
+        });
+      } catch (e) {
+        console.warn("[tray] 托盘事件监听未装定:", errMessage(e));
+      }
+      // 录制态变化就推给托盘。用 `$subscribe` 而不是在六七个改 `recording` 的
+      // 地方各调一次——漏一处就是「托盘角标不消失」，而这种漏很难被注意到。
+      this.$subscribe(() => this.syncTray(), { detached: true });
       await this.handshake();
+      this.syncTray();
+    },
+
+    /**
+     * 把录制态推给托盘（菜单项文案 + 工具提示 + 菜单栏角标）。
+     *
+     * 去重是必须的：`$subscribe` 在任何状态变更后都会触发，而录制中事件流每秒
+     * 会造成几十次变更——每次都发一次 IPC 纯属浪费。
+     */
+    syncTray() {
+      if (this.trayRecording === this.recording) return;
+      this.trayRecording = this.recording;
+      // invoke 在没有 Tauri 环境时**同步抛错**（window 未定义），`.catch()` 接不住，
+      // 所以两层都要兜（同 setClickThrough）。
+      try {
+        void invoke("af_tray_state", { recording: this.recording }).catch(() => {});
+      } catch {
+        /* 无 Tauri 环境：忽略 */
+      }
+    },
+    /** 把窗口藏进托盘（界面上的入口；关窗那条路在 Rust 的 on_window_event 里）。 */
+    hideToTray() {
+      try {
+        void invoke("af_hide_window").catch(() => {});
+      } catch {
+        /* 无 Tauri 环境：忽略 */
+      }
     },
 
     /**
@@ -280,7 +404,9 @@ export const useAppStore = defineStore("app", {
         }
         try {
           const cur = await rpc.request("workflow.current");
-          this.applyWorkflow(cur.workflow, cur.running, cur.recording);
+          // 走 applyCurrent 而不是 applyWorkflow：后者不认 path / lib_id，
+          // 于是重连之后菜单会把「当前这份是哪一条」当成「还没入库」。
+          this.applyCurrent(cur);
         } catch {
           /* ignore */
         }
@@ -288,6 +414,20 @@ export const useAppStore = defineStore("app", {
           const sc = await rpc.request("schedule.get");
           this.schedule = sc.schedule ?? null;
           this.nextFire = sc.nextFire ?? "";
+        } catch {
+          /* ignore */
+        }
+        // 录制库列表：参数面板的「选择录制」下拉在没选节点前就可能要渲染，
+        // 所以握手时就要有一份（而不是等用户切到录制页）。
+        try {
+          await this.refreshRecordingLib();
+        } catch {
+          /* ignore */
+        }
+        // 工作流库列表：菜单上的未保存标记、库弹层、定时运行里选工作流都要它。
+        // 握手时就备好，省得用户点开弹层先看到一片空白。
+        try {
+          await this.refreshWorkflowLib();
         } catch {
           /* ignore */
         }
@@ -331,6 +471,11 @@ export const useAppStore = defineStore("app", {
         this.migratedNotice = "";
       }
       this.workflowMigrated = migrated;
+
+      // 未保存标记。只在后端**明确给了布尔值**时才覆盖：重连前缓存的旧帧、
+      // 或旧版后端都不带这个字段，那时 `!!undefined` 会把标记清掉，表现为
+      // 「改了一堆东西，标记却忽然没了」。
+      if (typeof (wf as any).dirty === "boolean") this.workflowDirty = (wf as any).dirty;
 
       if (typeof running === "boolean") this.running = running;
       if (typeof recording === "boolean") this.recording = recording;
@@ -387,21 +532,42 @@ export const useAppStore = defineStore("app", {
           this.lastRecordCount = n.params.count ?? 0;
           this.lastRecordInfo = n.params;
           break;
-        case "run.node":
+        case "run.node": {
+          // 从「没在跑」跳到「在跑」= 新一轮开始（含定时任务在后端直接触发的那些，
+          // 那条路上前端没发过 run.start，只能靠这个判据清空轨迹）。
+          if (!this.running) this.runTrace = [];
+          const t = Date.now();
+          const prev = this.runTrace.length ? this.runTrace[this.runTrace.length - 1].t : 0;
           this.running = true;
           this.runNodeType = n.params.type ?? "";
+          this.runNodeName = n.params.name ?? "";
+          this.runNodeDetail = n.params.detail ?? "";
+          this.runTrace.push({
+            t,
+            name: this.runNodeName || this.runNodeType || "?",
+            detail: this.runNodeDetail,
+            deltaMs: prev ? t - prev : 0,
+          });
+          if (this.runTrace.length > RUN_TRACE_LIMIT) {
+            this.runTrace.splice(0, this.runTrace.length - RUN_TRACE_LIMIT);
+          }
           break;
+        }
         case "run.progress":
           this.runProgress = { done: n.params.done, total: n.params.total };
           break;
         case "run.finished":
           this.running = false;
           this.runNodeType = "";
+          this.runNodeName = "";
+          this.runNodeDetail = "";
           this.runProgress = { done: 0, total: 0 };
           this.setClickThrough(false);
           break;
         case "run.error":
           this.running = false;
+          this.runNodeName = "";
+          this.runNodeDetail = "";
           this.setClickThrough(false);
           this.setBanner("运行出错：" + (n.params.message ?? ""), "error");
           break;
@@ -471,8 +637,23 @@ export const useAppStore = defineStore("app", {
     // （「删除节点后页面不刷新」的根因）；通知仅作广播冗余。
     applyCurrent(cur: { workflow: Workflow; running?: boolean; recording?: boolean }) {
       this.applyWorkflow(cur.workflow, cur.running, cur.recording);
+      this.applyLocation(cur);
       if (this.selectedIndex >= this.workflow.nodes.length)
         this.selectedIndex = this.workflow.nodes.length - 1;
+    },
+    /**
+     * 把「当前这份在哪儿、存过没有」抄进 store。
+     *
+     * 判据是 `"path" in cur` 而不是 `typeof cur.path === "string"`：`workflow.new`
+     * 之后后端给的是 `path: null`（还没落盘）。用 typeof 判的话这一帧会被整个跳过，
+     * 于是刚新建完的界面仍显示着**上一份**的库 id——用户按「保存」时以为存的是
+     * 新那份，实际覆盖掉了刚才打开的那份流程。
+     */
+    applyLocation(cur: any) {
+      if (!cur || typeof cur !== "object") return;
+      if ("path" in cur) this.workflowPath = String(cur.path ?? "");
+      if ("lib_id" in cur) this.workflowLibCurrent = String(cur.lib_id ?? "");
+      if (typeof cur.dirty === "boolean") this.workflowDirty = cur.dirty;
     },
     /**
      * uid → 当前 nodes 下标；找不到返回 -1。
@@ -591,8 +772,15 @@ export const useAppStore = defineStore("app", {
     },
 
     // ---- 工作流 ----
-    async newWorkflow() {
-      const cur = await rpc.request("workflow.new");
+    /**
+     * 新建一份空工作流。
+     *
+     * `force` 只在用户**已经确认过**「丢弃未保存的改动」时才是 true。后端对未保存
+     * 的改动会报 -32006，界面据此弹确认框——这个判断刻意留在后端：前端漏了就会
+     * 静默丢掉用户刚连好的一整张图，而那之后没有任何地方能找回来。
+     */
+    async newWorkflow(force = false) {
+      const cur = await rpc.request("workflow.new", { force });
       this.applyCurrent(cur);
       this.selectedIndex = -1;
     },
@@ -600,20 +788,93 @@ export const useAppStore = defineStore("app", {
       const cur = await rpc.request("workflow.update", { patch });
       this.applyCurrent(cur);
     },
+    /** 保存。**没入库过就自动入库**（后端负责），所以「新建 → 保存」不会失败。 */
+    async saveWorkflow() {
+      const r = await rpc.request("workflow.save");
+      this.applyLocation(r);
+      // 首次保存会在库里**新建**一条。不重拉的话用户接着打开「工作流库」
+      // 会发现刚存的那份不在列表里，然后以为没存上、再存一遍。
+      await this.refreshWorkflowLib();
+    },
     async loadWorkflow() {
-      const p = await open({ title: "打开工作流", filters: [{ name: "工作流", extensions: ["json"] }] });
+      const p = await open({ title: "从文件打开工作流", filters: [{ name: "工作流", extensions: ["json"] }] });
       if (typeof p === "string") {
         const cur = await rpc.request("workflow.load", { path: p });
-        this.applyWorkflow(cur.workflow, cur.running, cur.recording);
+        this.applyCurrent(cur);
         this.selectedIndex = -1;
+        await this.refreshWorkflowLib();
       }
     },
-    async saveWorkflow() {
-      await rpc.request("workflow.save");
+
+    // ---- 工作流库（后端 core/workflow_lib.py）----
+    /**
+     * 拉一次库列表 + 当前这份的位置。
+     *
+     * `workflow.lib.list` 是**唯一的列表来源**（菜单标记、库弹层、定时运行里选
+     * 工作流都读它），所以每次存/改/删/导入之后都要重拉——只改本地数组的话，
+     * 另一处那份还是旧的。
+     */
+    async refreshWorkflowLib() {
+      const r = await rpc.request("workflow.lib.list");
+      this.workflowLib = normalizeMetas(r?.items);
+      this.workflowLibCurrent = String(r?.current ?? "");
+      this.workflowLibDir = String(r?.dir ?? "");
+      if (typeof r?.dirty === "boolean") this.workflowDirty = r.dirty;
     },
-    async saveWorkflowAs() {
-      const p = await save({ title: "另存为", defaultPath: "workflow.json", filters: [{ name: "工作流", extensions: ["json"] }] });
-      if (typeof p === "string") await rpc.request("workflow.save", { path: p });
+    /** 打开库里的一条。未保存的改动会被后端拦下（-32006），`force` 才丢弃。 */
+    async openWorkflowFromLib(id: string, force = false) {
+      const cur = await rpc.request("workflow.lib.open", { id, force });
+      this.applyCurrent(cur);
+      this.selectedIndex = -1;
+    },
+    /**
+     * 打开库里的一条并**立刻开跑**。
+     *
+     * 不复用 `toggleRun()` 单独作为入口：它按 `running` 决定是「启动」还是
+     * 「停止」，于是在运行中按这一条会**把正在跑的流程停掉**——而用户以为
+     * 自己在启动另一份。这里显式拒掉，让用户自己决定先停谁。
+     */
+    async runWorkflowFromLib(id: string, force = false) {
+      if (this.running) throw new Error("正在运行中，请先停止再运行另一份工作流");
+      await this.openWorkflowFromLib(id, force);
+      await this.toggleRun();
+    },
+    async renameWorkflowInLib(id: string, name: string) {
+      const r = await rpc.request("workflow.lib.rename", { id, name });
+      // 改的可能正是当前这份：后端已经把标题栏那份名字改了，这里同步一下
+      if (String(r?.current ?? "") === id) {
+        this.workflow = { ...this.workflow, name: String(r?.item?.name ?? name) };
+      }
+      await this.refreshWorkflowLib();
+    },
+    async deleteWorkflowFromLib(id: string) {
+      const r = await rpc.request("workflow.lib.delete", { id });
+      this.applyLocation(r);
+      await this.refreshWorkflowLib();
+    },
+    /** 从文件导入一份进库。返回新条目的 id（用户取消则空串）。**不切换当前工作流**。 */
+    async importWorkflowFromFile(): Promise<string> {
+      const p = await open({ title: "导入工作流", filters: [{ name: "工作流", extensions: ["json"] }] });
+      if (typeof p !== "string") return "";
+      const r = await rpc.request("workflow.lib.import", { path: p });
+      await this.refreshWorkflowLib();
+      return String(r?.item?.id ?? "");
+    },
+    /** 导出成普通工作流文件。`wid` 空 = 导出当前这份。返回写出的路径（取消则空串）。 */
+    async exportWorkflow(wid = ""): Promise<string> {
+      const name = wid
+        ? (this.workflowLib.find((m) => m.id === wid)?.name ?? "")
+        : this.workflow.name;
+      const p = await save({
+        title: "导出工作流",
+        // 默认文件名由工作流名推出来，但必须**洗过**：名字里带 `/` 时对话框会把
+        // 文件悄悄写进一个子目录，而用户以为自己只是沿用了原来的名字。
+        defaultPath: wfExportName(name),
+        filters: [{ name: "工作流", extensions: ["json"] }],
+      });
+      if (typeof p !== "string") return "";
+      await rpc.request("workflow.lib.export", { path: p, id: wid });
+      return p;
     },
 
     // ---- 运行 / 录制 ----
@@ -628,6 +889,9 @@ export const useAppStore = defineStore("app", {
         // 不在 await 后写 true：快速工作流可能已先发 run.finished。
         this.running = true;
         this.runNodeType = "";
+        this.runNodeName = "";
+        this.runNodeDetail = "";
+        this.runTrace = [];
         this.runProgress = { done: 0, total: 0 };
         try {
           await rpc.request("run.start", { base_x: this.base.x, base_y: this.base.y });
@@ -665,6 +929,15 @@ export const useAppStore = defineStore("app", {
         this.recording = false;
         this.lastRecordInfo = r;
         this.lastRecordCount = r.count ?? 0;
+        // 后端在 record.stop 里把这次录制**自动入库**了（`library` 字段是那条的元信息）。
+        // 不重拉列表的话，用户得切走再切回来才看得见刚录的那条。
+        if (r?.library) {
+          try {
+            await this.refreshRecordingLib();
+          } catch {
+            /* 库列表是辅助信息，拉不到不影响"停止录制"本身已成功 */
+          }
+        }
         await this.recordSubscribe(false);
         await this.refreshRecordBuffer();
       } else {
@@ -693,6 +966,12 @@ export const useAppStore = defineStore("app", {
       this.lastRecordCount = r?.count ?? 0;
       this.recordCanUndo = !!r?.can_undo;
       if (Array.isArray(r?.origin)) this.recordOrigin = r.origin;
+      // `lib` 只在"这份数据来自录制库相关接口"时才带。用 `in` 判而不是 `??`——
+      // 后端**故意**用 `lib: null` 表示"当前这段还没入库"，把它当"字段缺失"忽略掉
+      // 会让界面一直显示上一次的"已同步"。
+      if (r && typeof r === "object" && "lib" in r) {
+        this.recordingLibCurrent = r.lib ?? null;
+      }
     },
     /** 拉取后端权威事件序列覆盖本地缓冲，消除"看到的和写入的不一致"。 */
     async refreshRecordBuffer() {
@@ -702,7 +981,14 @@ export const useAppStore = defineStore("app", {
         /* 保留增量缓冲 */
       }
     },
-    /** 事件编辑：method 为 record.remove / removeMovesBefore / setOrigin / undo。 */
+    /**
+     * 事件编辑的统一入口：`record.remove` / `removeMovesBefore` / `setOrigin` /
+     * `setText` / `keysToText` / `patch` / `insert` / `duplicate` / `moveEvent` /
+     * `undo`。
+     *
+     * 后端返回的是**编辑后的完整权威序列**，直接覆盖本地缓冲——不在这里自己
+     * 改数组：编辑种类一多，「前端算一遍、后端算一遍」迟早对不上。
+     */
     async recordEdit(method: string, params: Record<string, unknown> = {}) {
       this._applyRecord(await rpc.request(method, params));
     },
@@ -721,6 +1007,61 @@ export const useAppStore = defineStore("app", {
     async pickBase() {
       // arm 一次性取点：用户按任意键（通常 F11）后经 base.picked 通知回填
       await rpc.request("base.pick");
+    },
+
+    // ---- 录制库（后端 core/recording_lib.py）----
+    /**
+     * 拉一次库列表 + 当前条目状态。
+     *
+     * `record.lib.list` 是**唯一的列表来源**（参数面板的下拉也读它），所以每次
+     * 存/改/删之后都要重拉——只更新本地数组的话，参数面板那份还是旧的，
+     * 用户会看到「刚存的录制在下拉里选不到」。
+     */
+    async refreshRecordingLib() {
+      const r = await rpc.request("record.lib.list");
+      this.recordingLib = (r?.items ?? []) as RecMeta[];
+      this.recordingLibCurrent = r?.current ?? null;
+      this.recordingLibDir = r?.dir ?? "";
+    },
+    /** 把当前编辑缓冲存进库。`rid` 空 = 新建一条，给了 = **覆盖**那一条。 */
+    async recordingLibSave(name: string, rid = "") {
+      const r = await rpc.request("record.lib.save", { name, id: rid });
+      this.recordingLibCurrent = r?.current ?? null;
+      await this.refreshRecordingLib();
+    },
+    async recordingLibRename(rid: string, name: string) {
+      const r = await rpc.request("record.lib.rename", { id: rid, name });
+      this.recordingLibCurrent = r?.current ?? null;
+      await this.refreshRecordingLib();
+    },
+    async recordingLibDelete(rid: string) {
+      const r = await rpc.request("record.lib.delete", { id: rid });
+      this.recordingLibCurrent = r?.current ?? null;
+      await this.refreshRecordingLib();
+    },
+    /** 把库里一条**载入编辑缓冲**（替换当前录制），之后可继续编辑 / 更新 / 写入节点。 */
+    async recordingLoadFromLib(rid: string) {
+      this._applyRecord(await rpc.request("record.fromLib", { id: rid }));
+    },
+    /**
+     * 进入「直接编辑库里这条」：载入它，之后**每次编辑自动写回**库里那条。
+     *
+     * 与 `recordingLoadFromLib`（「载入」按钮）的差别只在收尾——载入之后编辑只改
+     * 内存、界面提示「改动未更新」，要再点「更新到库」；本动作把落盘也接管了，
+     * 于是库里点开就能改。写回在**后端**统一做，前端不记账（编辑接口有十几个，
+     * 漏一个就会「库里还是旧的、界面却显示已同步」）。
+     */
+    async recordingLibEdit(rid: string) {
+      this._applyRecord(await rpc.request("record.lib.edit", { id: rid }));
+    },
+    /** 退出「直接编辑」模式，回到「改了要手动更新到库」的语义。 */
+    async recordingLibEndEdit() {
+      this._applyRecord(await rpc.request("record.lib.endEdit"));
+    },
+    /** 库里一条直接落成画布节点（按 id 引用），不用先载入缓冲。 */
+    async recordingLibToNode(rid: string) {
+      const cur = await rpc.request("record.lib.toNode", { id: rid });
+      this.applyCurrent(cur);
     },
 
     // ---- 热键 / 捕获 / 权限 / 定时 ----

@@ -34,6 +34,14 @@ def templates_dir() -> str:
     return d
 
 
+def recordings_dir() -> str:
+    """录制库目录。放在 app_dir 下而不是 workflows/ 里：它是**跨工作流复用**的资产，
+    不属于某一份流程文件；跟着工作流走会被「另存为」顺带复制一份、然后就分叉了。"""
+    d = os.path.join(app_dir(), "recordings")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 _BUNDLED_MODEL = "yolo11n.onnx"
 _SRC_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

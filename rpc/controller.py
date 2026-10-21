@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -18,6 +19,9 @@ from typing import Any, Callable, Optional
 from core.events import (MacroEvent, Node, Workflow, Edge, PORT_OUT,
                          DEFAULT_TARGET_SIDE, normalize_target_side)
 from core import executor as _executor_mod  # 仅类型/构造；真正运行在 P1-2
+from core import recording_lib, workflow_lib
+
+logger = logging.getLogger(__name__)
 
 # 节点菜单顺序（§9.4）**不再在这里维护**：唯一真源是各节点的 order
 # （tasks/base.py::all_definitions）。此前这里有一份 _NODE_ORDER 映射，
@@ -62,10 +66,26 @@ class AppController:
     def __init__(self) -> None:
         self.workflow = Workflow()
         self.path: Optional[str] = None
+        # ---- 「有没有未保存的改动」（见 workflow_dirty） ----
+        # `_wf_rev` 由 `_broadcast_workflow` 自增，`_wf_saved_rev` 在每次落盘后对齐。
+        # 不靠前端自己记「我改过没有」：改动接口有十几个，漏掉一个就会出现
+        # 「明明改了、界面显示已保存」——而保存按钮不会亮，用户的改动静默丢失。
+        self._wf_rev = 0
+        self._wf_saved_rev = 0
         self.executor = _executor_mod.Executor()
         self.recorder = None  # 在 P1-2 装入 Recorder
         self._last_record = None
         self._record_undo: list = []   # 事件编辑的撤销栈（快照，上限见 _UNDO_LIMIT）
+        # ---- 录制库（见 core/recording_lib.py） ----
+        # `_record_rev` 每编辑一次 +1，用来判断「库里的那份还是不是最新的」：
+        # 节点按 id 引用库，编辑完不推送更新的话，回放跑的还是旧序列——
+        # 界面上看不出任何异常。
+        self._record_rev = 0
+        self._record_saved: Optional[dict] = None   # {id, name, rev} 最近一次入库
+        # 非空 = 正在「直接编辑库里的这条」（见 record_lib_edit）：编辑收尾会把
+        # 结果写回库里那条，而不是只留在内存里等用户点「更新到库」。
+        self._record_lib_edit_id: Optional[str] = None
+        self._lib_cache: Optional[list] = None      # 库列表缓存，写操作置空（见 _lib_metas）
         self._rec_poller = None
         self._rec_poller_rec = None
         self._run_thread = None  # 运行线程引用：shutdown 需要等它收尾
@@ -103,13 +123,16 @@ class AppController:
     def set_notifier(self, fn: Callable[[str, Any], None]) -> None:
         self._notify = fn
 
-    @staticmethod
-    def _public_node(node: Node) -> dict:
+    def _public_node(self, node: Node) -> dict:
         """对外摘要：events 数组（可达数十 MB）替换为 {count}。
 
         前端从不读写事件数组（录制结果只看条数，保存/回放都由后端完成），
         全量数组会随 workflow.changed 广播，每次改参数都重传几十 MB——
         既拖慢管道又挤占通知队列。真源仍是后端内存树，save 时完整落盘。
+
+        引用录制库的节点额外补一个 `recording_name`：节点里只存 id，画布上直接
+        显示一串 `20260915-190433-a1b2c3` 没人认得出来是哪段操作（走缓存，
+        不会因为每次改参数都全库扫一遍）。
         """
         params = node.params
         evs = params.get("events")
@@ -118,6 +141,12 @@ class AppController:
             # 真源里的 events（运行报 'str' object has no attribute 'get'，
             # 且保存即数据丢失）——必须另建浅拷贝视图。
             params = {**params, "events": {"count": len(evs)}}
+        if node.type == "record_replay" and str(params.get("source") or "") == "录制库":
+            rid = str(params.get("recording_id") or "")
+            hit = next((m for m in self._lib_metas() if m.get("id") == rid), None)
+            params = {**params,
+                      "recording_name": (hit or {}).get("name") or "",
+                      "recording_count": (hit or {}).get("count") or 0}
         return {"type": node.type, "params": params, "enabled": node.enabled,
                 "uid": node.uid, "name": node.name, "x": node.x, "y": node.y}
 
@@ -129,10 +158,42 @@ class AppController:
                 # 迁移标记**不落盘**（to_dict 刻意不带），但必须让界面看到——
                 # 否则用户打开旧文件后会发现「条件不再门控了」而完全不知道为什么。
                 "migrated_from_list": self.workflow.migrated_from_list,
+                # 同上：dirty 不属于 Workflow 的数据模型、不落盘，但**每次广播都
+                # 必须带上**。它只在这里出现的话，用户改完一个参数后标题栏的
+                # 未保存标记不会亮（改动是经 workflow.changed 广播过去的）。
+                "dirty": self.workflow_dirty(),
             }
 
+    def workflow_dirty(self) -> bool:
+        """当前工作流有没有未落盘的改动。
+
+        判据是**后端自增的版本号**，不是前端记的账：前端只在收到 RPC 响应时
+        知道「刚做了个改动」，而后台也有改工作流的路径（定时任务直接换掉整棵树，
+        见 `_schedule_fire`），那条路上前端什么都没发过。
+        """
+        return self._wf_rev != self._wf_saved_rev
+
     def _broadcast_workflow(self) -> None:
+        # 自增放在广播这里，而不是逐个改动接口：16 个改动接口**全部**经由它广播，
+        # 钩一处就全盖住了。放进各个接口的话，将来加第 17 个接口时忘了加一行，
+        # 症状是「改了但保存按钮不亮」——静默的数据丢失，最难查。
+        self._wf_rev += 1
         self._notify("workflow.changed", self._public_workflow())
+
+    def _mark_saved(self) -> None:
+        """把「已保存」的基准对齐到当前版本（落盘后、载入后调用）。"""
+        self._wf_saved_rev = self._wf_rev
+
+    def _guard_unsaved(self, force: bool) -> None:
+        """丢弃当前工作流之前（新建 / 换一份打开）挡住未保存的改动。
+
+        这个判断刻意放在**后端**：前端确认框是体验，后端这一层是保证。前端漏了
+        （或将来多出第二个调用方）就会静默丢掉用户刚连好的一整张图，而那之后
+        没有任何地方能找回来——`workflow.new` 不落盘、也没有撤销。
+        """
+        if self.workflow_dirty() and not force:
+            raise ControllerError(-32006, "unsaved_changes",
+                                  {"path": self.path, "name": self.workflow.name})
 
     # ---- workflow.* ----
     def workflow_current(self) -> dict:
@@ -141,9 +202,21 @@ class AppController:
             "path": self.path,
             "running": self.running,
             "recording": self.recording,
+            "dirty": self.workflow_dirty(),
+            # 当前这份对应库里哪一条（空 = 还没入库，保存时会自动建一条）
+            "lib_id": workflow_lib.id_of_path(self.path),
+            "lib_dir": workflow_lib.workflows_dir(),
         }
 
     def workflow_load(self, path: str) -> dict:
+        """按路径打开一份工作流。**刻意不做未保存保护**。
+
+        这是低层的「按路径打开」原语，界面上已经不再直接调它了（「打开」走
+        `workflow_lib_open`，那里有保护）。在这层加保护会波及所有按路径加载的
+        调用方——`scripts/check_installed.py` 就要在一段会话里连续 load 好几个
+        样本文件，中途被一个确认框式的错误码挡下来，表现为「安装版校验突然红了」，
+        而原因跟被测功能毫无关系。
+        """
         if not path or not isinstance(path, str):
             raise ControllerError(-32602, "参数无效：path 必填")
         if not os.path.exists(path):
@@ -152,22 +225,49 @@ class AppController:
             self.workflow = Workflow.load(path)
             self.path = path
         self._broadcast_workflow()
+        self._mark_saved()      # 刚从磁盘读上来的，此刻是干净的
         return self.workflow_current()
 
     def workflow_save(self, path: Optional[str] = None) -> dict:
-        target = path or self.path
-        if not target:
-            raise ControllerError(-32602, "尚未指定保存路径（先 load 或传 path）")
-        with self._lock:
-            self.workflow.save(target)
-            self.path = target
-        return {"path": target}
+        """保存当前工作流。
 
-    def workflow_new(self) -> dict:
+        没给 path 时：
+        - 当前这份**已经在库里** → 覆盖库里那一条；
+        - 全新的（`workflow_new` 之后）→ **先在库里建一条**。
+
+        最后这条是这次改动的核心：「新建 → 保存」此前**必然失败**——`workflow_new`
+        把 `self.path` 清成 None，这里再抛「尚未指定保存路径」，用户必须先
+        「另存为」才能存下第一版。现在保存按钮在任何时候都可用。
+        """
+        target = path or self.path
+        with self._lock:
+            if target and not workflow_lib.id_of_path(target):
+                # 外部路径（导入/导出通道）：写普通工作流文件，不带库的元信息
+                self.workflow.save(target)
+                self.path = target
+                item = None
+            else:
+                wid = workflow_lib.id_of_path(target) or ""
+                item = workflow_lib.save(self.workflow.name, self.workflow.to_dict(),
+                                         wid=wid or None)
+                self.path = workflow_lib.path_of(item["id"])
+            self._mark_saved()
+        return {"path": self.path, "lib_id": workflow_lib.id_of_path(self.path),
+                "dirty": False, "item": item}
+
+    def workflow_new(self, force: bool = False) -> dict:
+        """新建一份空工作流。
+
+        **不立刻落盘**：新建即入库的话，「点开看看」也会在库里留下一个空文件，
+        试几次就攒出一堆「未命名工作流」把列表糊住。真正的落盘推迟到第一次
+        「保存」——由 `workflow_save` 自动建一条，所以保存按钮照样一直可用。
+        """
+        self._guard_unsaved(force)
         with self._lock:
             self.workflow = Workflow()
             self.path = None
         self._broadcast_workflow()
+        self._mark_saved()
         return self.workflow_current()
 
     def workflow_update(self, patch: dict) -> dict:
@@ -188,6 +288,126 @@ class AppController:
                     raise ControllerError(-32602, "repeat 须为整数")
         self._broadcast_workflow()
         return self.workflow_current()
+
+    # ---- workflow.lib.*（core/workflow_lib.py）：流程图变成库里可管理的资产 ----
+    def workflow_lib_list(self) -> dict:
+        """列出库里的工作流。
+
+        `current` 只给 id（空 = 还没入库），名字由前端从 `workflow.name` 取：
+        库里那份列表项也可能对不上（用户手工改过文件名），再传一份名字就有了
+        第二份真源，而两份对不上的表现是「标题栏和列表里显示的是两份不同的流程」。
+        """
+        return {"items": workflow_lib.list_meta(),
+                "current": workflow_lib.id_of_path(self.path),
+                "dirty": self.workflow_dirty(),
+                "dir": workflow_lib.workflows_dir()}
+
+    def workflow_lib_save(self, name: str = "") -> dict:
+        """把**当前画布上的**这份存进库。
+
+        已经在库里 → 覆盖那一条（保持 id 不变）；还没入库 → 新建一条。
+        覆盖而不是总新建，是为了让「保存」符合直觉：用户改完一份流程按保存，
+        期望的是那一份被更新，不是库里多出一份几乎一样的。
+        """
+        with self._lock:
+            wid = workflow_lib.id_of_path(self.path)
+            new_name = str(name or "").strip() or self.workflow.name
+            self.workflow.name = new_name
+            meta = workflow_lib.save(new_name, self.workflow.to_dict(), wid=wid or None)
+            self.path = workflow_lib.path_of(meta["id"])
+        # 名字可能变了（用户在库里改了名再保存），标题栏要跟着走
+        self._broadcast_workflow()
+        self._mark_saved()
+        return {**self.workflow_current(), "item": meta}
+
+    def workflow_lib_open(self, wid: str = "", force: bool = False) -> dict:
+        """打开库里的一条。未保存的改动会先被拦下（`force=True` 才丢弃）。"""
+        try:
+            path = workflow_lib.path_of(wid)
+        except ValueError as e:
+            raise ControllerError(-32602, str(e)) from None
+        if not os.path.exists(path):
+            raise ControllerError(-32005, f"工作流不存在：{wid}")
+        self._guard_unsaved(force)
+        with self._lock:
+            self.workflow = Workflow.load(path)
+            self.path = path
+        self._broadcast_workflow()
+        self._mark_saved()
+        return self.workflow_current()
+
+    def workflow_lib_rename(self, wid: str = "", name: str = "") -> dict:
+        if not wid:
+            raise ControllerError(-32602, "参数无效：缺 id")
+        try:
+            meta = workflow_lib.rename(wid, name)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        # 改的正好是当前这份：标题栏得跟着变，否则用户会以为没改成功
+        if workflow_lib.id_of_path(self.path) == meta["id"]:
+            with self._lock:
+                self.workflow.name = meta["name"]
+            self._broadcast_workflow()
+            # 改名不改内容——上面那次广播把 rev 推高了，但磁盘上已经是最新的，
+            # 不重新对齐的话标题栏会平白多出一个「未保存」标记。
+            self._mark_saved()
+        return {"item": meta, "current": workflow_lib.id_of_path(self.path),
+                "dirty": self.workflow_dirty()}
+
+    def workflow_lib_delete(self, wid: str = "") -> dict:
+        """删除库里的一条（移进废纸篓）。
+
+        删掉的正好是当前这份时，**只把路径清空、不动内存里的树**：文件没了但
+        用户连的那张图还在，他仍可以继续改、再「保存」回库（会自动新建一条）。
+        直接清空工作流的话，一次误点就白丢一张图——而废纸篓里那份的 id 和内存里
+        这份已经对不上了，恢复出来也只是个陌生文件。
+        """
+        if not wid:
+            raise ControllerError(-32602, "参数无效：缺 id")
+        try:
+            dest = workflow_lib.remove(wid)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        with self._lock:
+            if workflow_lib.id_of_path(self.path) == wid:
+                self.path = None
+        return {"deleted": wid, "trash": dest,
+                "current": workflow_lib.id_of_path(self.path),
+                "dirty": self.workflow_dirty()}
+
+    def workflow_lib_import(self, path: str = "", name: str = "") -> dict:
+        """把一个外部 JSON 工作流文件拷进库。**不切换当前工作流**。
+
+        用户按的是「导入」，期望是「它出现在列表里」，不是「画布上正在编辑的东西
+        被换掉了」。要打开就在列表里再点一下「打开」。
+        """
+        try:
+            meta = workflow_lib.import_file(path, name)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        return {"item": meta, "items": workflow_lib.list_meta()}
+
+    def workflow_lib_export(self, path: str = "", wid: str = "") -> dict:
+        """把库里的一条写成普通工作流文件。`wid` 空 = 导出**当前**这份。
+
+        导出的当前那份走**内存里的树**，不是库里那份：用户按导出时想拿到的是
+        「画布上现在这样」。同时**不顺手写库**——按「导出」不该把库里那份也改掉，
+        用户可能只是想发一份中间稿出去。
+        """
+        cur = workflow_lib.id_of_path(self.path)
+        wid = wid or cur
+        if not wid:
+            raise ControllerError(-32602, "当前工作流还没入库，请先保存")
+        if not path or not isinstance(path, str):
+            raise ControllerError(-32602, "参数无效：path 必填")
+        try:
+            if wid == cur:
+                workflow_lib.write_plain(self.workflow.to_dict(), path)
+            else:
+                workflow_lib.export_file(wid, path)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        return {"path": path, "id": wid}
 
     # ---- node.* ----
     def _node_at(self, index: int) -> Node:
@@ -371,6 +591,51 @@ class AppController:
         return out
 
     # ---- run.*（Executor 包装，§5/§9.5） ----
+    @staticmethod
+    def node_digest(node) -> str:
+        """节点参数的一句话摘要，给界面「现在在干什么」用。
+
+        只挑对「辨认这一步」最有用的一个字段：条件/分支看判据取值，点击看要找的文字/模板，
+        延时看时长，键盘看按键。**不做全参数展开**——面板一行放不下，而且真正需要看细节时
+        用户会点开节点看参数面板。
+        """
+        if node is None:
+            return ""
+        p = node.params or {}
+        t = node.type
+        try:
+            if t in ("branch", "condition_group"):
+                n = int(p.get("case_count" if t == "branch" else "cond_count", 2) or 2)
+                key = "case%d_value" if t == "branch" else "cond%d_value"
+                vals = [str(p.get(key % i, "") or "") for i in range(1, n + 1)]
+                vals = [v for v in vals if v]
+                if t == "branch":
+                    return "判据：" + " / ".join(vals)
+                return "（" + str(p.get("combine", "")) + "）" + " / ".join(vals)
+            if t == "condition":
+                kind = str(p.get("check", ""))
+                val = str(p.get("text") or p.get("image_path") or p.get("label") or "")
+                return (kind + "：" + val).strip("：")
+            if t == "ocr_click":
+                return "文字「" + str(p.get("text", "")) + "」"
+            if t == "image_click":
+                import os as _os
+                return "模板 " + _os.path.basename(str(p.get("image_path", "")))
+            if t == "yolo_click":
+                return "目标 " + str(p.get("label", "") or "任意")
+            if t == "delay":
+                ms = float(p.get("ms", 0) or 0)
+                if str(p.get("mode", "")) == "等待至时刻":
+                    return "等到 " + str(p.get("at", ""))
+                return ("%.1fs" % (ms / 1000.0)) if ms >= 1000 else ("%dms" % int(ms))
+            if t == "keyboard":
+                return "按键 " + str(p.get("keys", "") or p.get("text", ""))
+            if t == "mouse":
+                return "%s (%s,%s)" % (p.get("action", ""), p.get("x", 0), p.get("y", 0))
+        except Exception:  # noqa: BLE001  脏参数不该让状态上报失败
+            return ""
+        return ""
+
     def run_start(self, base_x: int = 0, base_y: int = 0) -> dict:
         import tasks.builtin  # 确保节点已注册
         with self._lock:
@@ -385,7 +650,16 @@ class AppController:
             self.running = True
 
         def on_node(idx, ntype):
-            self._notify("run.node", {"index": idx, "type": ntype})
+            # 带出节点的**自定义名**与参数摘要：界面要回答的是「现在在干什么」，
+            # 而 type 只能说「找文字点击」——用户建了六个点击节点，光看类型分不清是哪一个。
+            # idx 可能为 -1（异常路径），越界一律当空处理，不能让状态上报把运行搞挂。
+            node = wf.nodes[idx] if 0 <= idx < len(wf.nodes) else None
+            self._notify("run.node", {
+                "index": idx,
+                "type": ntype,
+                "name": (node.name if node else "") or "",
+                "detail": self.node_digest(node),
+            })
 
         def on_progress(done, total):
             self._notify("run.progress", {"done": done, "total": total})
@@ -434,6 +708,7 @@ class AppController:
                                      window_bounds=self._parse_bounds(window_bounds),
                                      drop_in_window=bool(drop_in_window))
             self._record_undo.clear()   # 新录制开始：旧序列的撤销栈已无意义
+            self._record_lib_edit_id = None   # 同理，新序列不再属于任何库条目
             self.recorder.start()
             self.recording = True
             self._rec_poller_rec = self.recorder
@@ -551,6 +826,25 @@ class AppController:
             "mouse_died": result.mouse_listener_died,
             "kb_died": result.kb_listener_died,
         }
+        # 自动入库：只留在内存里的话，「刚才那段不错」常常是关掉面板之后才发现的，
+        # 而那时候已经没了。空录制不入——那只是点了一下按钮，放进库里纯属噪音。
+        # 入不进库**不能让「停止录制」本身失败**：事件还在内存里，用户仍能写入节点。
+        self._record_rev += 1
+        self._record_saved = None
+        # 新录制与任何「正在直接编辑的库条目」都无关了：不清的话后续编辑会把
+        # 这段新序列写回到旧那条库条目上（`_record_saved` 已换成新的，
+        # 而 `_record_lib_edit_id` 还指着旧的）。
+        self._record_lib_edit_id = None
+        if count:
+            try:
+                meta = recording_lib.save(recording_lib.default_name(),
+                                          [asdict(e) for e in result.events],
+                                          (result.origin_x, result.origin_y))
+                self._record_saved = {"id": meta["id"], "name": meta["name"],
+                                      "rev": self._record_rev}
+                stats["library"] = meta
+            except Exception as e:  # noqa: BLE001
+                logger.warning("录制入库失败：%s", e)
         self._notify("record.stopped", stats)
         return stats
 
@@ -574,6 +868,24 @@ class AppController:
     # 不存在"面板显示一份、实际写入另一份"的空间。
     _UNDO_LIMIT = 20
 
+    # ---- 事件字段编辑的白名单（见 record_patch / record_insert）----
+    # 按 kind 列出**可以改**的字段，不在这里的一律拒绝。`kind` 本身不在任何
+    # 白名单里：改 kind 不是「改字段」而是「换一条事件」（坐标/按键的语义完全
+    # 不同），要换就用 insert + remove 组合。
+    _PATCH_FIELDS = {
+        "move": ("ts_ms", "x", "y", "dragged"),
+        "mouse": ("ts_ms", "x", "y", "button", "pressed", "clicks"),
+        "wheel": ("ts_ms", "x", "y", "wheel_dx", "wheel_dy", "wheel_unit"),
+        "key": ("ts_ms", "x", "y", "key", "pressed", "flags"),
+        "text": ("ts_ms", "x", "y", "text"),
+    }
+    _KINDS = tuple(_PATCH_FIELDS)
+    _BUTTONS = ("left", "right", "middle")
+    _WHEEL_UNITS = ("line", "pixel")
+    # 坐标上限：录制来自真实屏幕，不会有这么大的值——挡住手滑输入的天文数字
+    # （它会让回放把光标甩到屏幕外，表现成「什么都没发生」）。
+    _COORD_LIMIT = 100000
+
     def _record_or_raise(self):
         res = self._last_record
         if res is None:
@@ -588,7 +900,12 @@ class AppController:
         否则快照会被一起改掉、撤销永远回不去。
         `record_stop` 的"轨迹终点补全"是唯一会原地改元素的地方，它为此单独做了
         元素级复制（见那里的注释）。新增会原地改事件的代码时，同样要自己复制。
+
+        ⚠️ 这里顺手把 `_record_rev` 加一：所有编辑都必须先调本函数（撤销是唯一
+        例外，它自己加），而「库里那份是否已过期」就是拿 rev 比的。新增编辑类
+        接口时别绕过这里，否则库里存着旧序列却不提示。
         """
+        self._record_rev += 1
         res = self._last_record
         if res is None:
             return
@@ -596,18 +913,69 @@ class AppController:
         if len(self._record_undo) > self._UNDO_LIMIT:
             self._record_undo.pop(0)
 
+    def _lib_info(self) -> Optional[dict]:
+        """当前这段录制对应的库条目（若已入库）。
+
+        `dirty` 由 rev 比对得出，**不靠前端自己记「我改过没有」**：编辑接口有六七个，
+        漏掉一个就会出现「明明改了、库里还是旧的，而界面显示已同步」——
+        而按 id 引用它的节点回放的是库里那份，用户完全无从察觉。
+        """
+        s = self._record_saved
+        if not s:
+            return None
+        return {"id": s["id"], "name": s["name"], "dirty": s["rev"] != self._record_rev,
+                # 正在「直接编辑库里的这条」（每次编辑自动写回，见 record_lib_edit）。
+                # 界面据此显示「编辑中：xxx」和「完成编辑」入口。
+                "editing": self._record_lib_edit_id == s["id"]}
+
     def _record_payload(self) -> dict:
         res = self._last_record
         if res is None:
             return {"count": 0, "events": [], "origin": [0, 0], "duration_ms": 0,
-                    "can_undo": False}
+                    "can_undo": False, "lib": None}
         return {
             "count": len(res.events),
             "events": [asdict(e) for e in res.events],
             "origin": [res.origin_x, res.origin_y],
             "duration_ms": res.events[-1].ts_ms if res.events else 0,
             "can_undo": bool(self._record_undo),
+            "lib": self._lib_info(),
         }
+
+    def _sync_lib_edit(self) -> None:
+        """「直接编辑库条目」模式下，把当前缓冲写回库里那条（见 record_lib_edit）。
+
+        放在**后端**而不是让前端每次编辑后补一刀：编辑接口有十几个，靠前端记账
+        **漏一个就会**「库里还是旧的、界面却显示已同步」——而按 id 引用它的节点
+        回放的是库里那份，用户完全无从察觉（与 `_lib_info` 用 rev 比对同理）。
+        """
+        rid = self._record_lib_edit_id
+        res = self._last_record
+        if not rid or res is None:
+            return
+        try:
+            meta = recording_lib.save(
+                (self._record_saved or {}).get("name") or recording_lib.default_name(),
+                [asdict(e) for e in res.events],
+                (res.origin_x, res.origin_y), rid=rid)
+        except ValueError as e:
+            # 写不进去（比如文件被手工删了）不该让**编辑本身**失败：事件还在内存里，
+            # 用户仍能继续编辑、或另存成新的一条。所以只记 warning。
+            logger.warning("直接编辑库条目时写回失败：%s", e)
+            return
+        self._record_saved = {"id": meta["id"], "name": meta["name"],
+                              "rev": self._record_rev}
+        self._lib_invalidate()
+
+    def _record_commit(self) -> dict:
+        """编辑操作的统一收尾：必要时同步回库，再返回新的权威序列。
+
+        **新增编辑接口时用它收尾，不要直接 `return self._record_payload()`**，
+        否则「直接编辑库条目」模式下那一次改动只留在内存里，而界面会因为 rev
+        没对齐显示「改动未更新」——用户以为已经改到库里了。
+        """
+        self._sync_lib_edit()
+        return self._record_payload()
 
     @staticmethod
     def _as_indexes(indexes: Any, count: int) -> list:
@@ -627,6 +995,47 @@ class AppController:
                 out.add(i)
         return sorted(out)
 
+    def _coerce_field(self, name: str, value: Any) -> Any:
+        """把一个字段值收敛到 `MacroEvent` 能接受的范围；不合法就抛 -32602。
+
+        **非法值一律拒绝，不静默纠正**：坐标填成 "abc" 时若悄悄当成 0，
+        回放会把光标甩到屏幕左上角，而用户以为自己填的是对的——这种「看起来
+        成功了」的失败最难查。枚举类字段（按钮/滚轮单位）同理，拼错的
+        `wheel_unit="px"` 会让回放把「行」当「像素」投递，滚轮几乎不动。
+        """
+        if name in ("ts_ms", "x", "y", "wheel_dx", "wheel_dy", "flags", "clicks"):
+            try:
+                v = int(value)
+            except (TypeError, ValueError):
+                raise ControllerError(-32602, f"参数无效：{name} 须为整数") from None
+            if name == "ts_ms" and v < 0:
+                raise ControllerError(-32602, "参数无效：时间不能为负")
+            if name == "clicks" and v < 1:
+                raise ControllerError(-32602, "参数无效：点击次数至少为 1")
+            if name in ("x", "y") and abs(v) > self._COORD_LIMIT:
+                raise ControllerError(-32602, f"参数无效：{name} 超出合理范围")
+            return v
+        if name in ("pressed", "dragged"):
+            return bool(value)
+        if name == "button":
+            s = str(value or "")
+            if s not in self._BUTTONS:
+                raise ControllerError(-32602, "参数无效：按钮须为 left / right / middle")
+            return s
+        if name == "wheel_unit":
+            s = str(value or "")
+            if s not in self._WHEEL_UNITS:
+                raise ControllerError(-32602, "参数无效：滚轮单位须为 line / pixel")
+            return s
+        if name == "key":
+            s = str(value or "")
+            if not s:
+                raise ControllerError(-32602, "参数无效：键名不能为空")
+            return s
+        if name == "text":
+            return "" if value is None else str(value)
+        raise ControllerError(-32602, f"参数无效：未知字段 {name}")
+
     def record_remove(self, indexes: Any = None) -> dict:
         """删除指定下标的事件（单个整数或整数数组）。"""
         res = self._record_or_raise()
@@ -635,7 +1044,7 @@ class AppController:
             self._record_snapshot()
             drop = set(idxs)
             res.events = [e for i, e in enumerate(res.events) if i not in drop]
-        return self._record_payload()
+        return self._record_commit()
 
     def record_remove_moves_before(self, index: Any = 0) -> dict:
         """删除 `index` 之前的所有**移动**事件（点击/按键/滚轮保留）。
@@ -653,7 +1062,7 @@ class AppController:
             self._record_snapshot()
             res.events = [e for i, e in enumerate(res.events)
                           if i >= idx or e.kind != "move"]
-        return self._record_payload()
+        return self._record_commit()
 
     def record_set_origin(self, index: Any = None) -> dict:
         """把相对坐标的原点设为指定事件的位置（默认取第一个鼠标事件）。
@@ -677,7 +1086,7 @@ class AppController:
             raise ControllerError(-32603, "序列里没有带坐标的事件")
         self._record_snapshot()
         res.origin_x, res.origin_y = res.events[idx].x, res.events[idx].y
-        return self._record_payload()
+        return self._record_commit()
 
     def record_set_text(self, index: Any = None, text: Any = "") -> dict:
         """改写某条 text 事件的内容。
@@ -704,7 +1113,7 @@ class AppController:
             return self._record_payload()
         self._record_snapshot()
         res.events[idx] = replace(ev, text=new)
-        return self._record_payload()
+        return self._record_commit()
 
     def record_keys_to_text(self, index: Any = None, text: Any = "") -> dict:
         """把选中的一段**连续按键**换成一条 `text` 事件。
@@ -748,14 +1157,124 @@ class AppController:
         res.events = res.events[:lo] + [
             MacroEvent(ts_ms=first.ts_ms, kind="text", text=new,
                        x=first.x, y=first.y)] + res.events[hi + 1:]
-        return self._record_payload()
+        return self._record_commit()
+
+    def record_patch(self, index: Any = None, fields: Any = None) -> dict:
+        """改一条事件的字段：坐标 / 按键 / 时间 / 按钮 / 点击次数 / 滚轮增量 / 文本。
+
+        按 `_PATCH_FIELDS` 白名单校验，**越界字段直接报错而不是忽略**——
+        静默忽略会让人以为改成功了，而回放用的还是旧值。
+
+        必须**替换元素**（`replace(ev, ...)`）而不是原地改：撤销栈存的是浅拷贝，
+        原地改会把快照一起改掉，撤销就回不去了（见 `_record_snapshot`）。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index 须为整数") from None
+        if not (0 <= idx < len(res.events)):
+            raise ControllerError(-32602, "下标越界")
+        if not isinstance(fields, dict) or not fields:
+            raise ControllerError(-32602, "参数无效：fields 须为非空对象")
+        ev = res.events[idx]
+        allowed = self._PATCH_FIELDS.get(ev.kind)
+        if allowed is None:
+            raise ControllerError(-32603, f"不支持编辑这类事件：{ev.kind}")
+        unknown = sorted(k for k in fields if k not in allowed)
+        if unknown:
+            raise ControllerError(
+                -32602, f"{ev.kind} 事件不能改这些字段：{'、'.join(unknown)}")
+        new_vals = {k: self._coerce_field(k, v) for k, v in fields.items()}
+        if all(getattr(ev, k) == v for k, v in new_vals.items()):
+            return self._record_payload()   # 值没变：不动撤销栈
+        self._record_snapshot()
+        res.events[idx] = replace(ev, **new_vals)
+        return self._record_commit()
+
+    def record_insert(self, index: Any = None, event: Any = None) -> dict:
+        """在 `index` 处插入一条新事件（`index == len` 即追加到末尾）。
+
+        时间戳缺省时对齐**前一条**：新插进来的一步不该早于它上面那步，
+        否则回放会把它提到前面去执行（排期是绝对时间线，见 `record_move_event`）。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index 须为整数") from None
+        if not (0 <= idx <= len(res.events)):
+            raise ControllerError(-32602, "下标越界")
+        if not isinstance(event, dict):
+            raise ControllerError(-32602, "参数无效：event 须为对象")
+        kind = str(event.get("kind") or "")
+        allowed = self._PATCH_FIELDS.get(kind)
+        if allowed is None:
+            raise ControllerError(-32602, f"不支持的事件类型：{kind or '(空)'}")
+        unknown = sorted(k for k in event if k not in allowed and k != "kind")
+        if unknown:
+            raise ControllerError(-32602, f"不支持的字段：{'、'.join(unknown)}")
+        vals = {k: self._coerce_field(k, v) for k, v in event.items() if k != "kind"}
+        if "ts_ms" not in vals:
+            vals["ts_ms"] = res.events[idx - 1].ts_ms if idx > 0 else 0
+        self._record_snapshot()
+        res.events = (res.events[:idx] + [MacroEvent(kind=kind, **vals)]
+                      + res.events[idx:])
+        return self._record_commit()
+
+    def record_duplicate(self, index: Any = None) -> dict:
+        """复制一条事件，插在它**后面**。
+
+        复制品沿用同一个 `ts_ms`（忠实复制）——要错开时间请用 `record.patch` 改。
+        两条会在同一时刻发出这件事由用户决定，不替他改。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index 须为整数") from None
+        if not (0 <= idx < len(res.events)):
+            raise ControllerError(-32602, "下标越界")
+        self._record_snapshot()
+        res.events = (res.events[:idx + 1] + [replace(res.events[idx])]
+                      + res.events[idx + 1:])
+        return self._record_commit()
+
+    def record_move_event(self, index: Any = None, delta: Any = 0) -> dict:
+        """把一条事件与**相邻**那条对调（`delta` = -1 上移 / +1 下移）。
+
+        位置与 `ts_ms` **一起交换**。回放按 `due = t0 + ts_ms/speed` 排期，也就是
+        **绝对时间线、与数组顺序无关**：只换位置不换时间的话时间线不再单调，
+        被挪到前面的那步会因为 `due` 已过而**立刻执行**（甚至赶在它本该排在其后的
+        那步之前）。一起换掉时间才是用户要的「把这两步调个个儿」。
+
+        到边界（首条上移 / 末条下移）时**无事发生**，不污染撤销栈。
+        """
+        res = self._record_or_raise()
+        try:
+            idx = int(index)
+            d = int(delta)
+        except (TypeError, ValueError):
+            raise ControllerError(-32602, "参数无效：index / delta 须为整数") from None
+        if d not in (-1, 1):
+            raise ControllerError(-32602, "参数无效：一次只能上移或下移一格")
+        j = idx + d
+        if not (0 <= idx < len(res.events)) or not (0 <= j < len(res.events)):
+            return self._record_payload()
+        self._record_snapshot()
+        a, b = res.events[idx], res.events[j]
+        evs = list(res.events)
+        evs[idx], evs[j] = replace(b, ts_ms=a.ts_ms), replace(a, ts_ms=b.ts_ms)
+        res.events = evs
+        return self._record_commit()
 
     def record_undo(self) -> dict:
         """回滚上一次编辑。"""
         if not self._record_undo:
             raise ControllerError(-32004, "nothing_to_undo")
         self._last_record.events = self._record_undo.pop()
-        return self._record_payload()
+        self._record_rev += 1   # 撤销同样让库里的那份过期（见 _record_snapshot）
+        return self._record_commit()
 
     def record_current(self) -> dict:
         """返回最近一次录制的**权威**事件序列。
@@ -765,6 +1284,162 @@ class AppController:
         改为面板在录制结束后（以及每次编辑后）拉一次本接口。
         """
         return self._record_payload()
+
+    # ---- 录制库（core/recording_lib.py）：录下来的东西变成可复用资产 ----
+    #
+    # 节点按 **id 引用**库里的录制，回放时才去取。好处是「在库里改一次，
+    # 所有引用它的节点一起变」；代价是节点自己看不出那条录制长什么样，
+    # 所以 `_public_node` 会补一个 `recording_name` 给画布摘要用。
+    def _lib_metas(self) -> list:
+        """库列表（**带缓存**）。
+
+        `_public_node` 每次广播工作流都要查名字，而 `list_meta()` 要读目录下
+        所有文件的元信息——放画布每次改参数都全库扫一遍太亏。写操作会置空缓存。
+        """
+        if self._lib_cache is None:
+            self._lib_cache = recording_lib.list_meta()
+        return self._lib_cache
+
+    def _lib_invalidate(self) -> None:
+        self._lib_cache = None
+
+    def record_lib_list(self) -> dict:
+        """列出库里的录制（**不含 events**）。
+
+        一条录制几百 KB，列表把它一起传过去会让「打开面板」变成几 MB 的传输，
+        而列表页根本用不到事件内容。
+        """
+        return {"items": recording_lib.list_meta(),
+                "current": self._lib_info(),
+                "dir": recording_lib.recordings_dir()}
+
+    def record_lib_save(self, name: str = "", rid: str = "") -> dict:
+        """把当前编辑缓冲存进库：`rid` 空 = 新建一条，给了 = 覆盖那一条。
+
+        用「覆盖」而不是「新建」，是为了让「改完推给所有引用它的节点」有落点：
+        节点按 id 引用，只有**同一个 id** 被更新，引用才会跟着变。
+        """
+        res = self._last_record
+        if res is None or not res.events:
+            raise ControllerError(-32003, "no_record_result")
+        meta = recording_lib.save(
+            name or (self._record_saved or {}).get("name") or recording_lib.default_name(),
+            [asdict(e) for e in res.events],
+            (res.origin_x, res.origin_y),
+            rid=rid or None,
+        )
+        self._record_saved = {"id": meta["id"], "name": meta["name"],
+                              "rev": self._record_rev}
+        # 「另存为新的」（rid 为空）之后当前缓冲就是新那一条了：直接编辑模式的目标
+        # 要跟着切，否则继续编辑会写回到**旧**条目上——用户以为在改刚存的那条。
+        if self._record_lib_edit_id and not rid:
+            self._record_lib_edit_id = meta["id"]
+        self._lib_invalidate()
+        return {"item": meta, "current": self._lib_info()}
+
+    def record_lib_rename(self, rid: str = "", name: str = "") -> dict:
+        if not rid:
+            raise ControllerError(-32602, "参数无效：缺 id")
+        try:
+            meta = recording_lib.rename(rid, name)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        if self._record_saved and self._record_saved["id"] == rid:
+            self._record_saved["name"] = meta["name"]
+        self._lib_invalidate()
+        return {"item": meta, "current": self._lib_info()}
+
+    def record_lib_delete(self, rid: str = "") -> dict:
+        if not rid:
+            raise ControllerError(-32602, "参数无效：缺 id")
+        try:
+            recording_lib.remove(rid)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        if self._record_saved and self._record_saved["id"] == rid:
+            # 库里那条没了，但内存里的事件还在——用户仍可「写入节点」或重新存一条。
+            self._record_saved = None
+        self._lib_invalidate()
+        return {"deleted": rid, "current": self._lib_info()}
+
+    def record_from_lib(self, rid: str = "") -> dict:
+        """把库里的一条**载入编辑缓冲**，之后可继续编辑 / 更新 / 写入节点。
+
+        这会替换掉 `_last_record`（「载入」就是这个意思），并把 `_record_saved`
+        指到这条上——rev 与 saved rev 因此对齐，界面显示「已同步」。
+        """
+        if not rid:
+            raise ControllerError(-32602, "参数无效：缺 id")
+        try:
+            data = recording_lib.load(rid)
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        # 与回放走**同一个**容忍构造：载入面板看到的条数必须等于回放实际用的条数，
+        # 否则「面板上删到 20 条、回放却跑了 22 条」这种对不上的账没处查。
+        from core.events import RecordResult
+        from tasks.builtin import tolerant_event
+        events = [e for e in (tolerant_event(x) for x in data["events"]) if e]
+        ox, oy = data.get("origin") or [0, 0]
+        self._last_record = RecordResult(events=events,
+                                         origin_x=int(ox), origin_y=int(oy))
+        self._record_undo.clear()
+        # 载入会**退出**「直接编辑库条目」模式。调用方若是 record_lib_edit，
+        # 它会紧接着再设回来（见那里）——否则用户点「载入」换了一条之后，
+        # 后续编辑还在往旧那条上写回。
+        self._record_lib_edit_id = None
+        self._record_saved = {"id": rid, "name": data.get("name") or "(未命名)",
+                              "rev": self._record_rev}
+        return self._record_payload()
+
+    def record_lib_edit(self, rid: str = "") -> dict:
+        """进入「直接编辑库里这条」模式：载入它，之后**每次编辑自动写回**。
+
+        与「载入」的区别只在收尾：载入之后编辑只改内存（界面显示「改动未更新」，
+        要再点「更新到库」才落盘）；本接口把落盘也接管了，于是库里点开就能改，
+        不必「载入 → 改 → 更新到库」三步。写回在后端的编辑收尾统一做，
+        前端不用（也不能）记账——见 `_sync_lib_edit`。
+        """
+        payload = self.record_from_lib(rid)
+        # 先记下写回目标，**再**重建 payload 里的 lib。
+        # 顺序反了就是个静默 bug：record_from_lib 构造 payload 时 _record_lib_edit_id
+        # 还是 None（纯载入会清掉它），于是响应里 `editing=False` —— 前端那条
+        # 「正在直接编辑…」提示条**根本不会出现**，用户看不到"改动会立刻写回"，
+        # 而写回其实已经在生效了。最难发现的那类不一致。
+        self._record_lib_edit_id = rid
+        payload["lib"] = self._lib_info()
+        return payload
+
+    def record_lib_end_edit(self) -> dict:
+        """退出「直接编辑库条目」模式，回到「改了要手动更新到库」的语义。"""
+        self._record_lib_edit_id = None
+        return self._record_payload()
+
+    def record_lib_to_node(self, rid: str = "") -> dict:
+        """新建一个「录制回放」节点，按 id 引用库里这条录制。
+
+        这是「在流程图中选择录制」的快路径：库里点一下就落到画布上，
+        不用先载入缓冲再写入节点。节点只存 id，所以之后在库里改这条录制，
+        所有引用它的节点一起生效。
+        """
+        if not rid:
+            raise ControllerError(-32602, "参数无效：缺 id")
+        try:
+            meta = recording_lib.meta_of(recording_lib.load(rid))
+        except ValueError as e:
+            raise ControllerError(-32005, str(e)) from None
+        node = Node(type="record_replay", params={
+            "source": "录制库",
+            "recording_id": rid,
+            "events": [],
+            "origin_x": meta["origin"][0], "origin_y": meta["origin"][1],
+            "use_relative": True,
+        }, enabled=True)
+        with self._lock:
+            self.workflow.nodes.append(node)
+            inserted = len(self.workflow.nodes) - 1
+        self._broadcast_workflow()
+        return {**self.workflow_current(), "index": inserted,
+                "node": self._public_node(node)}
 
     # ---- 热键 / 键盘捕获（P1-3，§3.2 + §9 说明） ----
     def _ensure_key_listener(self) -> None:

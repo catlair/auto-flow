@@ -60,6 +60,22 @@ class FakeKeyboard:
 
 
 @pytest.fixture(autouse=True)
+def no_self_window_masking(monkeypatch):
+    """默认关掉「把 Auto Flow 自己的窗口从截图里涂黑」（core/selfmask）。
+
+    遮罩读的是**真实窗口列表**，于是用例结果会随「测试时桌面上有没有 Auto Flow
+    窗口」而变——最典型的受害者是 test_flat_screen_is_skipped_and_warned_once：
+    遮罩在纯色屏上涂出一块黑，屏幕就不再是纯色，告警不再触发，用例假失败。
+
+    单元测试不该依赖桌面状态，所以这里统一让它读不到任何窗口（返回空列表 =
+    不遮），行为等价于「没有本程序窗口在屏幕上」。tests/test_selfmask.py 自己
+    会显式 monkeypatch 出矩形来验遮罩本身。
+    """
+    from core import selfmask
+    selfmask.reset_cache()
+    monkeypatch.setattr(selfmask, "own_window_rects", lambda force=False: [])
+
+@pytest.fixture(autouse=True)
 def isolate_desktop_and_schedule(monkeypatch, tmp_path):
     """隔离副作用：假键鼠 + 独立数据目录。
 
@@ -75,6 +91,17 @@ def isolate_desktop_and_schedule(monkeypatch, tmp_path):
     # 不读取、也不写回用户真实 config.json（定时配置）
     monkeypatch.setattr(AppController, "_schedule_load", lambda self: {})
     monkeypatch.setattr(AppController, "_schedule_save", lambda self, cfg: None)
+
+
+@pytest.fixture(autouse=True)
+def isolate_trash(monkeypatch, tmp_path):
+    """删除工作流会**移进废纸篓**——不隔离的话，跑一次测试就往用户真实
+    `~/.Trash` 里塞一堆 `20260915-xxxxxx.json`，而且他不会知道那是测试留下的。
+
+    `AUTOFLOW_TRASH_DIR` 会写进环境变量，故 `test_rpc.py` 拉起的 sidecar
+    子进程同样落在临时目录。
+    """
+    monkeypatch.setenv("AUTOFLOW_TRASH_DIR", str(tmp_path / "trash"))
 
 
 @pytest.fixture(autouse=True)

@@ -8,22 +8,33 @@
 // 新增节点悄悄过时，而通用的永远不会。代价是表达力弱一点，可以接受。
 
 import type { NodeDefinition, WorkflowNode } from "@/rpc/types";
+// 相对路径而不是 `@/flow/duration`：Node 测试用 transpileModule + 裸 require
+// 直接跑这个模块，拿不到 vite 的 `@` 别名（`@/rpc/types` 是 type-only，
+// 编译后整条被删掉，所以别名在那里没事，值导入不行）。
+import { formatDuration } from "./duration";
+import { recDisplayName } from "./recording";
 
 /** 摘要最多显示几个参数值。 */
 export const SUMMARY_MAX_PARTS = 3;
 /** 摘要的字符上限（卡片宽度有限，超出即截断）。 */
 export const SUMMARY_MAX_CHARS = 48;
 
-function formatValue(v: unknown): string {
+function formatValue(v: unknown, ptype?: string): string {
   if (v === null || v === undefined) return "";
+  if (typeof v === "string" && v.trim() === "") return "";
+  // 时长参数的原始值是毫秒总数（5400000），卡片上直接显示数字没人看得懂。
+  // 这是**按控件类型**格式化，不是按节点类型——本模块「与节点类型无关」的性质没破。
+  if (ptype === "duration") return formatDuration(v);
   if (typeof v === "string") return v.trim();
   if (typeof v === "boolean") return v ? "开" : "关";
   if (typeof v === "number") return String(v);
-  // 事件数组：对外视图是 {count}，本地真源是数组，两种都要能显示
-  if (Array.isArray(v)) return `${v.length} 个事件`;
+  // 事件数组：对外视图是 {count}，本地真源是数组，两种都要能显示。
+  // **空数组返回空串**：引用录制库的节点把 `events` 存成 `[]`（事件在那条录制里），
+  // 显示「0 个事件」会让卡片看起来像「这个节点没有内容」，而其实它引用着一段录制。
+  if (Array.isArray(v)) return v.length ? `${v.length} 个事件` : "";
   if (typeof v === "object") {
     const c = (v as { count?: unknown }).count;
-    if (typeof c === "number") return `${c} 个事件`;
+    if (typeof c === "number") return c > 0 ? `${c} 个事件` : "";
     return "";
   }
   return String(v);
@@ -47,7 +58,13 @@ export function nodeSummary(
   const parts: string[] = [];
   for (const p of def.params) {
     if (parts.length >= SUMMARY_MAX_PARTS) break;
-    const text = formatValue(node.params?.[p.key]);
+    // 引用录制库的节点，参数值是**一个 id**（`20260915-190433-a1b2c3`）——卡片上
+    // 显示它没人认得出是哪段操作。后端已在 `recording_name` 里捎了名字，优先用它。
+    // 仍然只按 `ptype` 分支，没有引入「按节点类型」的格式化表。
+    const text =
+      p.ptype === "recording"
+        ? recDisplayName(node.params)
+        : formatValue(node.params?.[p.key], p.ptype);
     if (text) parts.push(text);
   }
   const joined = parts.join(" · ");

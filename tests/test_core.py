@@ -193,12 +193,37 @@ def test_delay_duration_mode_keeps_speed_scaling():
 
 
 def test_delay_params_carry_mode_and_show_if():
-    """参数面板按等待方式只显示相关字段（毫秒/时刻互斥）。"""
+    """按等待方式只显示相关字段（时长/时刻互斥），且用的是「能选」的控件。"""
     from tasks.builtin import DelayTask
     by_key = {p.key: p for p in DelayTask().params}
     assert by_key["mode"].options == ["延时毫秒", "等待至时刻"]
     assert by_key["ms"].show_if == {"key": "mode", "eq": "延时毫秒"}
     assert by_key["at"].show_if == {"key": "mode", "eq": "等待至时刻"}
+    # 控件类型：时长摊成「时/分/秒/毫秒」四格，时刻用选择器——都是「选」不是手打。
+    # 这两个字符串是前端 ParamsPanel 的分支键（前端 duration.test.mjs 里有一条
+    # 读本文件的反向断言）。改成别的字面量不会报错，只会静默退化成手输毫秒。
+    assert by_key["ms"].ptype == "duration"
+    assert by_key["at"].ptype == "time"
+    # mode 的**取值**（不是标签）已经写进用户保存的文件里，不能改
+    assert by_key["mode"].default == "延时毫秒"
+
+
+def test_delay_controls_do_not_change_stored_format():
+    """换控件不能换存储格式——换了，已保存的流程会被静默读错。
+
+    `ms` 必须是数字：若变成 "1:30" 这类字符串，run() 里的 float() 直接抛。
+    `at` 必须是字符串：若变成秒数，_seconds_until 会当成非法格式抛 ValueError。
+    两者都躺在用户的文件里，迁移成本远大于收益。
+    """
+    from datetime import datetime as dt
+
+    from tasks.builtin import DelayTask
+    d = DelayTask().defaults()
+    assert isinstance(d["ms"], int) and d["ms"] == 500
+    assert isinstance(d["at"], str) and d["at"] == "09:00:00"
+    # 老文件存的是 "09:00"（改控件前手输的），必须照样解析
+    assert DelayTask._seconds_until("09:00", dt(2026, 9, 15, 9, 0, 1)) == 86399
+    assert DelayTask._seconds_until("09:00:00", dt(2026, 9, 15, 9, 0, 1)) == 86399
 
 
 @pytest.mark.parametrize("node_repeat,workflow_repeat", [(1, 1), (3, 1), (3, 2), (0, 2)])
@@ -530,6 +555,250 @@ def test_condition_group_definition_shape():
     assert params["cond1_value"]["pick"] is True
     # 超出上限的键不该存在——它们永远不会被渲染，只会误导读文件的人
     assert f"cond{MAX_GROUP_CONDITIONS + 1}_kind" not in params
+
+
+# ---------- 框内取点（image_click / ocr_click 的「点击位置」） ----------
+#
+# 背景：点击点以前恒为目标中心。目标是一整块卡片、或一整行文字时，中心可能压在
+# 图标或不可交互处；「偏移X」替代不了——框有多大取决于匹配到的模板尺寸或识别出
+# 的文字长度，偏移量事先根本不知道。
+#
+# 语义要点（每条都有用例锁住）：
+#   1. 默认仍是中心 —— 已保存的老流程行为**逐字不变**；
+#   2. 拿不到框（w/h 为 0）或模式不认识 → 回落中心，**不抛错**；
+#   3. 固定偏移在框内取点**之后**叠加（所以对老流程是等价的）。
+
+# cx, cy, w, h：框占 x∈[80,119]、y∈[190,209]（跨度取 w-1，100% 落在末列）
+_CLICK_BOX = (100, 200, 40, 20)
+
+
+def test_click_point_default_is_center():
+    """不填「点击位置」= 点中心。老流程（文件里没有 click_pos）必须不变。"""
+    from tasks.builtin import click_point_in_box
+    assert click_point_in_box(*_CLICK_BOX) == (100, 200)
+
+
+def test_click_point_custom_corners_land_inside_the_box():
+    """0/0 与 100/100 落在框的**首末像素**上，不是框外一像素。
+
+    跨度取 `w-1` 就是为了这条：取 `w` 的话 100% 会落到右边缘之外，
+    而右边缘之外正是「点了但没点中」的经典症状。
+    """
+    from tasks.builtin import CLICK_POS_CUSTOM, click_point_in_box
+
+    def at(rx, ry):
+        return click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,
+                                  rel_x=rx, rel_y=ry)
+
+    assert at(0, 0) == (80, 190)        # 左上
+    assert at(100, 0) == (119, 190)     # 右上
+    assert at(0, 100) == (80, 209)      # 左下
+    assert at(100, 100) == (119, 209)   # 右下
+    assert at(50, 50) == (100, 200)     # 50% 回到中心
+
+
+def test_click_point_random_spans_the_whole_box():
+    """随机点必须落在框内，且能取到框的每一列/每一行（含两个极端）。"""
+    from tasks.builtin import CLICK_POS_RANDOM, click_point_in_box
+
+    xs, ys = set(), set()
+    for i in range(101):                      # 注入 0.00, 0.01 … 1.00
+        f = i / 100.0
+        x, y = click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_RANDOM,
+                                  rand=lambda f=f: f)
+        assert 80 <= x <= 119, (f, x)
+        assert 190 <= y <= 209, (f, y)
+        xs.add(x)
+        ys.add(y)
+    assert (min(xs), max(xs)) == (80, 119)
+    assert (min(ys), max(ys)) == (190, 209)
+
+
+def test_click_point_random_default_source_stays_inside():
+    """不注入 rand 时走真随机（`rand or random.random`），照样在框内。"""
+    from tasks.builtin import CLICK_POS_RANDOM, click_point_in_box
+    for _ in range(300):
+        x, y = click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_RANDOM)
+        assert 80 <= x <= 119 and 190 <= y <= 209, (x, y)
+
+
+def test_click_point_inset_shrinks_the_box():
+    """内缩把框四边各收进去，取点范围随之变小。"""
+    from tasks.builtin import CLICK_POS_CUSTOM, click_point_in_box
+
+    def at(rx, ry, inset):
+        return click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,
+                                  rel_x=rx, rel_y=ry, inset=inset)
+
+    assert at(0, 0, 5) == (85, 195)
+    assert at(100, 100, 5) == (114, 204)
+
+
+def test_click_point_huge_inset_clamps_and_never_leaves_the_box():
+    """内缩填得比半个框还大：钳到「至少留 1 像素」，不抛错、不给负宽。
+
+    不钳制的话 `left` 会跑到 100-20+999 这种位置，点直接落到框外很远的地方，
+    而用户只会看到「点歪了」，完全联想不到是内缩填太大。
+    """
+    from tasks.builtin import CLICK_POS_CUSTOM, click_point_in_box
+
+    for inset in (0, 9, 10, 11, 19, 20, 999):
+        for rx, ry in ((0, 0), (100, 100), (50, 50)):
+            x, y = click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,
+                                      rel_x=rx, rel_y=ry, inset=inset)
+            assert 80 <= x <= 119 and 190 <= y <= 209, (inset, rx, ry, x, y)
+    # 钳制后仍留出**可用跨度**（不是塌成一个点），两端都在框内 ——
+    # 这条把「钳住了」与「压根没取点、恒返回中心」区分开
+    x0, y0 = click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,
+                                rel_x=0, rel_y=0, inset=999)
+    x1, y1 = click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,
+                                rel_x=100, rel_y=100, inset=999)
+    assert (x0, y0) != (x1, y1), "钳制不该把框收成一个点"
+    assert 80 <= x0 <= x1 <= 119 and 190 <= y0 <= y1 <= 209
+    # 钳制后「再加大内缩」不再改变结果——这就是「钳住了」的可观测证据
+    at = lambda i: click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,  # noqa: E731
+                                      rel_x=0, rel_y=0, inset=i)
+    assert at(9) == at(999)
+
+
+def test_click_point_percent_out_of_range_is_clamped():
+    """百分比越界（-50 / 200）钳到 0 / 100，而不是把点送出去。"""
+    from tasks.builtin import CLICK_POS_CUSTOM, click_point_in_box
+
+    def at(rx, ry):
+        return click_point_in_box(*_CLICK_BOX, mode=CLICK_POS_CUSTOM,
+                                  rel_x=rx, rel_y=ry)
+
+    assert at(-50, -50) == (80, 190)
+    assert at(200, 200) == (119, 209)
+
+
+def test_click_point_falls_back_to_center_when_box_or_mode_is_unknown():
+    """拿不到框（w/h<=0）或模式是脏值 → 回落中心，**不抛错**。
+
+    检测层有些路径给不出尺寸。此时抛错或返回 (0,0)，会让本来能跑的流程
+    突然点向屏幕左上角（或整条流程报错），而原因和「框」毫无关系。
+    """
+    from tasks.builtin import (CLICK_POS_CUSTOM, CLICK_POS_RANDOM,
+                              click_point_in_box)
+
+    for w, h in ((0, 0), (0, 20), (40, 0), (-5, 10)):
+        assert click_point_in_box(100, 200, w, h, mode=CLICK_POS_RANDOM) == (100, 200)
+        assert click_point_in_box(100, 200, w, h, mode=CLICK_POS_CUSTOM,
+                                  rel_x=0, rel_y=0) == (100, 200)
+    # 脏值：旧文件里的写法、英文、空串、多个空格、None —— 都不能当成「有效模式」
+    for bad in ("随机", "center", "", "目标中心 ", None):
+        assert click_point_in_box(*_CLICK_BOX, mode=bad) == (100, 200)
+
+
+def test_click_target_applies_offset_after_the_box_point():
+    """偏移叠在框内取点**之后**——对老流程（偏移直接加在中心上）逐字等价。"""
+    from tasks.builtin import CLICK_POS_CUSTOM, _click_target
+
+    # 老流程：参数里没有 click_pos
+    assert _click_target({"offset_x": 7, "offset_y": -3}, 100, 200, 40, 20) == (107, 197)
+    # 新流程：先取框内左上角，再叠同一个偏移
+    assert _click_target({"click_pos": CLICK_POS_CUSTOM, "rel_x": 0, "rel_y": 0,
+                          "offset_x": 7, "offset_y": -3}, 100, 200, 40, 20) == (87, 187)
+
+
+def test_click_target_keeps_zero_as_a_real_value():
+    """`0` 是合法值：不能被当成「没填」而回落到默认（`p.get(k) or default` 的坑）。"""
+    from tasks.builtin import CLICK_POS_CUSTOM, _click_target
+
+    assert _click_target({"offset_x": 0, "offset_y": 0}, 100, 200, 40, 20) == (100, 200)
+    # rel 为 0 时必须真的取左/上边缘，而不是被当成「没填」→ 50%
+    assert _click_target({"click_pos": CLICK_POS_CUSTOM, "rel_x": 0, "rel_y": 0},
+                         100, 200, 40, 20) == (80, 190)
+
+
+def test_click_target_tolerates_dirty_params():
+    """参数来自旧文件（字符串数字）或被手工改坏：按默认处理，不抛错。"""
+    from tasks.builtin import _click_target
+
+    assert _click_target({"offset_x": "abc", "rel_x": "x"}, 100, 200, 40, 20) == (100, 200)
+    assert _click_target({"click_pos": None, "inset": None}, 100, 200, 40, 20) == (100, 200)
+
+
+def _one_click_point(monkeypatch, node_type, params) -> tuple:
+    """跑一次点击节点，返回**唯一**那个点击目标点。
+
+    少于/多于一个都算失败：`seen` 为空说明 `run()` 里抛错被执行器吞掉了
+    （例如检测结果缺 `w`/`h`），那种情况单看坐标断言会给出误导性的失败信息。
+    """
+    ex = Executor()
+    seen: list = []
+    monkeypatch.setattr(ex.player, "glide_now", seen.append)
+    ex.run_workflow(_graph((node_type, params)))
+    assert len(seen) == 1, f"应恰好送出一次点击，实际 {seen}（空 = run() 抛错被吞）"
+    return seen[0]
+
+
+def test_image_click_uses_the_box_point(monkeypatch):
+    """找图点击：命中框 → 框内取点 → 再叠偏移，最终点送给 glide_now。"""
+    from core import vision
+    from core.vision import MatchResult
+    from tasks.builtin import CLICK_POS_CUSTOM, CLICK_POS_RANDOM
+
+    monkeypatch.setattr(vision, "find_template",
+                        lambda conf, template_path="":
+                        MatchResult(found=True, x=1000, y=500, w=200, h=100))
+
+    # 默认（中心）+ 偏移：与改动前完全一致
+    assert _one_click_point(monkeypatch, "image_click",
+                            {"image_path": "x.png", "action": "click",
+                             "offset_x": 5, "offset_y": -5}) == (1005, 495)
+    # 框内左上角 + 同一个偏移
+    assert _one_click_point(monkeypatch, "image_click",
+                            {"image_path": "x.png", "action": "click",
+                             "click_pos": CLICK_POS_CUSTOM, "rel_x": 0, "rel_y": 0,
+                             "offset_x": 5, "offset_y": -5}) == (905, 445)
+    # 随机：不能断言具体值，但必须落在框内（证明随机这条支路真的接上了）
+    x, y = _one_click_point(monkeypatch, "image_click",
+                            {"image_path": "x.png", "action": "click",
+                             "click_pos": CLICK_POS_RANDOM})
+    assert 900 <= x <= 1099 and 450 <= y <= 549, (x, y)
+
+
+def test_ocr_click_uses_the_box_point(monkeypatch):
+    """找文字点击走**同一套**框内取点：长文字能点靠左/靠右，而不是恒点中间。"""
+    from core import ocr
+    from core.ocr import TextHit
+    from tasks.builtin import CLICK_POS_CUSTOM
+
+    monkeypatch.setattr(ocr, "find_text",
+                        lambda target, region=None, languages=None:
+                        TextHit(text="设置", x=600, y=300, confidence=0.9,
+                                w=400, h=40))
+
+    assert _one_click_point(monkeypatch, "ocr_click", {"text": "设置"}) == (600, 300)
+    # 400 宽的文字框，点它最右端
+    assert _one_click_point(monkeypatch, "ocr_click",
+                            {"text": "设置", "click_pos": CLICK_POS_CUSTOM,
+                             "rel_x": 100, "rel_y": 50}) == (799, 300)
+
+
+def test_click_position_params_are_wired_on_both_click_nodes():
+    """两个点击节点的「点击位置」参数定义：默认中心 + 百分比只在自定义时出现。
+
+    漏 `show_if` 的后果是面板上永远多两个没用的数字框；漏参数则是「面板上有
+    选项、`run()` 里读不到」。两者都不报错，只能靠这条断言拦。
+    """
+    from tasks.builtin import CLICK_POS_CENTER, CLICK_POS_KINDS
+
+    defs = {d["type"]: d for d in all_definitions()}
+    for t in ("image_click", "ocr_click"):
+        params = {p["key"]: p for p in defs[t]["params"]}
+        assert params["click_pos"]["default"] == CLICK_POS_CENTER, t
+        assert params["click_pos"]["options"] == list(CLICK_POS_KINDS), t
+        for k in ("rel_x", "rel_y"):
+            assert params[k]["show_if"] == {"key": "click_pos",
+                                            "eq": "框内自定义"}, (t, k)
+            assert (params[k]["min"], params[k]["max"]) == (0, 100), (t, k)
+        # 内缩必须能从 0 起（默认就是 0 = 不缩）
+        assert params["inset"]["min"] == 0, t
+        # 老的固定偏移还在，不能被这次改动挤掉
+        assert params["offset_x"]["default"] == 0 and params["offset_y"]["default"] == 0
 
 
 def test_executor_merges_when_two_edges_point_at_one_node(monkeypatch):
@@ -1507,6 +1776,305 @@ def test_record_edit_without_recording_raises():
         raise AssertionError("无录制结果应报错")
     except Exception as e:  # noqa: BLE001
         assert "no_record_result" in str(e)
+    ctrl.shutdown()
+
+
+# ---------- 单条事件的字段编辑（record.patch）----------
+def test_record_patch_edits_coordinates_and_undo_restores_them():
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_patch(0, {"x": 640, "y": 480})
+    assert r["events"][0]["x"] == 640 and r["events"][0]["y"] == 480
+    # 撤销要能回到旧坐标：撤销栈存的是浅拷贝，所以实现必须 replace 出新对象
+    assert ctrl.record_undo()["events"][0]["x"] == 500
+    ctrl.shutdown()
+
+
+def test_record_patch_covers_every_kind():
+    """五种事件各有各的字段，逐个改一遍（少支持一种就是少一种编辑能力）。"""
+    ctrl = _ctrl_with_events()
+    assert ctrl.record_patch(0, {"x": 1})["events"][0]["x"] == 1                 # move
+    assert ctrl.record_patch(2, {"button": "right"})["events"][2]["button"] == "right"
+    assert ctrl.record_patch(4, {"key": "F5"})["events"][4]["key"] == "F5"       # key
+    ctrl.record_insert(0, {"kind": "wheel", "wheel_dy": 2})
+    assert ctrl.record_patch(0, {"wheel_unit": "pixel"})["events"][0]["wheel_unit"] == "pixel"
+    ctrl.record_insert(0, {"kind": "text", "text": "a"})
+    assert ctrl.record_patch(0, {"text": "你好"})["events"][0]["text"] == "你好"
+    ctrl.shutdown()
+
+
+def test_record_patch_rejects_fields_the_kind_does_not_have():
+    """给 move 改 button、给 key 改滚轮增量都必须**报错**。
+
+    静默忽略的话用户以为改成功了，而回放用的还是旧值——「看着成功了」的失败
+    最难查（与 `record.set_text` 只认 text 事件是同一个思路，只是这里放宽到
+    所有字段）。
+    """
+    from rpc.controller import ControllerError
+    ctrl = _ctrl_with_events()
+    for idx, fields in ((0, {"button": "right"}),   # move 没有 button
+                        (2, {"text": "hi"}),        # mouse 没有 text
+                        (4, {"wheel_dy": 3})):      # key 没有滚轮
+        with pytest.raises(ControllerError) as ei:
+            ctrl.record_patch(idx, fields)
+        assert ei.value.code == -32602
+    assert ctrl.record_current()["count"] == 5      # 序列没被改坏
+    ctrl.shutdown()
+
+
+def test_record_patch_rejects_bad_values_instead_of_coercing():
+    """坐标写成 "abc" 要报错，不能悄悄当成 0——那会把光标甩到屏幕左上角，
+    而用户以为自己填的是对的。枚举类字段同理：拼错的滚轮单位会让回放把
+    「行」当「像素」，滚轮几乎不动。"""
+    from rpc.controller import ControllerError
+    ctrl = _ctrl_with_events()
+    for idx, fields in ((0, {"x": "abc"}), (0, {"ts_ms": -5}), (0, {"x": 10 ** 9}),
+                        (2, {"clicks": 0}), (2, {"button": "middle2"}),
+                        (4, {"key": ""}), (4, {"nope": 1})):
+        with pytest.raises(ControllerError):
+            ctrl.record_patch(idx, fields)
+    ctrl.shutdown()
+
+
+def test_record_patch_with_same_value_does_not_touch_the_undo_stack():
+    """值没变就不该占一格撤销，否则连点两下同样的值就把撤销栈填满垃圾。"""
+    ctrl = _ctrl_with_events()
+    assert ctrl.record_patch(0, {"x": 500})["can_undo"] is False
+    ctrl.shutdown()
+
+
+# ---------- 增删与重排 ----------
+def test_record_insert_defaults_ts_to_the_previous_event():
+    """插入的时间默认对齐**前一条**：新步骤不该早于它上面那步。"""
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_insert(3, {"kind": "wheel", "wheel_dy": 3})
+    assert r["count"] == 6 and r["events"][3]["kind"] == "wheel"
+    assert r["events"][3]["ts_ms"] == 20        # 对齐下标 2 的 mouse
+    ctrl.shutdown()
+
+
+def test_record_insert_can_append_at_the_end():
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_insert(5, {"kind": "move", "x": 7, "y": 8, "ts_ms": 99})
+    assert r["count"] == 6 and r["events"][-1]["x"] == 7
+    ctrl.shutdown()
+
+
+def test_record_insert_rejects_unknown_kind_or_fields():
+    from rpc.controller import ControllerError
+    ctrl = _ctrl_with_events()
+    for ev in ({"kind": "jump"}, {"kind": "move", "button": "left"},
+               {"kind": ""}, {"x": 1}):
+        with pytest.raises(ControllerError):
+            ctrl.record_insert(0, ev)
+    ctrl.shutdown()
+
+
+def test_record_duplicate_copies_the_event_right_after_it():
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_duplicate(4)
+    assert r["count"] == 6
+    assert [e["key"] for e in r["events"][4:]] == ["a", "a"]
+    # 忠实复制：时间一样（要错开请用 record.patch 改）
+    assert r["events"][4]["ts_ms"] == r["events"][5]["ts_ms"] == 50
+    ctrl.shutdown()
+
+
+def test_record_move_event_swaps_timestamps_too():
+    """上下移必须**连时间一起换**。
+
+    回放按 `due = t0 + ts_ms/speed` 排期（绝对时间线、与数组顺序无关），只换位置
+    不换时间的话时间线不再单调，被挪到前面的那步 `due` 已过、会**立刻执行**——
+    顺序反而更乱。一起换掉时间才是用户要的「把这两步调个个儿」。
+    """
+    ctrl = _ctrl_with_events()
+    r = ctrl.record_move_event(4, -1)          # key(50) 与 mouse-up(40) 对调
+    assert [e["kind"] for e in r["events"]] == ["move", "move", "mouse", "key", "mouse"]
+    assert [e["ts_ms"] for e in r["events"]] == [0, 10, 20, 40, 50]   # 仍严格单调
+    assert r["events"][3]["key"] == "a" and r["events"][3]["ts_ms"] == 40
+    ctrl.shutdown()
+
+
+def test_record_move_event_at_the_border_is_a_noop():
+    """首条上移 / 末条下移：无事发生，也不该占一格撤销。"""
+    ctrl = _ctrl_with_events()
+    assert ctrl.record_move_event(0, -1)["can_undo"] is False
+    assert ctrl.record_move_event(4, 1)["can_undo"] is False
+    assert ctrl.record_current()["count"] == 5
+    ctrl.shutdown()
+
+
+# ---------- 直接编辑库条目（record.lib.edit）----------
+def test_lib_edit_writes_every_edit_back_to_the_library():
+    """「直接编辑库条目」模式下，每次编辑都**自动写回**库里那条。
+
+    「库里点开就能改」靠的就是这条（不必「载入 → 改 → 更新到库」三步）。
+    写回在**后端**的编辑收尾统一做：编辑接口有十几个，靠前端记账漏一个就会
+    「库里还是旧的、界面却显示已同步」。
+    """
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    rid = ctrl.record_lib_save("库里的这条")["item"]["id"]
+    r = ctrl.record_lib_edit(rid)
+    assert r["lib"]["id"] == rid and r["lib"]["dirty"] is False
+    ctrl.record_patch(0, {"x": 640})
+    assert recording_lib.load(rid)["events"][0]["x"] == 640   # 库里也跟着变了
+    assert ctrl.record_current()["lib"]["dirty"] is False     # 不该提示「改动未更新」
+    ctrl.shutdown()
+
+
+def test_lib_edit_response_reports_editing_so_the_banner_shows():
+    """`record.lib.edit` 的**响应**里必须带 `editing=True`。
+
+    界面上那条「✎ 正在直接编辑…——改动会立刻写回」提示条就是读这个字段的
+    （`libCurrent?.editing`）。写回目标必须在**构造响应之前**设好：`record_from_lib`
+    （纯载入）会清掉它，顺序反了响应里就是 `editing=False` ⇒ 提示条不出现，
+    用户看不到"改动会立刻写回"——而写回其实已经在生效了，最难发现的那类不一致。
+    （这条是 2026-09-17 对**安装版**跑 `check_installed.py` 才抓出来的：
+    单测当时只断言了 `lib.id` 与 `dirty`，漏了这个字段。）
+    """
+    ctrl = _ctrl_with_events()
+    rid = ctrl.record_lib_save("库里的这条")["item"]["id"]
+    assert ctrl.record_lib_edit(rid)["lib"]["editing"] is True
+    # 后续每次编辑的响应也要一直带着它——提示条不能改一下就消失
+    assert ctrl.record_patch(0, {"x": 640})["lib"]["editing"] is True
+    assert ctrl.record_current()["lib"]["editing"] is True
+    # 纯「载入」与「退出编辑」都要报 False（界面据此收起提示条）
+    assert ctrl.record_from_lib(rid)["lib"]["editing"] is False
+    ctrl.record_lib_edit(rid)
+    assert ctrl.record_lib_end_edit()["lib"]["editing"] is False
+    ctrl.shutdown()
+
+
+def test_lib_edit_undo_also_writes_back():
+    """撤销同样要落库，否则「撤销了、库里还是错的」。"""
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    rid = ctrl.record_lib_save("库里的这条")["item"]["id"]
+    ctrl.record_lib_edit(rid)
+    ctrl.record_patch(0, {"x": 640})
+    ctrl.record_undo()
+    assert recording_lib.load(rid)["events"][0]["x"] == 500
+    ctrl.shutdown()
+
+
+def test_lib_edit_covers_structural_edits_too():
+    """增删/重排也要落库——它们同样是「编辑」，漏掉就会只在内存里变。"""
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    rid = ctrl.record_lib_save("库里的这条")["item"]["id"]
+    ctrl.record_lib_edit(rid)
+    ctrl.record_duplicate(0)
+    assert len(recording_lib.load(rid)["events"]) == 6
+    ctrl.record_remove(0)
+    assert len(recording_lib.load(rid)["events"]) == 5
+    ctrl.record_move_event(0, 1)
+    assert [e["kind"] for e in recording_lib.load(rid)["events"]][:2] == ["move", "move"]
+    ctrl.shutdown()
+
+
+def test_lib_end_edit_returns_to_manual_update():
+    """退出直接编辑后回到老语义：改了只留在内存，界面提示「改动未更新」。"""
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    rid = ctrl.record_lib_save("库里的这条")["item"]["id"]
+    ctrl.record_lib_edit(rid)
+    ctrl.record_lib_end_edit()
+    ctrl.record_patch(0, {"x": 640})
+    assert recording_lib.load(rid)["events"][0]["x"] == 500    # 库里还是旧的
+    assert ctrl.record_current()["lib"]["dirty"] is True       # 界面会提示
+    ctrl.shutdown()
+
+
+def test_loading_another_recording_leaves_direct_edit_mode():
+    """切到另一条编辑时，写回目标必须**跟着切**，不能还往旧那条上写。
+
+    顺带钉住两个语义的分工：`record_from_lib`（「载入」按钮）是老语义——
+    改了只留在内存、要手动「更新到库」；只有 `record_lib_edit` 才自动写回。
+    """
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    a = ctrl.record_lib_save("A")["item"]["id"]
+    ctrl.record_lib_edit(a)
+    ctrl.record_insert(5, {"kind": "move", "x": 9, "y": 9})
+    other = ctrl.record_lib_save("B")["item"]["id"]
+    assert other != a
+    ctrl.record_lib_edit(other)             # 切到 B 上直接编辑
+    ctrl.record_remove(0)
+    assert len(recording_lib.load(a)["events"]) == 6        # A 不该被动
+    assert len(recording_lib.load(other)["events"]) == 5    # 改的是 B
+    ctrl.shutdown()
+
+
+def test_plain_load_does_not_write_back_to_anything():
+    """「载入」按钮走的是**老语义**：改了只留在内存，要手动「更新到库」。
+
+    它必须**退出**直接编辑模式——否则用户在 A 上开了直接编辑、又点了「载入 B」，
+    接下来的编辑会悄悄写回到 A 上（而用户以为在改 B）。
+    """
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    a = ctrl.record_lib_save("A")["item"]["id"]
+    ctrl.record_lib_edit(a)
+    other = ctrl.record_lib_save("B")["item"]["id"]
+    ctrl.record_from_lib(other)             # 纯载入
+    ctrl.record_remove(0)
+    assert len(recording_lib.load(a)["events"]) == 5        # A 没被动
+    assert len(recording_lib.load(other)["events"]) == 5    # B 也没动（老语义）
+    assert ctrl.record_current()["lib"]["dirty"] is True    # 界面提示要手动更新
+    ctrl.shutdown()
+
+
+def test_save_as_new_retargets_direct_edit():
+    """「另存为新的」之后，直接编辑的目标要跟到新条目上。
+
+    不切的话，用户刚存完新的一条、继续编辑，改动却写回到**旧**条目上。
+    """
+    from core import recording_lib
+    ctrl = _ctrl_with_events()
+    a = ctrl.record_lib_save("A")["item"]["id"]
+    ctrl.record_lib_edit(a)
+    b = ctrl.record_lib_save("B")["item"]["id"]      # 另存为新的
+    assert b != a
+    ctrl.record_patch(0, {"x": 640})
+    assert recording_lib.load(b)["events"][0]["x"] == 640   # 改的是新的那条
+    assert recording_lib.load(a)["events"][0]["x"] == 500   # 旧那条没被动
+    ctrl.shutdown()
+
+
+def test_stopping_a_new_recording_leaves_direct_edit_mode():
+    """新录制落库后必须退出直接编辑模式。
+
+    不清的话 `_record_saved` 已指向新条目、而 `_record_lib_edit_id` 还指着旧的，
+    后续编辑会把这段新序列**写回到旧那条库条目**上——用户的旧录制被悄悄覆盖。
+    """
+    from core import recording_lib
+    from core.events import RecordResult
+
+    class _FakeRec:
+        _win_bounds = None
+
+        def set_window_bounds(self, _b):
+            pass
+
+        def stop(self):
+            return RecordResult(events=[MacroEvent(ts_ms=0, kind="move", x=1, y=1)],
+                                origin_x=0, origin_y=0)
+
+        def elapsed_ms(self):
+            return 100
+
+    ctrl = _ctrl_with_events()
+    rid = ctrl.record_lib_save("旧的")["item"]["id"]
+    ctrl.record_lib_edit(rid)
+    before = len(recording_lib.load(rid)["events"])
+
+    ctrl.recording = True
+    ctrl.recorder = _FakeRec()
+    ctrl.record_stop()                      # 会自动把这次录制存成新的一条
+
+    assert ctrl._record_lib_edit_id is None
+    ctrl.record_patch(0, {"x": 42})         # 编辑的是新那段
+    assert len(recording_lib.load(rid)["events"]) == before    # 旧那条没被动
     ctrl.shutdown()
 
 

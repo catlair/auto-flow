@@ -103,6 +103,13 @@ onMounted(() => store.init());
     <span v-if="store.appVersion" class="af-ver">v{{ store.appVersion }}</span>
     <span style="flex: 1" />
     <span class="af-hk">F9 录制 · F10 运行 · F11 取点</span>
+    <t-button
+      size="small"
+      variant="outline"
+      title="收进菜单栏继续在后台跑（点 × 也是这个效果）"
+      @click="store.hideToTray()"
+      >隐藏到托盘</t-button
+    >
     <t-button size="small" variant="outline" @click="diagOpen = true">诊断</t-button>
     <t-button size="small" variant="outline" @click="scheduleOpen = true">定时运行</t-button>
   </header>

@@ -23,6 +23,15 @@ class TextHit:
     x: int = 0           # 全局逻辑坐标中心点
     y: int = 0
     confidence: float = 0.0
+    w: int = 0
+    h: int = 0
+    """识别到的文字框尺寸（**全局逻辑点**）。
+
+    给「点击点落在目标框内」用（`tasks.builtin.click_point_in_box`）：一段文字
+    可能很长（一整行菜单项、一整句提示），固定点中心有时正好压在链接/图标上，
+    或者用户就是想点这行的靠左/靠右。单位与 `x/y` 同一套换算（物理像素 / scale），
+    理由见 `vision.MatchResult.w`。
+    """
 
 
 def grab_region_bgr(region: tuple | None = None):
@@ -40,6 +49,17 @@ def _center_from_box(box, img_w: int, img_h: int, cap) -> tuple[int, int]:
     cx = cap.left + (box.origin.x + box.size.width / 2) * img_w / s
     cy = cap.top + (1 - (box.origin.y + box.size.height / 2)) * img_h / s
     return int(cx), int(cy)
+
+
+def _box_size(box, img_w: int, img_h: int, cap) -> tuple[int, int]:
+    """Vision 归一化框（左下原点）→ 全局逻辑坐标下的**尺寸**（点）。
+
+    单独一个函数而不是让 `_center_from_box` 多返回两个值：那个函数已被用例直接
+    断言成二元组（`test_ocr_box_center_includes_display_origin`），改签名是白拆。
+    """
+    s = cap.scale or 1.0
+    return (int(round(box.size.width * img_w / s)),
+            int(round(box.size.height * img_h / s)))
 
 
 def recognize_texts(cap, languages: list | None = None) -> list[TextHit]:
@@ -68,9 +88,11 @@ def recognize_texts(cap, languages: list | None = None) -> list[TextHit]:
     hits: list[TextHit] = []
     for obs in (req.results() or []):
         candidate = obs.topCandidates_(1)[0]
-        cx, cy = _center_from_box(obs.boundingBox(), w, h, cap)
+        box = obs.boundingBox()
+        cx, cy = _center_from_box(box, w, h, cap)
+        tw, th = _box_size(box, w, h, cap)
         hits.append(TextHit(text=str(candidate.string()), x=cx, y=cy,
-                            confidence=float(candidate.confidence())))
+                            confidence=float(candidate.confidence()), w=tw, h=th))
     return hits
 
 

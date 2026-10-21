@@ -16,8 +16,10 @@ docs/
 └── modules/               # 功能模块文档（一模块一文件）
     ├── _template.md       # 模块文档模板（新建模块从这里复制）
     ├── recorder.md        # 键鼠录制
+    ├── recording-lib.md   # 录制库（一条一个文件的资产管理）
     ├── player.md          # 回放引擎（插值轨迹）
     ├── flow.md            # 流程图模型（节点 + 有向边 / 出口名 / 迁移）
+    ├── workflow-lib.md    # 工作流库（列表 / 更名 / 运行 / 导入导出）
     ├── executor.md        # 工作流执行器（图遍历）
     ├── nodes.md           # 节点体系（十二种内置节点）
     ├── vision.md          # 图像匹配 / OCR / YOLO

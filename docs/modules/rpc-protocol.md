@@ -27,6 +27,8 @@
 | F-RPC-09 | 丢帧判据后端计算 | ✅ | `record.stop.unaccounted`，前端只判 `!= 0` |
 | F-RPC-10 | 画布方法按 uid 寻址 | ✅ | `node.setPos` / `edge.add` / `edge.remove` / `workflow.setStart` |
 | F-RPC-11 | 结构变更连带清理 | ✅ | `node.remove` 一并清掉连着它的边与指向它的 `start` |
+| F-RPC-12 | 录制事件的字段编辑 | ✅ | `record.patch/insert/duplicate/moveEvent`，字段白名单 `_PATCH_FIELDS` 按 kind 分；非法值报错**不静默纠正** |
+| F-RPC-13 | 库条目的直接编辑 | ✅ | `record.lib.edit/endEdit`，编辑收尾在**后端统一**写回（前端不记账），`_lib_info().editing` 回报模式 |
 
 ### 方法清单（请求/响应）
 
@@ -36,7 +38,8 @@
 | app.diagnose | — | 数据目录/权限/日志尾 |
 | app.openPermissionSettings | panel | — |
 | app.requestPermissions | — | 权限快照（弹系统提示） |
-| workflow.current / new / load / save / update | — | workflow_current（统一真源视图） |
+| workflow.current / new / load / save / update | — | workflow_current（统一真源视图；`workflow.current` 额外带 `dirty` / `lib_id` / `lib_dir`） |
+| workflow.new | force | 有未保存改动且没给 `force` → `-32006`；**不落盘**（首次保存时自动入库） |
 | workflow.setStart | uid | workflow_current；`uid=""` 回到「第一个 start 节点 / 第一个节点」 |
 | node.add | type, **x, y** | workflow_current + index/node（不给坐标则落在视口外错开处） |
 | node.remove / toggle / rename | **uid**（或 index） | workflow_current；**remove 同时清掉连着它的边与指向它的 start** |
@@ -49,6 +52,24 @@
 | run.start / run.stop | base_x/base_y | {running}；stop 已 join 运行线程 |
 | record.start / stop / subscribe / toNode | — | stop 返回统计（count/captured/filtered/limit_dropped/text_merged/trimmed/**unaccounted**/监听器存活） |
 | record.current / remove / removeMovesBefore / setOrigin / setText / keysToText / undo | index,text | 编辑权威事件序列，全部可 `record.undo` 回滚；`keysToText` 把选中处的**最大连续按键段**换成一条 text 事件 |
+| **record.patch** | index,fields | 改**一条**事件的字段。`fields` 的 key 必须在该 kind 的白名单里（`_PATCH_FIELDS`），越界 → `-32602`；值非法**报错不纠正**（坐标写成 `"abc"` 悄悄当 0 会把光标甩到屏幕左上角）；值没变则不占撤销栈 |
+| **record.insert** | index,event | 在 index 处插入一条新事件；`event.kind` 必须是已知类型、多余字段报错；缺 `ts_ms` 则对齐前一条（新增在开头则取 0） |
+| **record.duplicate** | index | 忠实复制 index 处那一条插到它后面（**沿用同一 `ts_ms`**——复制出来的步骤与原步骤同刻） |
+| **record.moveEvent** | index,delta | 前后挪 `delta` 格；**连 `ts_ms` 一起交换**。回放排期是绝对时间线（`core/player.py` 的 `due = t0 + ts_ms`），只挪数组不动时间戳的话，被挪到前面的那条 `due` 已过、**立刻执行** |
+| **record.lib.list** | — | {items（**不含 events**）, current（{id,name,dirty,**editing**} 或 null）, dir} |
+| **record.lib.save** | name,id | id 空 = 新建一条、给了 = **覆盖**那一条（按 id 引用它的节点一起变）；返回 {item, current} |
+| **record.lib.rename** / **record.lib.delete** | id,name / id | {item 或 deleted, current}；id 非法或不存在 → `-32005` |
+| **record.fromLib** | id | 把库里一条载入编辑缓冲（替换 `_last_record`），返回 {count,events,origin,duration_ms,can_undo,lib}。**纯载入**：之后编辑只改内存、要手动 `record.lib.save` |
+| **record.lib.edit** | id | 同 `record.fromLib`，但**进入直接编辑模式**：之后每次编辑自动写回库里那条（`record.lib.endEdit` 退出）。库里点开就能改，不必「载入 → 改 → 更新到库」三步 |
+| **record.lib.endEdit** | — | 退出直接编辑模式，回到「改了要手动更新到库」的语义；返回编辑后序列 |
+| **record.lib.toNode** | id | 库里一条直接落成画布节点（`source="录制库"`），返回 workflow_current + index/node |
+| **workflow.lib.list** | — | {items（**不含 nodes/edges**）, current（**id 字符串**，空 = 还没入库）, dirty, dir} |
+| **workflow.lib.save** | name | 把**当前画布上的**这份存进库：已在库里 → 覆盖那条，否则新建；返回 workflow_current + item |
+| **workflow.lib.open** | id, force | workflow_current；有未保存改动且没给 `force` → `-32006`；id 非法 → `-32602`、不存在 → `-32005` |
+| **workflow.lib.rename** / **workflow.lib.delete** | id,name / id | rename 返回 {item,current,dirty}；delete 返回 {deleted,trash,current,dirty}，文件**移进废纸篓**（`trash` 是它的新路径） |
+| **workflow.lib.import** | path, name | 拷进库（**不切换**当前工作流），返回 {item, items} |
+| **workflow.lib.export** | path, id | 写普通工作流文件（剥掉库元信息）；`id` 空 = 导出当前这份（走**内存里的树**，且不写库） |
+| **workflow.save**（无 path 时） | — | **自动入库**：当前已在库里 → 覆盖那条，否则**新建一条**。旧行为是抛 `-32602`，见下 |
 | template.snip | — | {started}，完成走通知 |
 | input.probe | — | {alive, text_alive, input_source{id,name,event_channel_unsupported}}（F18 + 零宽空格两段回环） |
 | hotkey.set / clear | actions | 绑定快照 |
@@ -61,7 +82,7 @@
 
 | 通知 | 载荷 | 说明 |
 | --- | --- | --- |
-| workflow.changed | 公共视图工作流 | **events 摘要为 {count}**（真源在后端）；含 `edges` / `start` / `migrated_from_list` |
+| workflow.changed | 公共视图工作流 | **events 摘要为 {count}**（真源在后端）；含 `edges` / `start` / `migrated_from_list` / **`dirty`** |
 | record.event | {events:[…]}（100ms 批） | 仅订阅时推送 |
 | record.stopped | 统计 | 响应携带同数据（响应为准） |
 | run.node / run.progress / run.finished / run.error | — | 运行生命周期 |
@@ -157,6 +178,24 @@
    因为真源就在它手里、再让后端回一个冗余标志只会多一个可能对不上的真源。
    提示是必要的：不说一声的话旧连线无声消失，用户会以为自己连了两条。
    报错也不行——「换个目标」是正常操作，不该逼用户走「先删后连」两步。
+9. **「直接编辑库条目」的写回只能在后端做**。编辑接口有十几个
+   （`remove`/`removeMovesBefore`/`setOrigin`/`setText`/`keysToText`/`patch`/
+   `insert`/`duplicate`/`moveEvent`/`undo`…），它们全部收尾于 `_record_commit()`
+   → `_sync_lib_edit()`。让前端记账（「我调过哪些编辑接口、该写回了」）必然会漏，
+   而漏的表现是**库里还是旧的、界面却显示已同步**——最难发现的那类不一致。
+   写回失败只 `logger.warning`，不把编辑本身判失败：用户在编辑缓冲里的改动
+   仍然有效（还能手动「更新到库」），不该因为落盘出问题就把整个操作回滚掉。
+10. **`record.patch` 的非法值报错，不静默纠正**。把坐标 `"abc"` 收敛成 `0` 会让
+   回放时把光标甩到屏幕左上角，而且**不报错**——用户看到的是「录制莫名开始乱点」。
+   宁可当场 `-32602` 让前端弹出「编辑失败」。同理 `fields` 里出现该 kind 没有的
+   字段也报错：静默忽略会让人以为「我改了」，实际那一次改动从没生效。
+   唯一允许的例外是「值没变」——直接返回、不占撤销栈（否则点一下输入框再失焦
+   就吃掉一格撤销）。
+11. **`record.moveEvent` 必须连 `ts_ms` 一起交换**。回放排期是**绝对时间线**
+   （`core/player.py`：`due = self._t0 + ev.ts_ms / 1000.0 / speed`），与数组顺序
+   无关。只挪数组元素的话，被挪到前面的那条 `due` 已经过去、**立刻执行**——
+   用户看到的是「上移一步，结果那一步当场就跑了」。
+   （回归测试：`test_record_move_event_swaps_timestamps_too`）
 
 ## 已知问题
 
@@ -172,6 +211,12 @@
 - 2026-09-12 新增 `record.keysToText`：把一段连续按键换成一条 text 事件，让
   IME 中文（事件层只录到拼音）能走 Unicode 通道确定性回放；同时补齐
   `record.current/remove/removeMovesBefore/setOrigin/setText/undo` 的接口记录
+- 2026-09-15 新增录制库六个方法（`record.lib.list/save/rename/delete`、
+  `record.fromLib`、`record.lib.toNode`）；`record.stop` 的响应自动多一个
+  `library` 字段（这次录制入库后的元信息）；`record.current` 等编辑类响应多一个
+  `lib` 字段（`{id,name,dirty}` 或 **null**——null 表示"当前这段还没入库"，
+  前端用 `"lib" in r` 判存在而不是 `??`，否则会把 null 当字段缺失、一直显示
+  「已同步」）。详见 [recording-lib.md](recording-lib.md)
 - 2026-09-13 新增 `log.warning` 通知：后端 WARNING+ 日志转发给界面（诊断面板可见），
   `_UiLogHandler` 带线程本地防递归守卫；`log.warning` 列入可丢类
 - 2026-09-13 修正本文件两处与实际实现不符的描述：协议通道是 `os.dup(1)` 而非
@@ -190,3 +235,20 @@
   （`index` 保留向后兼容）：下标会在「一次删多个节点」时指向别人，
   删错/改错且不报错。前端不再做 uid→下标换算，多个删除改为串行 await。
   见设计要点 6
+- 2026-09-16 新增工作流库七个方法（`workflow.lib.*`）；`workflow.current` 多带
+  `dirty` / `lib_id` / `lib_dir`，`workflow.changed` 多带 `dirty`；
+  `workflow.new` / `workflow.lib.open` 多一个 `force`，未保存改动会被
+  `-32006 unsaved_changes` 拒掉（前端据此弹确认框）。
+  **行为变更**：`workflow.save` 不带 path 时**不再报错**，改为自动入库——
+  旧行为下「新建 → 保存」必然失败（`workflow.new` 把 path 清成 None，
+  `workflow.save` 再抛「尚未指定保存路径」），用户必须先「另存为」才能存下第一版。
+  详见 [workflow-lib.md](workflow-lib.md)
+- 2026-09-17 **录制事件可改**：新增 `record.patch` / `record.insert` /
+  `record.duplicate` / `record.moveEvent`（F-RPC-12），字段白名单
+  `_PATCH_FIELDS` 按 kind 分（`move`/`mouse`/`wheel`/`key`/`text`），
+  非法值报错不静默纠正（设计要点 10）、上移下移连 `ts_ms` 一起交换
+  （设计要点 11）。同时新增 `record.lib.edit` / `record.lib.endEdit`
+  （F-RPC-13）：**库里点开就能直接改**，不必「载入 → 改 → 更新到库」三步；
+  写回在**后端统一**做（设计要点 9），`_lib_info()` 多一个 `editing` 标志
+  供界面显示编辑模式。详见 [recorder.md](recorder.md) 与
+  [recording-lib.md](recording-lib.md)

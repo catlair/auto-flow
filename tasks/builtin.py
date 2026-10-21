@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import random
+
 from pynput.mouse import Button
 
 from typing import Optional
@@ -29,6 +31,60 @@ HOTKEY_NAMES = {"F9", "F10", "F11"}
 CHECK_KINDS = ["图像存在", "文字存在", "目标存在(YOLO)"]
 CASE_VALUE_TOOLTIP = ("图像存在 = 模板图路径（可点「选择」挑文件）；"
                       "文字存在 = 要找的文字；目标存在(YOLO) = 目标类别，留空=任意")
+
+# 「点击点落在目标框内」的三种模式。被 image_click 与 ocr_click 共用，抽成常量
+# 是因为参数定义、run() 里的判断、用例三处都要引用同一批字面量——各写一遍，
+# 改了面板上的选项却忘了改判断，表现是「选了随机却总是点中心」，没有任何报错。
+CLICK_POS_CENTER = "目标中心"
+CLICK_POS_RANDOM = "框内随机"
+CLICK_POS_CUSTOM = "框内自定义"
+CLICK_POS_KINDS = (CLICK_POS_CENTER, CLICK_POS_RANDOM, CLICK_POS_CUSTOM)
+CLICK_POS_TOOLTIP = ("目标中心：点框正中（默认，行为与以前一致）| "
+                     "框内随机：框内均匀取一点，更像真人、也避免每次都压在同一处 | "
+                     "框内自定义：按下面的百分比取，四个角就是 0/0、100/0、0/100、100/100")
+
+
+def click_point_in_box(cx: int, cy: int, w: int, h: int, *,
+                       mode: str = CLICK_POS_CENTER,
+                       rel_x: float = 50.0, rel_y: float = 50.0,
+                       inset: int = 0, rand=None) -> tuple:
+    """在检测到的目标框里取一个点击点，返回全局逻辑坐标。
+
+    `(cx, cy)` 是框中心、`(w, h)` 是框的逻辑尺寸（`vision.MatchResult` 与
+    `ocr.TextHit` 都给）。`inset` 把框四边各往里收这么多像素——避免点到边缘，
+    也避免「随机」时压到边框上。
+
+    **拿不到框时一律回落到中心**（`w <= 0` 或 `h <= 0`，或 `mode` 不认识）：
+    检测层在有些路径上给不出尺寸（老数据、退化结果），此时中心仍是最合理的猜测。
+    这里抛错、或返回 (0, 0)，都会让「本来能跑的流程」突然点向屏幕左上角。
+
+    `rand` 可注入（默认 `random.random`），用例才能把随机点钉死。
+    """
+    if w <= 0 or h <= 0 or mode not in CLICK_POS_KINDS:
+        return int(cx), int(cy)
+    if mode == CLICK_POS_CENTER:
+        return int(cx), int(cy)
+
+    # 内缩不能把框收没——收没了就谈不上「框内」。钳到至少留 1 像素：这样
+    # 「内缩填太大」只会退化成点正中心，而不是抛错或把点送到框外。
+    inset = max(int(inset), 0)
+    inset = min(inset, (w - 1) // 2, (h - 1) // 2)
+    left, top = cx - w / 2 + inset, cy - h / 2 + inset
+    bw, bh = w - 2 * inset, h - 2 * inset
+    # 跨度取 `bw - 1`（可用像素索引 0..bw-1 的最后那个）：这样 100% 能落在框内
+    # 最右/最下一列，而不是刚好越过边界一像素。百分比与随机都用它，两种模式
+    # 的取值区间才一致。
+    span_x, span_y = bw - 1, bh - 1
+
+    if mode == CLICK_POS_RANDOM:
+        f = rand or random.random
+        return (int(round(left + f() * span_x)),
+                int(round(top + f() * span_y)))
+    # 框内自定义：0 = 左/上边，100 = 右/下边。越界的百分比钳到 [0, 100]。
+    px = min(max(float(rel_x), 0.0), 100.0) / 100.0
+    py = min(max(float(rel_y), 0.0), 100.0) / 100.0
+    return (int(round(left + px * span_x)),
+            int(round(top + py * span_y)))
 
 
 def tolerant_event(d: dict) -> Optional[MacroEvent]:
@@ -48,6 +104,14 @@ def tolerant_event(d: dict) -> Optional[MacroEvent]:
                 "text": ""}
     data = {k: d.get(k, v) for k, v in defaults.items() if k in keys}
     return MacroEvent(**data)
+
+
+def _int_or_0(v) -> int:
+    """宽松取整：参数可能来自旧文件（字符串数字），也可能被手工改坏。"""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
 
 
 def detect_on_all_screens(engine, conf: float) -> list:
@@ -173,11 +237,17 @@ class DelayTask(BaseTask):
         self.params = [
             ParamDef("mode", "等待方式", "select", "延时毫秒", ["延时毫秒", "等待至时刻"],
                      tooltip="延时毫秒：固定时长 | 等待至时刻：等到当天的某个时间点，已过则等明天的"),
-            ParamDef("ms", "毫秒", "int", 500, min_value=0,
-                     show_if={"key": "mode", "eq": "延时毫秒"}),
-            ParamDef("at", "时刻", "text", "09:00",
+            # ptype="duration"：面板上是「时/分/秒/毫秒」四格，**存下来仍是毫秒总数**。
+            # 这样已保存的流程（params.ms = 500）不用迁移，run() 也照旧读一个数。
+            # 注意两个选项的字面量（"延时毫秒"）**不能改名**：它就是存进文件的 value，
+            # 改了老文件的 mode 对不上，select 显示为空、show_if 也会把字段藏掉。
+            ParamDef("ms", "等待时长", "duration", 500, min_value=0,
+                     show_if={"key": "mode", "eq": "延时毫秒"},
+                     tooltip="按时 / 分 / 秒 / 毫秒分别填；等同于一个毫秒总数"),
+            # ptype="time"：时刻选择器（只能选，不能手打），值仍是 "HH:MM:SS" 字符串。
+            ParamDef("at", "时刻", "time", "09:00:00",
                      show_if={"key": "mode", "eq": "等待至时刻"},
-                     tooltip="24 小时制，HH:MM 或 HH:MM:SS；已过则等明天的这一刻"),
+                     tooltip="24 小时制；已过则等明天的这一刻"),
         ]
 
     def run(self, ctx) -> None:
@@ -235,9 +305,24 @@ class RecordReplayTask(BaseTask):
     def __init__(self) -> None:
         super().__init__()
         self.params = [
-            ParamDef("events", "事件序列", "events", []),
-            ParamDef("origin_x", "原点X", "int", 0),
-            ParamDef("origin_y", "原点Y", "int", 0),
+            # 事件**存在哪里**。内嵌 = 跟着流程文件走（拷给别人也能跑）；
+            # 录制库 = 节点只存一个 id，回放时现取——「在库里改一次，
+            # 所有引用它的节点一起变」全靠这条路径。
+            ParamDef("source", "录制来源", "select", "内嵌", ["内嵌", "录制库"],
+                     tooltip="内嵌：事件存在节点里，跟流程文件一起走 | "
+                             "录制库：只存 id，回放时现取，库里改了这里跟着变"),
+            ParamDef("recording_id", "选择录制", "recording", "",
+                     show_if={"key": "source", "eq": "录制库"},
+                     tooltip="来自侧栏「录制库」；同一条录制可以被多个节点共用"),
+            ParamDef("events", "事件序列", "events", [],
+                     show_if={"key": "source", "eq": "内嵌"}),
+            # 原点只在「内嵌」时可填：用库里的录制时，原点是**那条录制自己的属性**
+            # （它是在哪块屏、哪个窗口位置录的）。节点再存一份就成了第二份真源，
+            # 在库里重设原点后节点不跟着变，回放位置会偏。
+            ParamDef("origin_x", "原点X", "int", 0,
+                     show_if={"key": "source", "eq": "内嵌"}),
+            ParamDef("origin_y", "原点Y", "int", 0,
+                     show_if={"key": "source", "eq": "内嵌"}),
             ParamDef("use_relative", "相对坐标", "bool", False),
             ParamDef("speed", "速度倍率", "float", 1.0, min_value=0.1),
             ParamDef("repeat", "重复次数", "int", 1, min_value=1),
@@ -247,15 +332,90 @@ class RecordReplayTask(BaseTask):
         # 「重复次数」不在此处循环：执行器已按 ctx.params["repeat"] 重复调用本任务，
         # 两层循环会把 N 次放大成 N² 次（再乘工作流整体循环）。
         p = ctx.params
-        events = [e for e in (tolerant_event(x) for x in (p.get("events") or [])) if e]
+        if str(p.get("source") or "内嵌") == "录制库":
+            origin_x, origin_y, raw = self._from_library(str(p.get("recording_id") or ""))
+        else:
+            origin_x = _int_or_0(p.get("origin_x"))
+            origin_y = _int_or_0(p.get("origin_y"))
+            raw = p.get("events") or []
+        events = [e for e in (tolerant_event(x) for x in raw) if e]
         opt = PlayOptions(
             speed=float(p.get("speed", 1.0)) * ctx.speed,
             use_relative=bool(p.get("use_relative", False)),
             base_x=ctx.base_x, base_y=ctx.base_y,
-            origin_x=int(p.get("origin_x", 0)), origin_y=int(p.get("origin_y", 0)),
+            origin_x=origin_x, origin_y=origin_y,
             suppress_keys=set(HOTKEY_NAMES),
         )
         ctx.player.play(events, opt, on_progress=ctx.on_progress)
+
+    @staticmethod
+    def _from_library(rid: str):
+        """按 id 取库里的录制，返回 `(origin_x, origin_y, events)`。
+
+        取不到**必须抛**：静默跳过会让「这条录制被删了」表现成「节点跑过了、
+        但什么都没发生」——用户只会以为回放坏了，而不知道该去库里补一条。
+        """
+        if not rid:
+            raise ValueError("录制来源选了「录制库」，但没选具体是哪一条")
+        from core import recording_lib
+        try:
+            data = recording_lib.load(rid)
+        except ValueError as e:
+            raise ValueError(str(e)) from None
+        origin = data.get("origin") or [0, 0]
+        seq = origin if isinstance(origin, (list, tuple)) else []
+        ox = _int_or_0(seq[0]) if len(seq) > 0 else 0
+        oy = _int_or_0(seq[1]) if len(seq) > 1 else 0
+        return ox, oy, data["events"]
+
+
+def _self_window_guard(x: int, y: int) -> bool:
+    """点下去之前，确认落点不在 Auto Flow 自己的窗口上。
+
+    识别是全屏做的，理论上 `core.selfmask` 已经把自身窗口涂黑、不该命中；
+    但窗口列表读不到（权限/异常）时遮罩会静默失效，那时命中的就可能落在自己
+    面板上——而运行期间主窗是**鼠标穿透**的，点上去会穿到窗口下方的桌面或
+    别的程序（用户实测：「操作穿透了游戏，点到了后面的程序」）。
+
+    所以这里是第二道保险：真撞上就跳过这一次点击并留一条告警，宁可少点一下，
+    也不要在用户的桌面上乱点。
+    """
+    try:
+        from core import selfmask
+        if selfmask.point_in_own_window(int(x), int(y)):
+            from core.vision import _warn_once
+            _warn_once("self-click",
+                       "命中点在 Auto Flow 自己的窗口上（(%d,%d)），已跳过这次点击——"
+                       "请把 Auto Flow 窗口移开或收进托盘，别盖住游戏。", x, y)
+            return False
+    except Exception:  # noqa: BLE001  护栏本身不能把流程搞挂
+        pass
+    return True
+
+
+def _click_target(p: dict, cx: int, cy: int, w: int, h: int) -> tuple:
+    """节点参数 → 最终点击点：先在目标框内取点，再叠加固定偏移。
+
+    两个点击节点（`image_click` / `ocr_click`）共用一份——「框内取点」的语义必须
+    完全一致，否则同一个目标在「找图」与「找文字」上会点到不同地方，而用户完全
+    无从判断该信哪个（与 `_detect` 被三个检测节点共用的理由相同）。
+
+    偏移**最后**叠加：它是相对目标点的微调。以前没有框内取点，偏移就是直接加在
+    中心上的，所以这样叠加对老流程是逐字等价的。
+    """
+    def num(key: str, default: float) -> float:
+        # 参数可能来自旧文件（字符串数字），也可能被手工改坏；`0` 是合法值，
+        # 所以不能用 `p.get(k) or default` —— 那会把 0 当成「没填」。
+        try:
+            return float(p.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    x, y = click_point_in_box(cx, cy, w, h,
+                              mode=str(p.get("click_pos") or CLICK_POS_CENTER),
+                              rel_x=num("rel_x", 50), rel_y=num("rel_y", 50),
+                              inset=int(num("inset", 0)))
+    return x + int(num("offset_x", 0)), y + int(num("offset_y", 0))
 
 
 @register
@@ -273,7 +433,17 @@ class ImageClickTask(BaseTask):
             ParamDef("timeout_s", "查找超时(秒)", "float", 3.0, min_value=0.0),
             ParamDef("interval_ms", "重试间隔(ms)", "int", 400, min_value=50),
             ParamDef("not_found", "找不到时", "select", "跳过", ["跳过", "停止工作流"]),
-            ParamDef("offset_x", "偏移X", "int", 0),
+            ParamDef("click_pos", "点击位置", "select", CLICK_POS_CENTER,
+                     list(CLICK_POS_KINDS), tooltip=CLICK_POS_TOOLTIP),
+            ParamDef("rel_x", "横向位置(%)", "int", 50, min_value=0, max_value=100,
+                     show_if={"key": "click_pos", "eq": CLICK_POS_CUSTOM},
+                     tooltip="0=框左边缘，100=框右边缘"),
+            ParamDef("rel_y", "纵向位置(%)", "int", 50, min_value=0, max_value=100,
+                     show_if={"key": "click_pos", "eq": CLICK_POS_CUSTOM},
+                     tooltip="0=框上边缘，100=框下边缘"),
+            ParamDef("inset", "内缩像素", "int", 0, min_value=0,
+                     tooltip="把目标框四边各往里收这么多再取点，避免点到边缘"),
+            ParamDef("offset_x", "偏移X", "int", 0, tooltip="在算出的点之上再平移"),
             ParamDef("offset_y", "偏移Y", "int", 0),
         ]
 
@@ -289,7 +459,9 @@ class ImageClickTask(BaseTask):
             m = vision.find_template(float(p.get("confidence", 0.8)),
                                      template_path=str(p.get("image_path", "")))
             if m.found:
-                x, y = m.x + int(p.get("offset_x", 0)), m.y + int(p.get("offset_y", 0))
+                x, y = _click_target(p, m.x, m.y, m.w, m.h)
+                if not _self_window_guard(x, y):
+                    return
                 ctx.player.glide_now((x, y))
                 action = p.get("action", "click")
                 if action == "move":
@@ -317,7 +489,17 @@ class OcrClickTask(BaseTask):
             ParamDef("timeout_s", "查找超时(秒)", "float", 3.0, min_value=0.0),
             ParamDef("interval_ms", "重试间隔(ms)", "int", 500, min_value=50),
             ParamDef("not_found", "找不到时", "select", "跳过", ["跳过", "停止工作流"]),
-            ParamDef("offset_x", "偏移X", "int", 0),
+            ParamDef("click_pos", "点击位置", "select", CLICK_POS_CENTER,
+                     list(CLICK_POS_KINDS), tooltip=CLICK_POS_TOOLTIP),
+            ParamDef("rel_x", "横向位置(%)", "int", 50, min_value=0, max_value=100,
+                     show_if={"key": "click_pos", "eq": CLICK_POS_CUSTOM},
+                     tooltip="0=文字框左边缘，100=右边缘"),
+            ParamDef("rel_y", "纵向位置(%)", "int", 50, min_value=0, max_value=100,
+                     show_if={"key": "click_pos", "eq": CLICK_POS_CUSTOM},
+                     tooltip="0=文字框上边缘，100=下边缘"),
+            ParamDef("inset", "内缩像素", "int", 0, min_value=0,
+                     tooltip="把文字框四边各往里收这么多再取点，避免点到边缘"),
+            ParamDef("offset_x", "偏移X", "int", 0, tooltip="在算出的点之上再平移"),
             ParamDef("offset_y", "偏移Y", "int", 0),
         ]
 
@@ -331,7 +513,9 @@ class OcrClickTask(BaseTask):
                 return
             hit = ocr.find_text(str(p.get("text", "")))
             if hit:
-                x, y = hit.x + int(p.get("offset_x", 0)), hit.y + int(p.get("offset_y", 0))
+                x, y = _click_target(p, hit.x, hit.y, hit.w, hit.h)
+                if not _self_window_guard(x, y):
+                    return
                 ctx.player.glide_now((x, y))
                 action = p.get("action", "click")
                 if action == "move":

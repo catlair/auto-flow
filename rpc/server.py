@@ -316,8 +316,22 @@ _HANDLERS = {
     "workflow.current": _ctl(lambda p: _CTRL.workflow_current()),
     "workflow.load": _ctl(lambda p: _CTRL.workflow_load(p.get("path", ""))),
     "workflow.save": _ctl(lambda p: _CTRL.workflow_save(p.get("path"))),
-    "workflow.new": _ctl(lambda p: _CTRL.workflow_new()),
+    # force 只在用户**已经确认过**「丢弃未保存的改动」时才是 true。缺省 false，
+    # 于是漏传的调用方会拿到 -32006 而不是静默丢掉一张刚连好的图。
+    "workflow.new": _ctl(lambda p: _CTRL.workflow_new(bool(p.get("force", False)))),
     "workflow.update": _ctl(lambda p: _CTRL.workflow_update(p.get("patch", {}))),
+    # --- 工作流库（core/workflow_lib.py）：列表 / 打开 / 更名 / 删除 / 导入导出 ---
+    "workflow.lib.list": _ctl(lambda p: _CTRL.workflow_lib_list()),
+    "workflow.lib.save": _ctl(lambda p: _CTRL.workflow_lib_save(p.get("name", ""))),
+    "workflow.lib.open": _ctl(lambda p: _CTRL.workflow_lib_open(
+        p.get("id", ""), bool(p.get("force", False)))),
+    "workflow.lib.rename": _ctl(lambda p: _CTRL.workflow_lib_rename(p.get("id", ""),
+                                                                    p.get("name", ""))),
+    "workflow.lib.delete": _ctl(lambda p: _CTRL.workflow_lib_delete(p.get("id", ""))),
+    "workflow.lib.import": _ctl(lambda p: _CTRL.workflow_lib_import(p.get("path", ""),
+                                                                   p.get("name", ""))),
+    "workflow.lib.export": _ctl(lambda p: _CTRL.workflow_lib_export(p.get("path", ""),
+                                                                    p.get("id", ""))),
     "node.add": _ctl(lambda p: _CTRL.node_add(p.get("type", ""), p.get("index"),
                                                p.get("x"), p.get("y"))),
     # 这四个都**优先按 uid 寻址**（v4 起节点有稳定 uid）。前端把 uid 换算成
@@ -357,9 +371,29 @@ _HANDLERS = {
     "record.setText": _ctl(lambda p: _CTRL.record_set_text(p.get("index"), p.get("text"))),
     "record.keysToText": _ctl(lambda p: _CTRL.record_keys_to_text(
         p.get("index"), p.get("text"))),
+    # 单条事件的字段编辑与序列增删重排（见 controller 里的白名单与 docstring）
+    "record.patch": _ctl(lambda p: _CTRL.record_patch(p.get("index"), p.get("fields"))),
+    "record.insert": _ctl(lambda p: _CTRL.record_insert(p.get("index"), p.get("event"))),
+    "record.duplicate": _ctl(lambda p: _CTRL.record_duplicate(p.get("index"))),
+    "record.moveEvent": _ctl(lambda p: _CTRL.record_move_event(
+        p.get("index"), p.get("delta", 0))),
     "record.undo": _ctl(lambda p: _CTRL.record_undo()),
     "record.subscribe": _ctl(lambda p: _CTRL.record_subscribe((p or {}).get("on", False))),
     "record.bounds": _ctl(lambda p: _CTRL.record_bounds(p.get("bounds"))),
+    # --- 录制库（core/recording_lib.py）：录制变成可复用资产，节点按 id 引用 ---
+    "record.lib.list": _ctl(lambda p: _CTRL.record_lib_list()),
+    # save 的 id 为空 = 新建一条；给了 = 覆盖那一条（「改完推给所有引用它的节点」
+    # 全靠覆盖同一个 id 才成立的，别在这里顺手改成总是新建）
+    "record.lib.save": _ctl(lambda p: _CTRL.record_lib_save(p.get("name", ""),
+                                                           p.get("id", ""))),
+    "record.lib.rename": _ctl(lambda p: _CTRL.record_lib_rename(p.get("id", ""),
+                                                                p.get("name", ""))),
+    "record.lib.delete": _ctl(lambda p: _CTRL.record_lib_delete(p.get("id", ""))),
+    # 「直接编辑库里这条」：载入它并让后续编辑自动写回（见 record_lib_edit）
+    "record.lib.edit": _ctl(lambda p: _CTRL.record_lib_edit(p.get("id", ""))),
+    "record.lib.endEdit": _ctl(lambda p: _CTRL.record_lib_end_edit()),
+    "record.fromLib": _ctl(lambda p: _CTRL.record_from_lib(p.get("id", ""))),
+    "record.lib.toNode": _ctl(lambda p: _CTRL.record_lib_to_node(p.get("id", ""))),
     # --- 模板截取（screencapture -i 框选，异步回填 template.snipped） ---
     "template.snip": _ctl(lambda p: _CTRL.template_snip()),
     # --- 输入监控实际可收性自检（F18 合成键回环） ---

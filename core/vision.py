@@ -98,6 +98,18 @@ class MatchResult:
     x: int = 0          # 全局逻辑坐标（点），目标中心
     y: int = 0
     score: float = 0.0  # 0~1 置信度
+    w: int = 0
+    h: int = 0
+    """匹配到的区域尺寸（**全局逻辑点**，不是图像物理像素）。
+
+    给「点击点落在目标框内」用（`tasks.builtin.click_point_in_box`）：目标是一整块
+    卡片/输入框/列表行时，固定点中心可能落在图标或文字上、或落在不可交互处。
+
+    ⚠️ 单位必须是**逻辑点**，即物理像素除以**被匹配那块屏**的 `scale`——和 `x/y`
+    同一套换算。混了不会报错，只是框的大小差一个 Retina 倍数：框太小则「随机点」
+    退化成点中心，框太大则点会落到目标外面去。`found=False` 时为 0，
+    调用方按「拿不到框」处理（回落中心）。
+    """
     adjusted: float | None = None
     """为对齐屏幕密度而给模板施加的缩放系数；None = 未调整。
 
@@ -292,14 +304,23 @@ def captures() -> list[ScreenCapture]:
 
     mss 枚举不到显示器时（休眠 / 锁屏 / 权限未就绪）退化为 Quartz 全屏兜底，
     此时只有一块「所有屏的并集」。
+
+    **返回前会把 Auto Flow 自己的窗口涂黑**（见 core/selfmask）：识别是全屏做的，
+    不遮的话会读到自己面板上的文字（比如运行轨迹里就写着「点『继续』」），
+    而运行期间主窗是鼠标穿透的——点上去会穿到窗口下方的桌面/别的程序。
     """
     try:
         raw = _raw_screens()
     except Exception:
         raw = []
-    if raw:
-        return _captures_from(raw)
-    return [_quartz_capture()]
+    caps = _captures_from(raw) if raw else [_quartz_capture()]
+    from core import selfmask
+    for cap in caps:
+        try:
+            selfmask.mask_capture(cap)
+        except Exception:  # noqa: BLE001  遮罩失败不能影响识别本身
+            pass
+    return caps
 
 
 def main_capture() -> ScreenCapture:
@@ -482,6 +503,9 @@ def find_template(threshold: float = 0.8,
             x, y = cap.to_global(max_loc[0] + tw / 2, max_loc[1] + th / 2)
             best = MatchResult(found=bool(max_val >= threshold), x=x, y=y,
                                score=float(max_val),
+                               # 框的尺寸与 x/y **同一次**赋值：best 只在分数更高时更新，
+                               # 分两处写迟早会出现「坐标是这块屏的、尺寸是那块屏的」
+                               w=int(round(tw / s)), h=int(round(th / s)),
                                adjusted=factor if factor != 1.0 else None)
         if best.found:
             break

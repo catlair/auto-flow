@@ -9,6 +9,9 @@
 - `core/maclistener.py` — 自建 CGEventTap 键盘监听（**替代 pynput 键盘监听**）
 - `core/mackeys.py` — 虚拟键码表 + 修饰键 flags 边沿检测
 - `core/events.py` — `MacroEvent`（**v3**）字段定义
+- `core/recording_lib.py` — **录制库**：录完的东西落盘成可复用资产，节点按 id 引用
+  （见 [recording-lib.md](recording-lib.md)）。存储层与「谁引用它」是两件事，
+  所以单独一份文档
 
 ## 功能清单
 
@@ -28,8 +31,9 @@
 | F-REC-12 | **滚轮单位标注** | ✅ | `wheel_unit="line"`（pynput 取的是 DeltaAxis 行增量）（v3） |
 | F-REC-13 | **轨迹终点补全** | ✅ | 停止时补回最后一个被降采样的位置（v3） |
 | F-REC-14 | **按键事件带坐标** | ✅ | key 事件带上 listener 提供的 (x,y) 与 flags（v3） |
-| F-REC-15 | **事件编辑** | ✅ | 面板选中行即可删除 / 删此前的移动 / 设为原点 / 改写文本 / **按键段转文本** / 撤销（v3） |
+| F-REC-15 | **事件编辑** | ✅ | 面板选中行即可：**改字段**（时间/坐标/按钮/按键/滚轮/拖拽/文本）、**增删**（删除 / 复制 / 插入 / 删此前的移动）、**重排**（上移 / 下移）、设为原点 / 按键段转文本 / 撤销（v3，2026-09-17 扩展） |
 | F-REC-16 | **文本事件聚合** | ✅ | 输入法/Unicode 提交聚合为 `kind="text"`，间隔 ≤500ms 视为同一段输入（v3） |
+| F-REC-17 | **录制库（自动入库）** | ✅ | `record.stop` 把这次录制落盘成库里的可复用资产（**空录制不入**；入库失败只 warning，不让停止本身失败）。节点可按 id 引用，改一次所有引用它的节点一起变（见 [recording-lib.md](recording-lib.md)） |
 
 ## 验收记录
 
@@ -57,6 +61,22 @@
   `test_record_set_text_edits_only_text_events`、
   `test_record_keys_to_text_collapses_a_pinyin_run`（整段按键塌成一条 text、
   前后事件原样保留、时间戳取段首、撤销还原、三条错误路径）。
+- **F-REC-15 扩展**（2026-09-17，改字段 / 增删 / 重排）：19 个用例——
+  `test_record_patch_edits_coordinates_and_undo_restores_them`、
+  `test_record_patch_covers_every_kind`（五种类型都能改）、
+  `test_record_patch_rejects_fields_the_kind_does_not_have`、
+  `test_record_patch_rejects_bad_values_instead_of_coercing`、
+  `test_record_patch_with_same_value_does_not_touch_the_undo_stack`、
+  `test_record_insert_defaults_ts_to_the_previous_event`、
+  `test_record_insert_can_append_at_the_end`、
+  `test_record_insert_rejects_unknown_kind_or_fields`、
+  `test_record_duplicate_copies_the_event_right_after_it`、
+  `test_record_move_event_swaps_timestamps_too`（**关键**：不换时间戳会让被提前的
+  步骤立刻执行）、`test_record_move_event_at_the_border_is_a_noop`。
+  前端 7 例（`tauri/tests/recording.test.mjs`）钉住「界面暴露的字段逐类型落在
+  后端白名单里」「插入下拉与 `_KINDS` 一致」「字段编辑走草稿 + change 提交」
+  「上移下移传相对位移」。11 条源码变异全部被拦（含「把 `@change` 换成 `@input`」
+  「后端不再交换 `ts_ms`」「界面字段名打错」）。
 - **F-REC-10/11/12/13/14**（2026-09-12，v3 重写）：测试
   `test_recorder_keeps_drag_trajectory_without_decimation`、
   `test_recorder_merges_double_click_sequence`、
@@ -167,6 +187,24 @@
     从选中下标向两侧扩到**最大连续 `kind="key"` 段**（前后非按键事件不动），
     新事件的时间戳与坐标取该段第一条以保证回放起点不变；整段全是"抬起"时拒绝
     （那多半是上一个动作的尾巴，当成一次输入会张冠李戴）。
+18. **字段编辑的合法值由后端定，前端只是表单**（2026-09-17）。`record.patch` 收
+    一个 `fields` 字典，后端按 `_PATCH_FIELDS[kind]` 逐字段校验，**非法值一律
+    `-32602` 而不静默纠正**：把坐标 `"abc"` 收敛成 `0` 会让回放把光标甩到屏幕
+    左上角、而且不报错——用户看到的是「录制莫名开始乱点」。同理 `fields` 里出现
+    该 kind 没有的字段也报错，静默忽略会让人以为改过了。
+    唯一例外是「值没变」：直接返回、不占撤销栈（否则点一下输入框再失焦就吃掉
+    一格撤销）。前端把字段名当字符串发过去，两边错开的表现是「改完才报编辑失败」，
+    所以 `tauri/tests/recording.test.mjs` 直接读 `_PATCH_FIELDS` 来比。
+19. **上移/下移必须连 `ts_ms` 一起交换**（2026-09-17）。回放排期是**绝对时间线**
+    （`core/player.py`：`due = self._t0 + ev.ts_ms / 1000.0 / speed`），与数组顺序
+    无关。只挪数组元素的话，被挪到前面的那条 `due` 已经过去、**立刻执行**——
+    用户看到的是「上移一步，那一步当场就跑了」。所以 `record.moveEvent` 的语义是
+    「把这一条与它前/后一条**互换位置与时刻**」，前端只说相对位移 `delta`。
+20. **编辑不许原地改元素**（2026-09-17 复核）。`_record_snapshot()` 存的是
+    `list(res.events)` 浅拷贝，元素是**同一批对象**。所以 `record.patch` 走
+    `replace(ev, **fields)`、`record_insert` / `duplicate` 重建列表——
+    原地写 `ev.text = ...` 会把撤销栈里的那份快照一起改掉，撤销永远回不去
+    （与要点 16 的裁剪快照是同一个坑，2026-09-12 已经踩过一次）。
 17. **新增"有意移除"类别时必须同步丢帧判据**：`captured` 与入库 `count` 之间
     隔着 decimate / 窗口过滤 / 上限 / 文本聚合 / 尾部裁剪五类有意丢弃。判据
     `unaccounted`（见 rpc-protocol.md 设计要点 4）在后端按这五类求和，
@@ -244,3 +282,13 @@
 - 2026-09-12 **按键段转文本**（`record.keysToText`）：选中一条按键 → 填入实际
   文字 → 整段最大连续按键换成一条 text 事件，回放改走 Unicode 通道变确定；
   面板加"这段按键 / 替换为文本"输入块与说明（见已知问题）
+- 2026-09-15 **录制库**（F-REC-17）：`record.stop` 自动入库；新增
+  `core/recording_lib.py`（一条一个文件、原子替换、id 白名单）与六个 RPC；
+  `record_replay` 可按 id 引用。22 个 Python 用例（`tests/test_recording_lib.py`）
+  + 14 个前端用例，详见 [recording-lib.md](recording-lib.md)
+- 2026-09-17 **事件编辑扩到「全选」**（F-REC-15）：新增 `record.patch`（改字段，
+  白名单 `_PATCH_FIELDS` 按 kind 分）、`record.insert`（插入，缺 `ts_ms` 对齐前一条）、
+  `record.duplicate`（忠实复制、沿用同一时刻）、`record.moveEvent`（前后挪一格，
+  **连 `ts_ms` 一起交换**）。非法值报错不静默纠正（要点 18）、上移下移换时间戳
+  （要点 19）、编辑不原地改元素（要点 20）。面板加「字段编辑区 / 复制 / 上移 /
+  下移 / 插入」；19 个 Python 用例 + 7 个前端用例，11 条源码变异全部被拦

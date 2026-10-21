@@ -95,7 +95,16 @@ export type ParamType =
   | "text"
   | "file"
   | "keys"
-  | "events";
+  | "events"
+  /** 毫秒总数，渲染成「时/分/秒/毫秒」四格（见 flow/duration.ts） */
+  | "duration"
+  /** `HH:mm:ss` 字符串，渲染成时刻选择器（只能选，不能手打） */
+  | "time"
+  /**
+   * 录制库里的一个 id，渲染成下拉（选项来自 `record.lib.list`）。
+   * 值仍是 id 字符串，所以老流程文件（内嵌事件）零迁移。
+   */
+  | "recording";
 
 export interface ParamDef {
   key: string;

@@ -10,8 +10,9 @@
 A. 产物级（静态，不解压运行）——直接读 frozen 二进制里的 PYZ，反编译出目标
    模块，断言本次改动引入的符号/常量确实在里面。这一层能抓到"没重新打包"。
 B. RPC 级（动态）——真起一次 sidecar，走 `app.info` / `input.probe` /
-   `record.start→stop` / 一个必定触发后端告警的条件节点，断言协议面（字段、判据、
-   通知投递）与本次实现一致。
+   `record.start→stop` / 录制库六个方法 / 一个必定触发后端告警的条件节点，
+   断言协议面（字段、判据、通知投递）与本次实现一致。
+   录制库那几项**自己造、自己删**，不给用户的 `recordings/` 留测试垃圾。
 
 用法：
     ./.venv/bin/python scripts/check_installed.py            # 默认 /Applications/Auto Flow.app
@@ -23,11 +24,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
 
 DEFAULT_APP = "/Applications/Auto Flow.app"
 
@@ -57,8 +60,22 @@ def _sub_code(code, fname):
     return None
 
 
+def _method_code(code, cls: str, meth: str):
+    """取 `cls.meth` **自身**的 code object。
+
+    为什么非要缩到方法这一层：`_co_names_recursive` 扫的是整模块，名字只要在
+    **任何地方**出现过就算数。若某次改动把 `run()` 里的调用还原成旧写法、
+    只留下一个没人调用的辅助函数，整模块扫描照样找得到那个名字——
+    断言于是**假绿**。缩到 `run` 自己的 `co_names` 才答得了「这个节点现在
+    真的走那条路径吗」。
+    """
+    cls_code = _sub_code(code, cls)
+    return None if cls_code is None else _sub_code(cls_code, meth)
+
+
 def _artifact_checks(recorder, inputsource, controller, server, vision,
-                     events=None, executor=None) -> list:
+                     events=None, executor=None, lib=None, builtin=None,
+                     wflib=None) -> list:
     out = []
     if recorder is None:
         return [("core.recorder 没打进 PYZ（打包不完整？）", False)]
@@ -180,13 +197,169 @@ def _artifact_checks(recorder, inputsource, controller, server, vision,
     out.append(("rpc.server 注册了画布方法（edge.add/edge.remove/node.setPos/workflow.setStart）",
                 {"edge.add", "edge.remove", "node.setPos", "workflow.setStart"}
                 <= srv_consts))
+
+    # ---- 录制库（2026-09-15）----
+    # 打进来的若是**上一版** sidecar，界面上「存入库 / 落到画布」会报 unknown method，
+    # 而 `record.stop` 只是**悄悄不再自动入库**——用户不会看到任何异常，
+    # 只会发现"我刚录的那段不在库里"。所以库的存储层与六个方法都要在这里点名。
+    lib_consts = _all_consts(lib) if lib is not None else set()
+    lib_names = _co_names_recursive(lib) if lib is not None else set()
+    out.append(("core.recording_lib 打进了包（save/load/list_meta 在）",
+                lib is not None
+                and {"save", "load", "list_meta"} <= lib_names))
+    # id 白名单是**路径穿越**的唯一防线（id 直接拼路径写文件）。正则模式是常量，
+    # 用**字面量**判（`re.compile` 的模式串进 co_consts，见 _all_consts），
+    # 而不是在测试里重跑一遍正则——这条要答的是"打包进来的那份带没带它"。
+    out.append(("core.recording_lib 带 id 白名单正则（^[A-Za-z0-9_-]{1,64}$）",
+                lib is not None and "_ID_RE" in lib.co_names
+                and "^[A-Za-z0-9_-]{1,64}$" in lib_consts))
+    # 原子替换：少了它，覆盖写一半崩掉会留下半截 JSON，那条录制永久损坏
+    out.append(("core.recording_lib 走临时文件 + os.replace（原子替换）",
+                lib is not None and ".tmp" in lib_consts
+                and "replace" in lib_names))
+    out.append(("rpc.controller 有录制库方法实现（record_lib_save/from_lib/to_node）",
+                {"record_lib_save", "record_from_lib", "record_lib_to_node"}
+                <= ctrl_names))
+    out.append(("rpc.server 注册了录制库方法（record.lib.* / record.fromLib）",
+                {"record.lib.list", "record.lib.save", "record.lib.rename",
+                 "record.lib.delete", "record.fromLib", "record.lib.toNode"}
+                <= srv_consts))
+    # 自动入库 + 过期可侦测：`_record_saved` 是"当前这段对应库里哪一条"的唯一记录，
+    # `_lib_info` 拿它比 rev 得出 dirty。少了它，界面会一直显示「已同步」。
+    out.append(("rpc.controller 有 _record_saved / _lib_info（自动入库 + 过期可侦测）",
+                {"_record_saved", "_lib_info"} <= ctrl_names))
+    bi_names = _co_names_recursive(builtin) if builtin is not None else set()
+    bi_consts = _all_consts(builtin) if builtin is not None else set()
+    out.append(("tasks.builtin 的录制回放支持引用录制库（tolerant_event/_from_library）",
+                {"tolerant_event", "_from_library"} <= bi_names))
+    # `内嵌` / `录制库` 是**跨语言协议**（前端 flow/recording.ts 里同名常量）。
+    # 这条断言的意义是「后端这份确实带上了新取值」，不是「两边一致」——
+    # 两边一致由 tauri/tests/recording.test.mjs 直接读 builtin.py 来保证。
+    out.append(("tasks.builtin 里能看到「内嵌」「录制库」两个字面量",
+                {"内嵌", "录制库"} <= bi_consts))
+
+    # ---- 录制事件编辑 + 库条目直接编辑（2026-09-17）----
+    # 打进来的若是**上一版** sidecar，界面上「复制 / 上移 / 下移 / 插入」会报
+    # unknown method，而字段编辑区改完只弹「编辑失败」——用户会以为是自己填错了。
+    out.append(("rpc.server 注册了事件编辑方法（patch/insert/duplicate/moveEvent）",
+                {"record.patch", "record.insert", "record.duplicate",
+                 "record.moveEvent"} <= srv_consts))
+    out.append(("rpc.server 注册了库条目直接编辑（record.lib.edit / endEdit）",
+                {"record.lib.edit", "record.lib.endEdit"} <= srv_consts))
+    out.append(("rpc.controller 有事件编辑实现（record_patch/insert/duplicate/move_event）",
+                {"record_patch", "record_insert", "record_duplicate",
+                 "record_move_event"} <= ctrl_names))
+    # 字段白名单是**跨语言协议**（前端把字段名当字符串发过来，后端按它校验），
+    # 也是**权限边界**（不是白名单里的字段一律 -32602）。少了它，改字段会全被拒。
+    # 五种类型名逐个点名，不是只判 `_PATCH_FIELDS` 在不在。
+    out.append(("rpc.controller 带字段白名单 _PATCH_FIELDS（五种类型齐全）",
+                "_PATCH_FIELDS" in ctrl_names
+                and {"move", "mouse", "wheel", "key", "text"}
+                <= _all_consts(controller)))
+    # 写回必须在**后端**统一做（`_record_commit` → `_sync_lib_edit`）：编辑接口有
+    # 十几个，靠前端记账漏一个就是「库里还是旧的、界面却显示已同步」。
+    out.append(("rpc.controller 有 _record_commit / _sync_lib_edit（编辑收尾统一写回）",
+                {"_record_commit", "_sync_lib_edit", "_record_lib_edit_id"}
+                <= ctrl_names))
+    # 上移 / 下移要**连 ts_ms 一起换**：回放排期是绝对时间线，只挪数组元素会让被
+    # 提前的那条 `due` 已过、立刻执行。`record_move_event` 里应出现 replace。
+    mv = _sub_code(controller, "record_move_event") if controller is not None else None
+    out.append(("record_move_event 用 replace 交换（连 ts_ms 一起换，不只是挪数组）",
+                mv is not None and "replace" in _co_names_recursive(mv)))
+
+    # ---- 点击位置 = 框内取点（2026-09-16）----
+    # 纯函数本身由 tests/test_core.py 的 14 条用例 + 两次反向验证保证；这里要答的是
+    # 另一个问题：**打包进来的这份，两个点击节点是不是真的走了共用取点**。
+    # 断言缩到 `run` 自己的 co_names（不能扫全模块，理由见 `_method_code`）——
+    # 若有人把 run() 还原成 `m.x + offset_x` 而把 `_click_target` 留成死代码，
+    # 整模块扫描会假绿，这里不会。
+    out.append(("tasks.builtin 有 click_point_in_box（框内取点纯函数）",
+                "click_point_in_box" in bi_names and "_click_target" in bi_names))
+    for cls in ("ImageClickTask", "OcrClickTask"):
+        run = _method_code(builtin, cls, "run") if builtin is not None else None
+        out.append((f"{cls}.run 真的走共用取点（_click_target 在它的 co_names 里）",
+                    run is not None and "_click_target" in run.co_names))
+    # 三个取值是**跨语言协议**：它们会被写进用户文件，前端 ParamsPanel 按字面量
+    # 渲染下拉。改了字面量 = 老文件的 select 显示为空、show_if 把字段藏掉。
+    out.append(("tasks.builtin 里能看到三种「点击位置」取值",
+                {"目标中心", "框内随机", "框内自定义"} <= bi_consts))
+
+    # ---- 工作流库（2026-09-16）----
+    # 落点是**打包进来的那份**：单测跑的是源码树，装进去的是 frozen PYZ。
+    # 少打一个模块、或者某个函数被换回旧写法，单测全绿而安装版行为不同。
+    out.append(("core.workflow_lib 已打进 PYZ", wflib is not None))
+    # 自身窗口遮罩（F-VIS-12）：漏进包的表现是「识别照常、但会点穿到桌面」，
+    # 正是那种「看着正常、后果很糟」的静默失败，必须由产物断言兜住。
+    selfmask = mods.get("core.selfmask")
+    names = set()
+    if selfmask is not None:
+        def _walk(c):
+            names.update(c.co_names)
+            for k in c.co_consts:
+                if hasattr(k, "co_names"):
+                    _walk(k)
+        _walk(selfmask)
+    out.append(("core.selfmask 已打进 PYZ（含 mask_capture）",
+                "mask_capture" in names))
+    # 删除必须是**移动**（进废纸篓），不能是直接删：这是用户数据，删掉没有第二次
+    # 机会。单测能验行为，这条验的是「装进去的这份也是这么写的」。
+    rm_co = _sub_code(wflib, "remove") if wflib is not None else None
+    out.append(("workflow_lib.remove 走 shutil 移动（删除 = 进废纸篓，不是真删）",
+                rm_co is not None and "shutil" in rm_co.co_names
+                and "remove" not in rm_co.co_names))
+    # `nodes: []` 是「新建后还没加节点」的正常状态。写成 `nodes or events` 的
+    # or 链会把**每一份空工作流**判成格式损坏——症状是新建的条目改不了名、打不开。
+    hl_co = _sub_code(wflib, "_has_node_list") if wflib is not None else None
+    out.append(("workflow_lib._has_node_list 用 any(...) 判类型（空列表不算损坏）",
+                hl_co is not None and "any" in hl_co.co_names))
+    out.append(("workflow_lib 有 id_of_path / path_of（库归属的唯一判据 + 唯一校验点）",
+                {"id_of_path", "path_of"} <=
+                (_co_names_recursive(wflib) if wflib is not None else set())))
+    # 这条答的是**老包 vs 新包**——也就是这条流水线的本职：「改了代码却没重新
+    # 打包」。更细的问题（保存到底有没有真的入库、那条死路有没有回来）交给 RPC 级
+    # 的**行为**断言和 `tests/test_workflow_lib.py`：在字节码上断不出来——
+    # 把 `wid=wid or None` 去掉、甚至把 `raise` 加回来，`co_names` 都不变；
+    # 而改成断字符串又会被**函数自己的文档字符串**绊住（那里恰好写着这个短语，
+    # 且 `_all_consts` 返回的是集合、`in` 是精确匹配而不是子串）。
+    wsave = (_method_code(controller, "AppController", "workflow_save")
+             if controller is not None else None)
+    out.append(("controller.workflow_save 里出现了 workflow_lib（老包里没有）",
+                wsave is not None and "workflow_lib" in set(wsave.co_names)))
+    # dirty 的唯一判据是**两个版本号比出来的**，不是写死的常量、也不在前端记账。
+    wd = (_method_code(controller, "AppController", "workflow_dirty")
+          if controller is not None else None)
+    out.append(("controller.workflow_dirty 比的是 _wf_rev / _wf_saved_rev",
+                wd is not None and {"_wf_rev", "_wf_saved_rev"} <= set(wd.co_names)))
+    # 注意：「改动之后 dirty 真的会变 true」由 RPC 级的 `_workflow_lib_checks`
+    # **行为**验证（加一个节点再查一次）。这里只断 `_broadcast_workflow` 自增了
+    # 版本号是断不出来的——`+= 0` 的 co_names 里照样有 `_wf_rev`。
+    # -32006 是**跨语言协议**：前端 WorkflowMenu.vue / WorkflowLibDialog.vue 里
+    # 各写了一份 UNSAVED_CHANGES。对不上不会报错，只会让「新建 / 打开」在改过
+    # 东西之后莫名其妙点不动（用户读到的是一句英文错误码）。
+    guard = (_method_code(controller, "AppController", "_guard_unsaved")
+             if controller is not None else None)
+    out.append(("controller._guard_unsaved 用 -32006 拒绝丢弃未保存的改动",
+                guard is not None and -32006 in guard.co_consts))
+    out.append(("rpc.server 注册了工作流库七个方法（workflow.lib.*）",
+                {"workflow.lib.list", "workflow.lib.save", "workflow.lib.open",
+                 "workflow.lib.rename", "workflow.lib.delete",
+                 "workflow.lib.import", "workflow.lib.export"} <= srv_consts))
     return out
 
 
 def _all_consts(code) -> set:
-    """递归收集全部字符串常量（方法表里的方法名是纯字符串常量）。"""
+    """递归收集全部字符串常量（方法表里的方法名是纯字符串常量）。
+
+    **必须钻进 tuple / frozenset**：CPython 编译字典字面量时，会把一批**常量键**
+    打包成**一个 tuple 常量**（实测：`_HANDLERS` 里约每 15 个键打成一包）。
+    只扫顶层 `co_consts` 的话，落在某一包里的键就查不到——而这件事**只跟字典
+    多大、键排在第几个有关**：往同一个字典里追加几个方法，可能刚好把新键推进
+    "被打包"的那一段，于是新加的断言莫名其妙地红/绿，看起来像打包漏了。
+    """
     out = {c for c in code.co_consts if isinstance(c, str)}
     for c in code.co_consts:
+        if isinstance(c, (tuple, frozenset, list)):
+            out |= {x for x in c if isinstance(x, str)}
         if hasattr(c, "co_consts"):
             out |= _all_consts(c)
     return out
@@ -212,7 +385,9 @@ def _load_pyz(exe: str) -> dict:
     zar = ZlibArchiveReader(pyz_path)
     mods = {}
     for name in ("core.recorder", "core.inputsource", "rpc.controller",
-                 "core.vision", "core.events", "core.executor"):
+                 "core.vision", "core.events", "core.executor",
+                 "core.recording_lib", "core.workflow_lib", "tasks.builtin",
+                 "core.selfmask"):
         try:
             mods[name] = zar.extract(name)      # 直接返回 code object，不是 bytes
         except Exception:
@@ -233,9 +408,22 @@ class Sidecar:
     """
 
     def __init__(self, path: str):
+        # 「删除进废纸篓」的断言要能**验证并清理**，所以给这次会话一个**临时废纸篓**。
+        # 不这么做的话有两条都很难发现的问题：
+        # ① 每跑一次校验，用户废纸篓里就多出 `2026xxxxxxxx-xxxxxx.json`，而用户
+        #    根本不知道那是什么、也不知道能不能删；
+        # ② 下面那句 `os.remove(trash_path)` 是**静默失效**的——macOS 对 `~/.Trash`
+        #    的程序化删除与列目录都有 TCC 保护（`os.listdir` 直接
+        #    `PermissionError: Operation not permitted`；`os.unlink` 不报错、
+        #    文件却还在）。于是「自己造的自己清」这条自检在真废纸篓上**永远假绿**。
+        # `core/workflow_lib.py` 本来就支持 `AUTOFLOW_TRASH_DIR` 覆盖（单测也用它），
+        # 这里借它把校验会话隔离掉：断言仍验「真的被移走、内容完整」，只是移到了
+        # 临时目录，收尾能真删干净。
+        self.trash_dir = tempfile.mkdtemp(prefix="autoflow-chk-trash-")
+        env = dict(os.environ, AUTOFLOW_TRASH_DIR=self.trash_dir)
         self.p = subprocess.Popen(
             [path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self._id = 0
         self._responses: dict = {}
         self.notifications: list = []
@@ -301,6 +489,424 @@ class Sidecar:
             self.p.wait(timeout=5)
         except Exception:
             self.p.kill()
+        shutil.rmtree(self.trash_dir, ignore_errors=True)
+
+
+def _library_checks(s: "Sidecar") -> list:
+    """录制库（2026-09-15，2026-09-17 扩到直接编辑）：库方法都走真实的 RPC 往返。
+
+    **为什么自己写一条库文件**（而不是先录一段再入库）：live checks 里
+    `record.start` 后立刻 `record.stop`，抓到的事件数是 0，而空录制**刻意不入库**
+    （见 controller.record_stop）——靠它验不到自动入库。直接按存储格式写一条，
+    正好也验证了「(冻结后的) 安装版读得懂库文件」这件事，比绕一圈更直接。
+
+    **自己造的东西自己删**：用户的 `recordings/` 里不该留下 `chk-` 开头的测试垃圾。
+    末尾会把两侧新增的条目全删掉，并断言列表回到基线。
+    """
+    out: list = []
+    base = s.call("record.lib.list").get("result") or {}
+    items = base.get("items") or []
+    if not base:
+        return [("record.lib.list 可用", False)]
+    out.append((f"record.lib.list 可用（{len(items)} 条，"
+                f"dir={str(base.get('dir'))[-28:]}）", "dir" in base))
+
+    d = base.get("dir") or ""
+    made: list = []
+    try:
+        # 按 recording_lib.save 的落盘格式手工写一条
+        rid = "chk-lib-" + uuid.uuid4().hex[:8]
+        evs = [{"ts_ms": 0, "kind": "move", "x": 1, "y": 2},
+               {"ts_ms": 40, "kind": "mouse", "x": 3, "y": 4, "pressed": True,
+                "button": "left", "clicks": 1}]
+        with open(os.path.join(d, f"{rid}.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema": 1, "id": rid, "name": "check-installed 临时条目",
+                       "created_at": "2000-01-01 00:00:00", "events": evs,
+                       "origin": [7, 8]}, f, ensure_ascii=False)
+        made.append(rid)
+
+        after = s.call("record.lib.list").get("result") or {}
+        got = [m for m in (after.get("items") or []) if m.get("id") == rid]
+        out.append(("record.lib.list 认得新写入的条目（名字/条数/原点都对）",
+                    bool(got) and got[0].get("count") == 2
+                    and got[0].get("origin") == [7, 8]
+                    and got[0].get("name") == "check-installed 临时条目"))
+
+        # 载入编辑缓冲：条数必须等于文件里的条数（容忍构造不能让两边对不上）
+        load = s.call("record.fromLib", {"id": rid}).get("result") or {}
+        out.append((f"record.fromLib 载入并带上 events（count={load.get('count')}）",
+                    load.get("count") == 2))
+        lib = load.get("lib") or {}
+        out.append((f"载入后界面显示「已同步」（dirty={lib.get('dirty')}）",
+                    lib.get("id") == rid and lib.get("dirty") is False))
+
+        # ---- 单条事件的编辑 + 库条目直接编辑（2026-09-17）----
+        # 这一段验的是**整条写回链**：edit 进模式 → patch 改坐标 → 自动落盘。
+        # 少了任何一环，界面表现都是「改完显示已同步、库里还是旧的」——按 id 引用
+        # 它的节点回放的是库里那份，用户完全无从察觉。
+        ed = s.call("record.lib.edit", {"id": rid}).get("result") or {}
+        elib = ed.get("lib") or {}
+        out.append((f"record.lib.edit 进入直接编辑模式（editing={elib.get('editing')}）",
+                    elib.get("editing") is True and elib.get("id") == rid))
+        patched = s.call("record.patch", {"index": 0,
+                                          "fields": {"x": 111, "y": 222}}).get("result") or {}
+        pev = (patched.get("events") or [{}])[0]
+        out.append((f"record.patch 改坐标（x={pev.get('x')}, y={pev.get('y')}）",
+                    pev.get("x") == 111 and pev.get("y") == 222))
+        # 非法值必须报错、不能静默当 0（坐标收敛成 0 会把回放光标甩到屏幕左上角）
+        badv = s.call("record.patch", {"index": 0, "fields": {"x": "abc"}})
+        out.append((f"record.patch 拒绝非法值（{(badv.get('error') or {}).get('code')}）",
+                    (badv.get("error") or {}).get("code") == -32602))
+        badk = s.call("record.patch", {"index": 0, "fields": {"button": "left"}})
+        out.append((f"record.patch 拒绝该类型没有的字段（{(badk.get('error') or {}).get('code')}）",
+                    (badk.get("error") or {}).get("code") == -32602))
+        # 上移 / 下移**连 ts_ms 一起换**：判据不是「时间戳跟着事件走」，而是
+        # 「**事件换了位置、时间线仍单调**」——挪到哪个槽就取哪个槽的时刻。
+        # 只挪数组不换 ts 的话会得到 ts=[40,0]：被挪到前面的那条 `due` 已过、
+        # 立刻执行（用户看到的是「上移一步，那一步当场就跑了」）。
+        # ⚠️ 必须在**只有这两条**的时候验：先 insert/duplicate 会插进同刻的条目，
+        # 交换前后时间戳一样，断言就没有区分度了。
+        s.call("record.moveEvent", {"index": 1, "delta": -1})
+        cur = (s.call("record.current").get("result") or {}).get("events", [])
+        kinds = [e.get("kind") for e in cur]
+        ts = [e.get("ts_ms") for e in cur]
+        out.append((f"record.moveEvent 事件换位且时间线仍单调（{kinds} ts={ts}）",
+                    kinds[:2] == ["mouse", "move"] and ts == [0, 40]))
+        s.call("record.moveEvent", {"index": 0, "delta": 1})   # 换回去，便于按下标定位
+        cur2 = (s.call("record.current").get("result") or {}).get("events", [])
+        out.append((f"record.moveEvent 换回去（{[e.get('kind') for e in cur2][:2]}）",
+                    [e.get("kind") for e in cur2][:2] == ["move", "mouse"]))
+        # 插入 / 复制：时间戳缺省对齐前一条、复制沿用同一时刻（都是"忠实"的语义）
+        ins = s.call("record.insert", {"index": 0, "event": {"kind": "move"}}).get("result") or {}
+        out.append((f"record.insert 插一条（count={ins.get('count')}）", ins.get("count") == 3))
+        dup = s.call("record.duplicate", {"index": 0}).get("result") or {}
+        out.append((f"record.duplicate 复制一条（count={dup.get('count')}）",
+                    dup.get("count") == 4))
+        # 退出编辑模式；**库里那份必须已经变了**（这才是"直接编辑"的意义）。
+        # 改过的那条现在在**下标 2**（前面插了一条 + 复制了一条）。
+        end = s.call("record.lib.endEdit").get("result") or {}
+        out.append((f"record.lib.endEdit 退出编辑模式"
+                    f"（editing={(end.get('lib') or {}).get('editing')}）",
+                    (end.get("lib") or {}).get("editing") is False))
+        reread = s.call("record.fromLib", {"id": rid}).get("result") or {}
+        revs = reread.get("events") or []
+        out.append((f"直接编辑已自动写回库里（重读 count={reread.get('count')}、"
+                    f"第 3 条 x={revs[2].get('x') if len(revs) > 2 else None}）",
+                    reread.get("count") == 4 and len(revs) > 2
+                    and revs[2].get("x") == 111 and revs[2].get("y") == 222))
+
+        # 覆盖同一条：id 不变，引用它的节点才会跟着变
+        saved = s.call("record.lib.save", {"id": rid,
+                                          "name": "check-installed 改名"}).get("result") or {}
+        out.append(("record.lib.save 覆盖同一条（id 不变、改名生效）",
+                    (saved.get("item") or {}).get("id") == rid
+                    and (saved.get("item") or {}).get("name") == "check-installed 改名"))
+
+        # 新建一条（不给 id）
+        newp = s.call("record.lib.save", {"name": "check-installed 新建"}).get("result") or {}
+        new_id = (newp.get("item") or {}).get("id")
+        if new_id:
+            made.append(new_id)
+        out.append(("record.lib.save 不给 id 时新建一条（拿到新 id）",
+                    bool(new_id) and new_id != rid))
+
+        # 落到画布：节点只存 id，**不复制事件**（"库里改一次处处变"全靠这条）
+        node = s.call("record.lib.toNode", {"id": rid}).get("result") or {}
+        nd = node.get("node") or {}
+        p = nd.get("params") or {}
+        # 节点里**只存 id**：事件留在库里（"库里改一次处处变"全靠这条）。
+        # 注意对外视图把 events 数组换成了 `{count}`（_public_node 的摘要化），
+        # 所以这里判 `{"count": 0}`——真源是 `[]`，两者都是"节点里没有事件"。
+        ev = p.get("events")
+        empty_ev = (ev == [] or ev == {"count": 0})
+        out.append(("record.lib.toNode 落成节点且只存 id（events 空、source=录制库）",
+                    p.get("source") == "录制库" and p.get("recording_id") == rid
+                    and empty_ev))
+        out.append((f"落到画布的节点带上录制名（{p.get('recording_name')}）",
+                    p.get("recording_name") == "check-installed 改名"))
+
+        # 非法 id：必须报错而不是静默成功（id 直接拼路径，放过去就能删任意文件）
+        bad = s.call("record.lib.delete", {"id": "../../etc/hosts"})
+        out.append((f"record.lib.delete 拒绝非法 id（{(bad.get('error') or {}).get('code')}）",
+                    (bad.get("error") or {}).get("code") == -32005))
+        miss = s.call("record.fromLib", {"id": "no-such-id-zzz"})
+        out.append((f"record.fromLib 对不存在的 id 报错（{(miss.get('error') or {}).get('code')}）",
+                    (miss.get("error") or {}).get("code") == -32005))
+    finally:
+        for rid in made:
+            s.call("record.lib.delete", {"id": rid})
+        left = s.call("record.lib.list").get("result") or {}
+        ids = [m.get("id") for m in (left.get("items") or [])]
+        out.append(("录制库清理干净（没有留下测试条目）",
+                    not [i for i in ids if str(i).startswith("chk-lib-")]))
+    return out
+
+
+def _condition_group_checks(s: "Sidecar") -> list:
+    """条件组（2026-09-15）：定义能在菜单里查到，且**装进去的这份真的会短路**。
+
+    为什么值得单独验一条行为：`condition_group` 的价值一半在「多项」，另一半在
+    「短路」——不短路的话用户排的顺序完全不影响结果，等于把「先看哪一项」这个
+    表达力丢了（与 `branch` 的「先到先得」同理）。而单测跑的是源码，证明不了
+    打包进去的这份也是这样。
+
+    **短路用可观测的副作用证明**：条件项指向不存在的模板 → `find_template` 在
+    读屏之前就返回「找不到」并记一次 WARNING。于是
+    「与（第 1 项就不成立）」应当只报 **1** 次、「或（两项都不成立）」应当报 **2** 次
+    ——同一个节点、同一批输入，只有求值顺序不同，条数就必须不同。
+    不依赖屏幕录制权限，也不碰键鼠。
+
+    ⚠️ 告警文案是「模板图读不出来：<path>」，**别按 `missing-template` 找**：
+    那只是 `_warn_once` 的去重键，不在文案里（按它找会永远数到 0，看着像没短路）。
+    """
+    out: list = []
+    defs = s.call("nodes.definitions").get("result") or []
+    by = {d["type"]: d for d in defs}
+    g = by.get("condition_group")
+    out.append(("nodes.definitions 含 condition_group（「添加节点」里会有它）",
+                g is not None))
+    if not g:
+        return out
+    ps = {p["key"]: p for p in g["params"]}
+    out.append((f"condition_group order={g['order']} 夹在 condition/branch 之间，"
+                f"cond_count {ps['cond_count']['min']}..{ps['cond_count']['max']}",
+                by["condition"]["order"] < g["order"] < by["branch"]["order"]
+                and (ps["cond_count"]["min"], ps["cond_count"]["max"]) == (2, 6)))
+
+    def run_case(combine: str, tag: str) -> tuple:
+        with tempfile.TemporaryDirectory(prefix="autoflow-cgchk-") as td:
+            wf = os.path.join(td, "wf.json")
+            with open(wf, "w", encoding="utf-8") as f:
+                json.dump({"version": 4, "name": "cg", "start": "", "edges": [],
+                           "nodes": [
+                               {"type": "condition_group", "enabled": True, "params": {
+                                   "cond_count": 2, "combine": combine,
+                                   "cond1_kind": "图像存在",
+                                   "cond1_value": os.path.join(td, f"{tag}-a.png"),
+                                   "cond2_kind": "图像存在",
+                                   "cond2_value": os.path.join(td, f"{tag}-b.png"),
+                                   "timeout_s": 0.0}},
+                               {"type": "delay", "enabled": True, "params": {"ms": 1}},
+                               {"type": "delay", "enabled": True, "params": {"ms": 1}}]},
+                          f, ensure_ascii=False)
+            load = s.call("workflow.load", {"path": wf})
+            if load.get("error"):
+                return f"加载失败：{load['error'].get('message')}", -1
+            uids = [n["uid"] for n in (load["result"]["workflow"] or {})["nodes"]]
+            ea = s.call("edge.add", {"src": uids[0], "port": "true", "dst": uids[1]})
+            eb = s.call("edge.add", {"src": uids[0], "port": "false", "dst": uids[2]})
+            if ea.get("error") or eb.get("error"):
+                return f"edge.add 失败：{ea.get('error') or eb.get('error')}", -1
+            s.clear_notifications()
+            if s.call("run.start").get("error"):
+                return "run.start 失败", -1
+            if s.wait_notification("run.finished", timeout=20.0) is None:
+                return "等不到 run.finished", -1
+            time.sleep(0.3)          # 让落在 run.finished 后面的通知也进队列
+            with s._lock:
+                return None, sum(
+                    1 for n in s.notifications
+                    if n.get("method") == "log.warning"
+                    and "模板图读不出来" in json.dumps(n, ensure_ascii=False))
+
+    for combine, tag, want in (("全部成立(与)", "and", 1), ("任一成立(或)", "or", 2)):
+        err, n = run_case(combine, tag)
+        how = "第 1 项不成立即停（短路）" if want == 1 else "两项都测完（不短路）"
+        out.append((f"condition_group「{combine}」真跑一遍：2 项、{how} "
+                    f"→ 报 {n} 次「模板图读不出来」",
+                    err is None and n == want))
+        if err:
+            out.append((f"condition_group「{combine}」失败原因：{err}", False))
+    return out
+
+
+def _click_pos_checks(s: "Sidecar") -> list:
+    """「点击位置 = 框内取点」（2026-09-16）：装进去的这份确实把选项给了界面。
+
+    **只查定义、不真跑**：真跑需要屏幕上出现确定的模板/文字命中，headless 下
+    不可复现（框内取点本身是纯函数，由 `tests/test_core.py` 的 14 条用例 +
+    两次反向验证保证）。这条要答的是另一个问题——**打包进去的后端有没有把这
+    几个参数暴露出来**：少了 `click_pos`，参数面板上根本不会出现「点击位置」
+    下拉，用户只会以为「功能没做」，而所有单测照样全绿。
+
+    与 `_condition_group_checks` 不同，这一组**不碰工作流状态**，所以放在哪儿都
+    安全；仍然跟在它后面，保持「新加的一组放最后」这个约定。
+    """
+    out: list = []
+    defs = s.call("nodes.definitions").get("result") or []
+    by = {d["type"]: d for d in defs}
+    for t in ("image_click", "ocr_click"):
+        node = by.get(t)
+        ps = {p["key"]: p for p in (node or {}).get("params") or []}
+        cp = ps.get("click_pos") or {}
+        out.append((
+            f"{t} 暴露了「点击位置」（默认 {cp.get('default')}，"
+            f"{len(cp.get('options') or [])} 档，百分比只在自定义时出现）",
+            node is not None
+            and cp.get("default") == "目标中心"
+            and cp.get("options") == ["目标中心", "框内随机", "框内自定义"]
+            and (ps.get("rel_x") or {}).get("show_if") == {
+                "key": "click_pos", "eq": "框内自定义"}
+            and (ps.get("rel_y") or {}).get("show_if") == {
+                "key": "click_pos", "eq": "框内自定义"}
+            and (ps.get("inset") or {}).get("min") == 0
+            # 老的固定偏移不能被这次改动挤掉
+            and (ps.get("offset_x") or {}).get("default") == 0))
+    return out
+
+
+def _workflow_lib_checks(s: "Sidecar") -> list:
+    """工作流库（2026-09-16）：列表 / 保存 / 打开 / 更名 / 删除 / 导入导出走真实 RPC。
+
+    **会换掉当前工作流**（新建 → 保存 → 打开），所以必须排在 `_live_checks` 的
+    最后：上面那些断言全是按 uid 寻址的，中途换树会让它们一起假失败。
+
+    **自己造的东西自己清**：在库里建两条 `check-installed 临时条目`，验完删除，
+    连「废纸篓」里那两份也删掉——这次会话的废纸篓是**临时目录**
+    （`Sidecar` 起进程时用 `AUTOFLOW_TRASH_DIR` 指过去的，见那里的注释），
+    所以删得掉，也保证**用户的真废纸篓一个文件都不会多**。
+
+    「删除进废纸篓」这条顺手验到了实处：拿到 `trash` 路径后先断言①它落在本次的
+    临时废纸篓里（证明没碰用户真废纸篓）②**确实存在**（= 文件完整地躺在里面、
+    可恢复），再自己清掉它。全程不碰用户原有的条目。
+    """
+    out: list = []
+    base = s.call("workflow.lib.list").get("result") or {}
+    if not base:
+        return [("workflow.lib.list 可用", False)]
+    d = base.get("dir") or ""
+    out.append((f"workflow.lib.list 可用（{len(base.get('items') or [])} 份，"
+                f"dir={d[-30:]}）", bool(d)))
+
+    cur0 = s.call("workflow.current").get("result") or {}
+    out.append(("workflow.current 带 lib_id / dirty / lib_dir（老 sidecar 没有）",
+                all(k in cur0 for k in ("lib_id", "dirty", "lib_dir"))))
+
+    wid = imp_id = ""
+    try:
+        # 新建（force：前面几组可能留下了未保存的改动）→ 加节点 → 存进库
+        s.call("workflow.new", {"force": True})
+
+        # dirty 的判据是**后端自增的版本号**。这里用**行为**验它：加一个节点，
+        # dirty 必须从 false 变 true。断字节码是断不出来的——把 `self._wf_rev += 1`
+        # 改成 `+= 0`，`_wf_rev` 照样在 co_names 里，那条断言不会红（实测过）。
+        clean = s.call("workflow.current").get("result") or {}
+        s.call("node.add", {"type": "delay"})
+        dirty = s.call("workflow.current").get("result") or {}
+        out.append((f"改一个节点后 dirty 从 {clean.get('dirty')} 变 {dirty.get('dirty')}"
+                    f"（判据是后端自增的版本号）",
+                    clean.get("dirty") is False and dirty.get("dirty") is True))
+
+        saved = s.call("workflow.lib.save",
+                       {"name": "check-installed 临时条目"}).get("result") or {}
+        item = saved.get("item") or {}
+        wid = item.get("id") or ""
+        out.append((f"workflow.lib.save 落库（id={wid}，{item.get('node_count')} 个节点）",
+                    bool(wid) and item.get("node_count") == 1
+                    and saved.get("lib_id") == wid and saved.get("dirty") is False))
+
+        # 「保存」是覆盖同一条，不是又建一条（总新建的话用户一按保存就多一份）
+        s.call("node.add", {"type": "delay"})
+        again = s.call("workflow.save").get("result") or {}
+        listed = s.call("workflow.lib.list").get("result") or {}
+        mine = [m for m in (listed.get("items") or []) if m.get("id") == wid]
+        out.append((f"「保存」覆盖同一条（库里仍只有它，节点数 "
+                    f"{(mine[0] if mine else {}).get('node_count')}）",
+                    again.get("lib_id") == wid and len(mine) == 1
+                    and mine[0].get("node_count") == 2))
+
+        # 未保存保护：改了不存，新建要报 -32006（前端据此弹「丢弃改动」确认框）
+        s.call("node.add", {"type": "delay"})
+        blocked = s.call("workflow.new")
+        out.append((f"有未保存改动时 workflow.new 被拒（返回 "
+                    f"{(blocked.get('error') or {}).get('code')}）",
+                    (blocked.get("error") or {}).get("code") == -32006))
+
+        # 「打开」同样受未保存保护（上面刚加了第三个节点没存）。这条**必须**先验：
+        # 少了它，「打开会把用户刚连好的一整张图静默换掉」在这层就是盲区——
+        # 而这正是加保护的唯一理由。
+        blocked2 = s.call("workflow.lib.open", {"id": wid})
+        out.append((f"有未保存改动时 workflow.lib.open 被拒（返回 "
+                    f"{(blocked2.get('error') or {}).get('code')}）",
+                    (blocked2.get("error") or {}).get("code") == -32006))
+
+        op = s.call("workflow.lib.open", {"id": wid, "force": True}).get("result") or {}
+        nodes = (op.get("workflow") or {}).get("nodes") or []
+        out.append((f"workflow.lib.open 带 force 打开并清掉未保存标记（{len(nodes)} 个节点）",
+                    op.get("lib_id") == wid and op.get("dirty") is False
+                    and len(nodes) == 2))
+
+        rn = s.call("workflow.lib.rename",
+                    {"id": wid, "name": "check-installed 改名"}).get("result") or {}
+        out.append((f"workflow.lib.rename 生效（{(rn.get('item') or {}).get('name')}）"
+                    f"且不标脏", (rn.get("item") or {}).get("name") == "check-installed 改名"
+                    and rn.get("dirty") is False))
+
+        # 导出当前那份：走**内存里的树**，且写出来的是普通工作流文件
+        dst = os.path.join(tempfile.gettempdir(),
+                           "af-chk-" + uuid.uuid4().hex[:8] + ".json")
+        ex = s.call("workflow.lib.export", {"path": dst}).get("result") or {}
+        with open(dst, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        out.append((f"workflow.lib.export 写出普通工作流文件（{len(raw.get('nodes') or [])} 个节点，"
+                    f"无库元信息）",
+                    ex.get("id") == wid and len(raw.get("nodes") or []) == 2
+                    and not ({"schema", "created_at"} & set(raw))))
+
+        # 导入：拷进库，且**不切换**当前工作流
+        imp = s.call("workflow.lib.import", {"path": dst}).get("result") or {}
+        os.remove(dst)
+        imp_id = (imp.get("item") or {}).get("id") or ""
+        after = s.call("workflow.lib.list").get("result") or {}
+        out.append((f"workflow.lib.import 拷进库且不切换当前（库里 "
+                    f"{len(after.get('items') or [])} 份，current 没变）",
+                    bool(imp_id) and after.get("current") == wid))
+
+        miss = s.call("workflow.lib.delete", {"id": "ghost-000000"})
+        out.append((f"workflow.lib.delete 对不存在的 id 报错（返回 "
+                    f"{(miss.get('error') or {}).get('code')}）",
+                    (miss.get("error") or {}).get("code") == -32005))
+
+        # 删除自己建的两条：进废纸篓 + 原文件消失 + 删当前那份不清画布
+        # 废纸篓必须是**本次的临时目录**：不然这条会往用户的真废纸篓里丢文件，
+        # 而 macOS 的 TCC 让那个目录既列不出来也删不掉（见 `Sidecar.__init__`）。
+        tmp_trash = os.path.abspath(s.trash_dir)
+        d1 = s.call("workflow.lib.delete", {"id": wid}).get("result") or {}
+        t1 = d1.get("trash") or ""
+        ok_rm = (bool(t1) and os.path.exists(t1)
+                 and os.path.abspath(os.path.dirname(t1)) == tmp_trash
+                 and not os.path.exists(os.path.join(d, wid + ".json")))
+        if t1 and os.path.exists(t1):
+            os.remove(t1)
+        d2 = s.call("workflow.lib.delete", {"id": imp_id}).get("result") or {}
+        t2 = d2.get("trash") or ""
+        ok_rm = ok_rm and bool(t2) and os.path.exists(t2)
+        if t2 and os.path.exists(t2):
+            os.remove(t2)
+        wid = imp_id = ""          # 已清干净，finally 不必再动手
+        out.append(("workflow.lib.delete 移进废纸篓（原文件消失、废纸篓里是完整一份、"
+                    "且落在本次临时废纸篓里，没碰用户真废纸篓）", ok_rm))
+
+        # 删掉的正好是当前这份时，**只清路径、不动内存里的树**：文件没了但用户连的
+        # 那张图还在，他仍能继续改、再「保存」回库（会自动新建一条）。
+        # 直接清空工作流的话，一次误点就白丢一张图。
+        cur2 = s.call("workflow.current").get("result") or {}
+        out.append(("删掉当前那份不清画布（树还在 2 个节点、路径已清空）",
+                    len((cur2.get("workflow") or {}).get("nodes") or []) == 2
+                    and not cur2.get("lib_id")))
+    finally:
+        # 中途失败也别在用户的库里留下测试垃圾
+        for x in (wid, imp_id):
+            if not x:
+                continue
+            r = s.call("workflow.lib.delete", {"id": x}).get("result") or {}
+            t = r.get("trash") or ""
+            if t and os.path.exists(t):
+                try:
+                    os.remove(t)
+                except OSError:
+                    pass
+    return out
 
 
 def _live_checks(sidecar_path: str) -> list:
@@ -335,6 +941,8 @@ def _live_checks(sidecar_path: str) -> list:
                        "unaccounted" in st))
             out.append((f"快捷键停止不裁剪（trimmed={st.get('trimmed')}）",
                        st.get("trimmed", 0) == 0))
+
+        out.extend(_library_checks(s))
 
         # 后端告警真的能走通知线到界面（2026-09-13）。触发方式要**确定性**且
         # 无副作用：条件节点指向一个不存在的模板 → find_template 在读屏之前就
@@ -468,6 +1076,15 @@ def _live_checks(sidecar_path: str) -> list:
             out.append((f"node.remove 对不存在的 uid 报错（返回 "
                         f"{(ghost_rm.get('error') or {}).get('code')}）",
                         (ghost_rm.get("error") or {}).get("code") == -32602))
+
+        # 条件组放在**最后**：它会把当前工作流换成自己的夹具，而上面那些断言
+        # 全是按 uid 寻址的（a/b/n0…）。夹在中间会让它们一起假失败——
+        # 那正是这一节开头记过的坑。
+        out.extend(_condition_group_checks(s))
+        # 「点击位置」只读定义、不换工作流，放在最后是沿用约定（不是必需）
+        out.extend(_click_pos_checks(s))
+        # 工作流库**会换掉当前工作流**（新建 → 保存 → 打开），必须在最后
+        out.extend(_workflow_lib_checks(s))
     finally:
         s.close()
     return out
@@ -493,7 +1110,10 @@ def main() -> int:
                                     mods["rpc.server"],
                                     mods.get("core.vision"),
                                     mods.get("core.events"),
-                                    mods.get("core.executor"))
+                                    mods.get("core.executor"),
+                                    mods.get("core.recording_lib"),
+                                    mods.get("tasks.builtin"),
+                                    mods.get("core.workflow_lib"))
     except Exception as e:  # noqa: BLE001
         results.append((f"读 PYZ 失败：{e}", False))
     for desc, ok in results:

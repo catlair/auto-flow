@@ -401,14 +401,104 @@ def test_workflow_error_codes() -> None:
         e2 = _call(p, "node.remove", {"index": 99}, req_id=2)
         assert e2["id"] == 2 and e2["error"]["code"] == -32602
 
-        # 保存未指定路径 -> -32602
-        e3 = _call(p, "workflow.save", req_id=3)
-        assert e3["id"] == 3 and e3["error"]["code"] == -32602
+        # 保存未指定路径 -> **不再报错**（2026-09-15 起）：自动在库里建一条。
+        # 旧行为是 -32602「尚未指定保存路径」，于是「新建 → 保存」必然失败，
+        # 用户必须先「另存为」才能存下第一版——那正是这次要修的 bug。
+        s1 = _call(p, "workflow.save", req_id=3)
+        assert s1["id"] == 3 and s1["result"]["lib_id"], s1
+        assert s1["result"]["dirty"] is False
+        first_path = s1["result"]["path"]
+        assert first_path.endswith(".json")
+
+        # 再存一次：覆盖**同一条**，不是又建一条
+        s2 = _call(p, "workflow.save", req_id=4)
+        assert s2["result"]["path"] == first_path
+        assert s2["result"]["lib_id"] == s1["result"]["lib_id"]
+        listed = _call(p, "workflow.lib.list", req_id=5)["result"]
+        assert len(listed["items"]) == 1, listed
+        assert listed["current"] == s1["result"]["lib_id"]
 
         # 加载不存在文件 -> -32602（data 指名 path）
-        e4 = _call(p, "workflow.load", {"path": "/tmp/__no_such__.json"}, req_id=4)
-        assert e4["id"] == 4 and e4["error"]["code"] == -32602
+        e4 = _call(p, "workflow.load", {"path": "/tmp/__no_such__.json"}, req_id=6)
+        assert e4["id"] == 6 and e4["error"]["code"] == -32602
         assert e4["error"]["data"]["path"] == "/tmp/__no_such__.json"
+    finally:
+        _rpc(p, "app.shutdown")
+        p.wait(timeout=5)
+
+
+# --------------------------------------------------------------------------- #
+# 工作流库（core/workflow_lib.py）
+# --------------------------------------------------------------------------- #
+def test_workflow_lib_rpc_roundtrip(tmp_path) -> None:
+    """工作流库七个方法走**真实 sidecar**。
+
+    刻意不写进 `test_workflow_lib.py`（那里是进程内的 AppController）：进程内调用
+    直接打 Python 方法，**绕过了 rpc/server.py 的方法名注册**。注册表里少一条或
+    名字拼错时进程内测试全绿，而安装版上表现成「点了按钮没反应」。
+    """
+    p = _start()
+    try:
+        lst = _call(p, "workflow.lib.list", req_id=1)["result"]
+        assert lst["items"] == [] and lst["current"] == "" and lst["dir"]
+        assert lst["dirty"] is False
+
+        # 新建 -> 加节点 -> 存入库：库里出现一条，当前指向它
+        _call(p, "workflow.new", req_id=2)
+        _call(p, "node.add", {"type": "delay"}, req_id=3)
+        saved = _call(p, "workflow.lib.save", {"name": "库里的甲"}, req_id=4)["result"]
+        wid = saved["item"]["id"]
+        assert saved["lib_id"] == wid and saved["dirty"] is False
+        assert saved["item"]["name"] == "库里的甲"
+        assert saved["item"]["node_count"] == 1
+
+        # 「保存」是覆盖同一条，不是又建一条
+        _call(p, "node.add", {"type": "delay"}, req_id=5)
+        again = _call(p, "workflow.save", req_id=6)["result"]
+        assert again["lib_id"] == wid
+        assert len(_call(p, "workflow.lib.list", req_id=7)["result"]["items"]) == 1
+
+        # 更名：改的是当前这份，标题栏跟着走，但不该标脏
+        rn = _call(p, "workflow.lib.rename", {"id": wid, "name": "改过名"}, req_id=8)["result"]
+        assert rn["item"]["name"] == "改过名" and rn["dirty"] is False
+
+        # 未保存保护：改了不存，新建要报 -32006，force 才放行
+        _call(p, "node.add", {"type": "delay"}, req_id=9)
+        blocked = _call(p, "workflow.new", req_id=10)
+        assert blocked["error"]["code"] == -32006, blocked
+        assert blocked["error"]["message"] == "unsaved_changes"
+        assert _call(p, "workflow.new", {"force": True}, req_id=11)["result"]["dirty"] is False
+
+        # 打开库里那一条
+        op = _call(p, "workflow.lib.open", {"id": wid}, req_id=12)["result"]
+        assert op["lib_id"] == wid and op["dirty"] is False
+        assert op["workflow"]["name"] == "改过名"
+        assert len(op["workflow"]["nodes"]) == 2
+
+        # 导出：当前这份走**内存里的树**，且不写库
+        dst = tmp_path / "导出.json"
+        ex = _call(p, "workflow.lib.export", {"path": str(dst)}, req_id=13)["result"]
+        assert ex["id"] == wid
+        raw = json.loads(dst.read_text(encoding="utf-8"))
+        assert len(raw["nodes"]) == 2
+        assert "schema" not in raw and "created_at" not in raw
+        assert _call(p, "workflow.lib.list", req_id=14)["result"]["dirty"] is False
+
+        # 导入：拷进库，**不切换**当前工作流
+        _call(p, "workflow.lib.import", {"path": str(dst)}, req_id=15)["result"]
+        lst2 = _call(p, "workflow.lib.list", req_id=16)["result"]
+        assert len(lst2["items"]) == 2 and lst2["current"] == wid
+        assert _call(p, "workflow.lib.import", {"path": str(tmp_path / "没这个.json")},
+                     req_id=17)["error"]["code"] == -32005
+
+        # 删除 -> 进废纸篓，当前那份只清路径、不清画布
+        dl = _call(p, "workflow.lib.delete", {"id": wid}, req_id=18)["result"]
+        assert dl["deleted"] == wid and dl["current"] == ""
+        assert os.path.exists(dl["trash"]), dl
+        assert os.path.dirname(dl["trash"]) == os.environ["AUTOFLOW_TRASH_DIR"]
+        assert not os.path.exists(os.path.join(lst["dir"], wid + ".json"))
+        cur = _call(p, "workflow.current", req_id=19)["result"]
+        assert len(cur["workflow"]["nodes"]) == 2, "删库把画布上的图也清了"
     finally:
         _rpc(p, "app.shutdown")
         p.wait(timeout=5)

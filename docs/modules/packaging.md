@@ -186,3 +186,115 @@
   第 ① 条 ✗（那一版确实没有这个节点），已安装版 4 项全 ✓。
   ⚠️ 本节总数**以实际运行为准**：同期还有一批「录制库」的断言在途，未提交，
   所以这里不写累计项数。
+- 2026-09-16 新增 6 项断言，覆盖「点击位置 = 框内取点」：
+  - 产物级 4 条（读 frozen PYZ）：`click_point_in_box` / `_click_target` 在包里；
+    **`ImageClickTask.run` 与 `OcrClickTask.run` 各自的 `co_names` 含 `_click_target`**；
+    三种取值字面量（`目标中心`/`框内随机`/`框内自定义`）在 `co_consts` 里。
+  - RPC 级 2 条（`_click_pos_checks`）：两个节点的 `nodes.definitions` 暴露了
+    `click_pos`（默认 `目标中心`、3 档）、`rel_x`/`rel_y` 的 `show_if` 指向
+    `框内自定义`、`inset.min == 0`、老的 `offset_x` 未被挤掉。
+    ⚠️ 这一组**只查定义、不真跑**——真跑需要屏幕上出现确定的模板/文字命中，
+    headless 不可复现（取点逻辑本身是纯函数，由 `tests/test_core.py` 的 14 条
+    用例 + 反向验证保证）。它要答的是另一个问题：**打包进去的后端有没有把参数
+    暴露给界面**。少了 `click_pos`，参数面板上不会出现「点击位置」下拉，
+    用户以为功能没做，而所有单测照样全绿。
+  - ⚠️⚠️ **那两条 `run` 断言必须缩到方法自身的 `co_names`，不能用
+    `_co_names_recursive` 扫整模块**。实测：把源码在内存里改成「`run()` 还原成
+    旧的偏移写法、`_click_target` 留成死代码」后，**整模块扫描照样找得到**
+    （函数还定义着），断言假绿；而 `run` 自身的 `co_names` 找不到，抓得住。
+    新增的 `_method_code(code, cls, meth)` 就是为此（`_sub_code` 递归按名字找，
+    而两个点击节点的 run 都叫 `run`，只能先定位类体再进一层）。
+  - **区分度**：对**上一版** sidecar（`build_sidecar.sh` 每次重打前把上一份改名为
+    `dist/.autoflow-sidecar.old.<时间戳>`，本次是 `…20260916-203918`）跑同 6 条 →
+    **全部 ✗**，失败信息点名的就是缺失本身（RPC 两条报「默认 None，0 档」）；
+    已安装版 6 项全 ✓。⚠️ 这些 `.old.*` 会被 `clean_old_builds.sh --apply` 清掉，
+    要复现得自己先留一份。
+- 2026-09-16 断言补到 **92 项（40 产物级 + 52 RPC 级）**：录制库（19 项）+
+  工作流库（8 产物级 + 13 RPC 级）两批合并计入。工作流库这一批的要点：
+  - 产物级 8 条：`core.workflow_lib` 进包；`remove` 走 `shutil` 而**不是**
+    `os.remove`；`_has_node_list` 用 `any(...)`；有 `id_of_path`/`path_of`；
+    `workflow_save` 里出现 `workflow_lib`（**老包 vs 新包**语义）；
+    `workflow_dirty` 比的是 `_wf_rev`/`_wf_saved_rev`（比较用 `set(...)`——
+    `co_names` 是 **tuple**，直接 `{...} <= code.co_names` 会
+    `TypeError: '<=' not supported between instances of 'set' and 'tuple'`）；
+    `_guard_unsaved` 的 `co_consts` 里有 `-32006`；`rpc.server` 注册了七个
+    `workflow.lib.*`。
+  - RPC 级 13 条：`dirty` 用**行为**验（加一个节点后必须从 `False` 变 `True`）——
+    断字节码断不出来，把 `self._wf_rev += 1` 改成 `+= 0`，`_wf_rev` 照样在
+    `co_names` 里；未保存保护两条（`workflow.new` 与 `workflow.lib.open` 都必须在
+    没给 `force` 时返回 `-32006`）；保存覆盖同一条而不是又建一条；导出剥掉库元信息；
+    导入**不切换**当前；删除进废纸篓（拿到 `trash` 路径后先断言它**确实存在**，
+    再自己清掉）。
+  - ⚠️⚠️ **本批最值得记的坑：加了模块级断言，却忘了把模块名加进
+    `_load_pyz` 的提取清单。** 症状极具误导性——4 条断言一起报
+    「`core.workflow_lib` 已打进 PYZ ✗」，看着像「模块没打包进去」，
+    实际 `core.workflow_lib` 好端端在 PYZ 里（单独探一下就知道了）。
+    `mods.get(name)` 取不到就是 `None`，于是 4 条全红、失败信息全指向同一个
+    假原因。**源码干跑（在源码上编译执行 `_artifact_checks`）抓不到这一条**，
+    因为干跑是从源码 `import` 模块、根本不经过 `_load_pyz`。
+    教训：**新增一个模块的产物级断言时，「加断言」和「加提取项」是同一件事**，
+    写完要单独跑一次 `_load_pyz` 打印各模块的 OK/None 来确认。
+  - ⚠️ **另一类坑：校验脚本自己的期望写错了。** 三条 RPC 断言一起红，
+    但被测实现是对的：脚本在前面**故意**留了一份未保存的改动（为了验
+    `-32006`），紧接着却直接调 `workflow.lib.open` 没带 `force` —— 于是被后端
+    **正确地**拒掉，树仍是 3 个节点，而后面的断言按 2 个算。
+    修法不是改实现，而是①补一条「`open` 没给 `force` 必须被拒」的断言（本来就该
+    有：加保护的唯一理由就是防止「打开」静默换掉用户刚连好的整张图），
+    ②后续调用补上 `force: True`。
+    教训：**一批断言同时失败且症状相同，先怀疑共同的输入/前置状态错了**，
+    而不是一口气怀疑被测功能（同一教训见上面第 164 行那次）。
+  - **区分度**：对**上一版** sidecar（`dist/.autoflow-sidecar.old.20260916-215942`，
+    这一版确实没有 `core.workflow_lib`——`_load_pyz` 探出来是 `None`，
+    而 `core.recording_lib` 是 `OK`）跑同 40 条产物级断言 → **8 条工作流库相关的
+    全部 ✗，其余 32 条不受影响**；已安装版 40 条全 ✓。
+    这比手搓变异更有说服力：基线是**真实存在过的上一版产物**。
+  - ⚠️⚠️ **同轮修掉一个「自检假绿」：本脚本一直在往用户的真废纸篓里丢文件。**
+    断言里那句「删完把废纸篓里那两份也清掉」用的是 `os.remove(trash_path)`——
+    在 `~/.Trash` 上它是**静默失效**的（macOS TCC 要保住「放回原处」：
+    `os.unlink` 不抛异常、文件却还在）。也就是说每跑一次校验，用户废纸篓里就多出
+    两个 `2026xxxxxxxx-xxxxxx.json`，而脚本自认为清干净了。
+    **更隐蔽的是「怎么发现它」**：收尾自检里那句 `ls ~/.Trash | grep …` 是**假绿**
+    ——`ls` 被 TCC 拒（`Operation not permitted`）、输出为空，`grep` 于是数到 0，
+    看起来完全干净。
+    修法不是「想办法删掉真废纸篓里的文件」（做不到），而是**一开始就别往那儿写**：
+    `Sidecar.__init__` 起 sidecar 时把 `AUTOFLOW_TRASH_DIR` 指向一个临时目录
+    （`core/workflow_lib.py` 本来就支持这个环境变量，`tests/conftest.py` 也用它），
+    `close()` 里 `shutil.rmtree`。断言照旧验「文件真的被移走、内容完整」，
+    只是落在临时目录里；另外**加一条断言**确认那个 `trash` 路径确实落在本次的临时
+    废纸篓下（证明没碰用户的真废纸篓）。
+    ⇒ 通用教训：**凡「删除类功能」的自动化，先隔离回收站/废纸篓再谈验证**；
+    并且**验证「清理干净」的自检本身要先证明它看得见东西**（输出为空 = 失败还是干净？
+    分不清就是假绿）。
+  - 断言总数 **93 项（40 产物级 + 53 RPC 级）**。
+- 2026-09-17 断言补到 **109 项（46 产物级 + 63 RPC 级）**：录制事件编辑与
+  「库条目直接编辑」两批。
+  - 产物级 6 条：`rpc.server` 注册了 `record.patch/insert/duplicate/moveEvent`
+    与 `record.lib.edit/endEdit`；`rpc.controller` 有 `record_patch/insert/
+    duplicate/move_event`；带字段白名单 `_PATCH_FIELDS`（五种类型齐全）；
+    有 `_record_commit`/`_sync_lib_edit`/`_record_lib_edit_id`；
+    `record_move_event` 用 `replace` 交换（**连 `ts_ms` 一起换**，不只是挪数组）。
+  - RPC 级 10 条：`record.lib.edit` 的**响应**必须带 `editing=True`（见下）→
+    `record.patch` 改坐标 → 非法值 `-32602` → 越界字段 `-32602` →
+    `record.moveEvent(1,-1)` 断言**事件换位 + 时间线仍单调** → 换回 →
+    `record.insert` → `record.duplicate` → `record.lib.endEdit` 报 `editing=False`
+    → `record.fromLib` 重读断言「写回库里 count 与坐标都对」。
+  - ⚠️ **两条断言我第一版写错了，都是「脚本自己的期望错」而不是实现错**：
+    ① `moveEvent` 我以为语义是「时间戳跟着事件走」，写成断言 `ts == [40,0]`；
+    实测是**交换事件本身、时刻留在槽位**（`mouse@0 | move@40`），这样时间线才
+    保持单调。断言改成「事件换位 + 时间线仍单调」。
+    ② `moveEvent` 原来排在 `insert`/`duplicate` **之后**验——那时序列里已经有
+    同刻的条目，「换与不换结果一样」，**这条断言没有区分度**。改成先验交换再插入复制。
+    ⇒ 教训：**新断言先在源码树干跑一遍**（`_artifact_checks` 能在源码上编译执行），
+    并且**交换类断言要挑两条时刻不同的条目**，否则等价于没断言。
+  - ⚠️ **对旧安装版先跑一遍**：新增的 15 项断言全 ✗ 且失败理由正确
+    （`-32601` = 方法不存在、`moveEvent` 没换时间戳、写回后重读坐标还是旧的）
+    ⇒ 证明这一批断言真的有区分度。
+  - ⚠️ **`record.lib.edit` 响应里 `editing=False`（真 bug，就是这批断言抓出来的）**：
+    `record_lib_edit` 先调 `record_from_lib(rid)` 拿 payload（**纯载入会清掉
+    `_record_lib_edit_id`**），之后才设写回目标 ⇒ 响应 `editing=False` ⇒
+    前端「正在直接编辑…」提示条**根本不出现**，而写回其实已经在生效。
+    单测当时只断言了 `lib.id` 与 `dirty`，漏了这个字段。修法是设完状态后
+    重建 `payload["lib"] = self._lib_info()`，并补
+    `test_lib_edit_response_reports_editing_so_the_banner_shows`。
+    ⇒ 教训：**响应里的「模式标志」必须在构造响应之前就把状态设好**；
+    这类顺序 bug 单测很难覆盖（要断言响应字段，而不只是副作用）。

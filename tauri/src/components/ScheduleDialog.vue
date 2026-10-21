@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useAppStore } from "@/stores/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { MessagePlugin } from "tdesign-vue-next";
@@ -15,15 +15,37 @@ const intervalMin = ref(30);
 const path = ref("");
 const enabled = ref(false);
 
+/**
+ * 库里一条的绝对路径。
+ *
+ * 定时配置存的是**路径**（`schedule.workflowPath`，后端 `_schedule_fire` 直接
+ * `Workflow.load(path)`），而库里一条就是一个 json 文件，所以路径天然能对上——
+ * 不需要为「库」再发明一套 id 寻址。
+ */
+function libPath(id: string): string {
+  const d = store.workflowLibDir;
+  return d ? d.replace(/\/+$/, "") + "/" + id + ".json" : "";
+}
+
+const inLib = computed(() => store.workflowLib.some((m) => libPath(m.id) === path.value));
+
 watch(
   () => props.visible,
-  (v) => {
-    if (v && store.schedule) {
+  async (v) => {
+    if (!v) return;
+    if (store.schedule) {
       mode.value = store.schedule.mode ?? "每天时刻";
       atTime.value = store.schedule.atTime ?? "09:00";
       intervalMin.value = store.schedule.intervalMin ?? 30;
       path.value = store.schedule.workflowPath ?? "";
       enabled.value = !!store.schedule.enabled;
+    }
+    // 工作流进了库之后，「选一份工作流」的默认答案就在库里。不先拉一次的话
+    // 下拉是空的，用户只能去 ~/Library/Application Support 里翻文件。
+    try {
+      await store.refreshWorkflowLib();
+    } catch {
+      /* ignore */
     }
   }
 );
@@ -73,8 +95,14 @@ async function onConfirm() {
       </t-form-item>
       <t-form-item label="工作流">
         <div style="display: flex; gap: 6px; width: 100%">
-          <t-input v-model="path" size="small" readonly placeholder="未选择" />
-          <t-button size="small" variant="outline" @click="pickPath">选择</t-button>
+          <t-select v-model="path" size="small" style="flex: 1" placeholder="从工作流库里选一份">
+            <t-option v-for="m in store.workflowLib" :key="m.id" :value="libPath(m.id)" :label="m.name" />
+            <!-- 当前值不在库里（老配置指向任意路径、或那份已被删）时补一项：
+                 不补的话下拉显示成**空白**，看起来就是「没选」，而定时其实还
+                 指着那个文件，下次触发时才发现跑的是别的流程。 -->
+            <t-option v-if="path && !inLib" :value="path" :label="path + '（库外文件）'" />
+          </t-select>
+          <t-button size="small" variant="outline" @click="pickPath">浏览…</t-button>
         </div>
       </t-form-item>
       <t-form-item label="启用">

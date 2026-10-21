@@ -8,7 +8,13 @@
 
 - `tauri/src/App.vue` — 布局（header + 画布主区 + 右侧标签侧栏 + 底部状态栏）
 - `tauri/src/components/` — FlowCanvas / ParamsPanel / RunPanel / RecordPanel /
-  WorkflowMenu / PermissionBanner / ScheduleDialog / DiagnosticsPanel（8 个）
+  WorkflowMenu / WorkflowLibDialog / PermissionBanner / ScheduleDialog /
+  DiagnosticsPanel（9 个）
+- `tauri/src/flow/workflow.ts` — 工作流库在界面上的纯逻辑（显示名 / 时间戳格式化 /
+  导出文件名清洗 / 列表数据兜底）；无 Vue 依赖，可直接测
+- `tauri/src/utils/confirm.ts` — `confirmDanger()`：统一走 TDesign
+  `DialogPlugin.confirm`（**代码里禁用 `window.confirm`**，理由见设计要点 15；
+  有全仓回归断言兜着：`tests/dialog-guard.test.mjs`）
 - `tauri/src/flow/sidebar.ts` — 侧栏状态（宽度钳制 / `localStorage` 存取 /
   拖拽换算 / 选中节点后跳页）；纯逻辑、无 Vue 依赖，可直接测
 - `tauri/src/flow/ports.ts` — 出口名与「某类节点有几个出口」（与后端逐字对齐）+
@@ -17,9 +23,13 @@
   那个环 / `edgesOnCycles` 整张图上所有环的边），
   无 Vue/DOM 依赖
 - `tauri/src/flow/summary.ts` — 节点卡片上那行参数摘要
+- `tauri/src/flow/duration.ts` — 时长/时刻的换算与清洗（面板、摘要、录制库三处共用）
+- `tauri/src/flow/recording.ts` — 录制库在界面上的纯逻辑（下拉选项 / 缺失兜底 / 时长文案）
 - `tauri/src/flow/fitOnce.ts` — 「首次拿到非空工作流时适应一次视野」的状态机（纯模块，可单测）
-- `tauri/src/stores/app.ts` — Pinia：连接/运行/录制态、工作流镜像、全部 RPC 调用
+- `tauri/src/stores/app.ts` — Pinia：连接/运行/录制态、录制库列表、托盘同步、工作流镜像、全部 RPC 调用
 - `tauri/src/rpc/client.ts` — NDJSON 客户端（id 配对、通知订阅、半包切分）
+- `tauri/src-tauri/src/lib.rs` — Rust 外壳：sidecar 守护、**系统托盘**、窗口生命周期
+  （关窗即隐藏、Dock `Reopen` 唤回）、`af_tray_state` / `af_hide_window` 两个命令
 
 ## 功能清单
 
@@ -28,7 +38,7 @@
 | F-UI-01 | 画布主导布局 + 标签侧栏 | ✅ | 画布 flex:1 吃满主区；右侧 280–620px 可拖宽、可折叠，参数/运行/录制用标签页切换（`v-show` 保状态）；状态角标在别的页签上也能看到「正在跑/正在录」 |
 | F-UI-02 | 流程图画布 | ✅ | @vue-flow/core；拖拽移动、连线、Delete 删除、缩放平移、自动适应视野 |
 | F-UI-03 | 节点改名 | ✅ | 双击卡片上的名字行内编辑，Enter/Esc/失焦 |
-| F-UI-04 | 动态参数面板 | ✅ | 按 nodes.definitions 渲染 8 种控件；支持 `show_if` 条件显示与 `pick` 选择按钮 |
+| F-UI-04 | 动态参数面板 | ✅ | 按 nodes.definitions 渲染 10 种控件；支持 `show_if` 条件显示与 `pick` 选择按钮 |
 | F-UI-05 | 运行状态机 | ✅ | 运行/停止按钮切换 + 运行状态卡（当前节点+进度） |
 | F-UI-06 | 录制状态机 | ✅ | 录制中红点提示 + 按钮切换；写入节点/清空 |
 | F-UI-07 | 快捷键提示 | ✅ | header 徽标 + 按钮副文案 + RunPanel 底部一行 |
@@ -41,6 +51,11 @@
 | F-UI-14 | 起点标记与设置 | ✅ | 起始节点带「起」徽标；「设为起点 / 默认起点」按钮 |
 | F-UI-15 | 旧文件迁移提示 | ✅ | `migrated_from_list` → 可关闭的提示条，只弹一次 |
 | F-UI-16 | 连线成环提示 + 标出环 | ✅ | 连上那一刻提示「出现了环，环上的连线已标红，确认是想要的循环而不是连错」，带源/目标节点名；**只提示不拦**（回边合法）；环上的边标红加粗 + 虚线流动，下一次交互时清掉。工具栏另有默认关的「标出环」开关，常驻标出**所有**环（开启时显示条数），供打开别人的文件时查看 |
+| F-UI-17 | 时长/时刻是「选」不是「打」 | ✅ | 两个新 ptype：`duration`（毫秒总数 → 时/分/秒/毫秒四格）与 `time`（`HH:mm:ss` 时刻选择器，`allowInput=false`）。换算与清洗全在 `flow/duration.ts`；卡片摘要把毫秒总数显示成「1时30分」 |
+| F-UI-18 | **录制库界面** | ✅ | 录制页新增「录制库」区块：入库状态（已同步 / 改动未更新 / 未入库）、存入库 / 更新到库 / 另存为新的、列表（名字 + 条数 + 时长 + 时间）、**直接编辑** / 载入 / 落到画布 / 改名（行内）/ 删除（带引用数提示）；参数面板新增第 11 种控件 `recording`（下拉选录制，选项带条数，值不在库里时补一项灰色兜底） |
+| F-UI-18b | **单条事件的编辑区** | ✅ | 选中一行即可改：**字段**（时间 / X / Y 所有类型都有；按钮 / 动作 / 连击 / 按键 / dy / dx / 单位 / 拖拽 / 文本按类型给）、**增删**（删除 / 复制 / 插入）、**重排**（上移 / 下移，连时间戳一起换）、删此前的移动 / 设为原点 / 撤销。草稿 + `@change` 提交，不逐键发 RPC（2026-09-17） |
+| F-UI-19 | **系统托盘** | ✅ | 关窗 = 收进菜单栏（`prevent_close` + `hide`），定时/录制/回放都不中断；托盘菜单：显示主窗口 / 开始录制 / 退出（录制开关**不**顺手弹窗——收起来在别处操作正是托盘的意义）；菜单栏角标 + 工具提示随录制态变（前端推、Rust 只显示）；点 Dock 图标也能唤回（macOS `Reopen`，Tauri 不会自动叫回窗口）；header 有「隐藏到托盘」入口 |
+| F-UI-20 | **工作流库界面** | ✅ | header 工作流菜单 = `新建 / 工作流库 / 保存` + 当前名字（有未保存改动时名字后跟 `●`）；「工作流库」弹层：列表（名字 / 节点数 / 连线数 / 最近修改 / 「当前」徽标）+ 运行 / 打开 / 更名（行内）/ 导出 / 删除（进废纸篓）/ 导入；「新建」「打开」「运行」在有未保存改动时弹确认框（带 `force` 重试）；定时任务面板的工作流字段改为**从库里下拉选** + 「浏览…」兜底 |
 
 ## 验收记录
 
@@ -199,6 +214,289 @@
   无 `TEMP-VISUAL-CHECK` / 夹具路径残留），重新构建部署的产物名与安装版一致
   （`index-DSPFy5zu.js` / `index-sGet2xlj.css`，二进制哈希一致、签名有效）
   ⇒ 夹具没有被带进交付物。
+
+- **F-UI-17 时长/时刻是「选」不是「打」**（2026-09-15）：`tauri/tests/duration.test.mjs`
+  19 例 + `flow-ports.test.mjs` 2 例 + `tests/test_core.py` 1 例。盯的是四类**不会报错**
+  的错法：
+  ① **回填只动一格**。若实现成「读四格 → 相加 → 写回」，用户改「分」时另外三格
+     （还没失焦提交）会被当成 0：1 时 30 分改成 45 分会把小时清零，等的时间少一大截。
+     反向验证：把 `withPart` 改成 `want * unit.div` ⇒ `回填：只动被改的那一格` 挂。
+  ② **四格能原样拼回毫秒总数**（分解是回填的逆命题，两条一起才闭环）。
+  ③ **老的 `HH:mm` 要补成 `HH:mm:ss`** 再进选择器——TDesign 拿 `format` 校验 `value`，
+     `"09:00"` 对 `HH:mm:ss` 是非法值、会被**静默重置**，用户打开旧流程会发现时刻空了。
+     反向验证：`normalizeTime` 改成原样返回输入 ⇒ `老文件里的 HH:mm 补齐成 HH:mm:ss` 挂。
+  ④ **ptype 字面量前后端对得上**。这条直接读 `tasks/builtin.py` 的 `DelayTask` 区块
+     （跨语言协议，同 `flow-ports.test.mjs` 读 `core/events.py` 的做法）：后端 `ms`
+     退回 `int`、或 `at` 退回 `text`，前端用例立刻挂——否则控件会**静默退化**成手输
+     文本框，正是这次要改掉的东西。
+  另有 4 条读 `ParamsPanel.vue` 源码的结构断言（SFC 跑不了，只能看源码）：四格走
+  `DUR_UNITS`、换算走 `withPart`、时刻 `allowInput=false`（只能选）、`clearable=false`
+  （清空会 `onChange(null)`，写进 `params.at` 后后端 `_seconds_until(None)` 抛 `ValueError`）。
+  8 项反向验证全过（`/tmp/af_reverse_dur.py`：子进程超时 + `finally` 恢复 + sha256 比对，
+  防止「改坏了却因为空转被当成失败」）。
+  ⚠️ **真机目视未做**：四格在 280px 侧栏下会不会挤、选择器弹层的层级与位置，
+  目前只有 `vue-tsc`（props/事件类型对得上）+ 源码结构断言兜着，**没证据**说它好看。
+
+- **F-UI-18 录制库界面**（2026-09-15）：`tauri/tests/recording.test.mjs` 12 例 +
+  `flow-ports.test.mjs` 2 例（卡片摘要）+ `app-store.test.mjs` 库动作 3 例 +
+  `tests/test_recording_lib.py` 22 例（存储层 + 节点 + 控制器）。盯的是四类**不会报错**
+  的错法：
+  ① **下拉兜底项**。录制被删掉之后节点的 `recording_id` 还在，而 t-select 在「值不在
+     选项里」时显示成**空白**——看起来就是「这个字段没填」。用户于是重选一条，或压根
+     没发现这里引着一个不存在的录制（回放时才报错）。反向验证：把兜底那一项去掉 ⇒
+     `选项里带上当前值的兜底项` 与 `空值 / 空库 / 脏输入` 两条一起挂。
+  ② **同名录制要能分清**。同一秒录两段、或复制过库目录，名字一模一样；选项里不带
+     条数就完全一样，选哪个靠猜。反向验证：`recOptionLabel` 去掉 `Number.isFinite`
+     兜底 ⇒ `选项文案带条数` 挂（会显示 `NaN 条`）。
+  ③ **引用库的节点在卡片上显示名字而不是 id**。一串 `20260915-190433-a1b2c3` 比不显示
+     更糟——用户会以为自己认得出来。反向验证：`summary` 里退回显示原值 ⇒
+     `引用录制库的节点：卡片上显示录制名` 挂；另一条反证把空事件数组改回「0 个事件」⇒
+     `空事件数组不显示「0 个事件」` 挂（那张卡片会看着像"这个节点是空的"）。
+  ④ **入库状态不能靠前端自己记**。`dirty` 由后端按 `rev` 比对（编辑接口有六七个，
+     漏一个就会「明明改了、库里还是旧的，而界面显示已同步」）。`_applyRecord` 用
+     `"lib" in r` 判字段存在而不是 `??`——后端**故意**用 `lib: null` 表示"还没入库"，
+     当字段缺失忽略会让界面一直显示上一次的「已同步」。
+  ⑤ **删除的二次确认不能用 `window.confirm`**——它在本项目里**根本不拦**：
+     Tauri 把它注入成 `async function(){ return await invoke("plugin:dialog|confirm", …) }`
+     （返回 **Promise**，恒 truthy ⇒ 拦截条件恒不成立），而本项目**没授予
+     `dialog:allow-confirm`**（`tauri-plugin-dialog` 的 `default` 只有 allow-message /
+     allow-open / allow-save），那个 invoke **被权限拒绝**。合起来是
+     「点『删除』→ 没有任何提示 → 文件被 `os.remove` 永久删掉」。
+     反向验证 3 条（都实测过）：① 把 `await` 去掉 ⇒ `确认框没有 await` 挂；
+     ② 整段换回 `window.confirm` ⇒ `删除没有走应用内确认框` 挂；
+     ③ 其余不动、**只多插一行** `window.confirm("x")` ⇒ 只有
+     `代码里又用回了 window.confirm` 挂（该回归断言按**行首**跳过注释，
+     所以注释里解释成因是允许的）。
+  另有 4 条读 `.vue` / `stores/app.ts` 源码的结构断言（SFC 跑不了，只能看源码）。
+
+- **F-UI-18b 单条事件的编辑区**（2026-09-17）：`recording.test.mjs` 再 +7 例（12 → 19）。
+  这一段全是**跨语言协议**，两边错开的表现是「改完才报编辑失败」，所以直接读
+  `rpc/controller.py` 来比，而不是把字段名在测试里再抄一遍：
+  ① **界面暴露的字段逐类型落在后端白名单里**。按 `<template v-if="…kind === 'x'">`
+     切块，每块的 `fieldDraft.<名>` 必须 ⊆ `_PATCH_FIELDS[kind]`；公共段（时间 / X / Y）
+     必须在**每一种**类型的白名单里——少一种就会有一类事件改不了坐标，而录制回放最常
+     要修的就是坐标。反向验证：`fieldDraft.button` → `fieldDraft.btn` ⇒ 挂；
+     把 `x` 从 `move` 的白名单里删掉 ⇒ 挂；把某一类事件的模板块改成 `v-if="false"` ⇒ 挂。
+  ② **「插入」下拉的取值 == `_PATCH_FIELDS` 的 key**。反向验证：多插一个
+     `<option value="scroll">` ⇒ 挂。
+  ③ **字段编辑走「草稿 + `@change` 提交」**。逐键提交会把 `640` 拆成 6 / 64 / 640
+     三次写入、各占一格撤销——用户按一次撤销只退掉最后一位数字。
+     ⚠️ 这里**不能数「`@change` 出现了几次」**：那是个魔数阈值，少给一个控件挂提交，
+     总数照样过线，那个字段就**改不动**（草稿填了没处发）。改成**逐个控件**核对——
+     每个绑了 `fieldDraft` 的 `<input>`/`<select>` 必须有 `@change="commitFields"`，
+     或者（文本类）`@blur` + `@keydown.enter` 这一对，且**不能**用 `@input`。
+     反向验证：去掉 Y 输入的 `@change` ⇒ 挂（第一版用魔数阈值时**这条没被拦住**，
+     是反向验证逼出来的改法）；`@change` 换成 `@input` ⇒ 挂；文本输入只留失焦 ⇒ 挂。
+  ④ **上移 / 下移传的是相对位移，且后端连 `ts_ms` 一起换**。回放排期是**绝对时间线**
+     （`core/player.py`：`due = t0 + ts_ms / 1000.0 / speed`），与数组顺序无关；
+     只挪数组不动时间戳的话，被挪到前面的那条 `due` 已过、**立刻执行**——用户看到的是
+     「上移一步，那一步当场就跑了」。反向验证：前端改成只传 `index` ⇒ 挂；
+     后端 `evs[idx], evs[j] = b, a`（不换时间戳）⇒ 挂。
+  ⑤ **「直接编辑」的提示条读后端的 `editing` 标志**，且文案说清「改动会立刻写回」——
+     不说清用户分不出它和「载入」的区别，以为还要再点一次「更新到库」。
+     反向验证：`_lib_info()` 里把 `editing` 硬写成 `False` ⇒ 挂。
+  ⑥ **store 里每一个 `record.*` 方法名都在后端注册过**。方法名是字符串，写错了
+     TS 不报，只在运行时才炸。反向验证：把 `record.lib.edit` 改成 `record.lib.editt`
+     ⇒ 这条与 ⑤ 一起挂。
+  ⑦ ⚠️ **「写了处理函数但没挂到模板上」= 功能从界面点不到，而测试全绿。**
+     真机目视才发现：`onLibEdit`（「直接编辑」入口）只有定义、模板里一个 `@click`
+     都没挂——而当时的断言是 `recordSrc.includes("onLibEdit")`，**函数定义本身就
+     满足它**。改成断言**模板里的接线**（`@click="onLibEdit(m)"`）后，
+     反向验证（把 `@click` 换成 `@click="noop"`）能让这条与新增的全仓守卫一起变红。
+     顺带在 `dialog-guard.test.mjs` 加了一条**全仓**守卫：组件里每个
+     `^function on[A-Z]` 都必须在模板里被引用过（生命周期钩子显式排除；
+     模板先剥注释；**不能只认 `@click`**——`ScheduleDialog.vue` 的 `onConfirm`
+     是走 `:confirm-btn="{ onClick: onConfirm }"` 这个 prop 的）。
+     ⇒ 推论：**断言「某个东西存在」几乎等于没断言，要断言「它被用上了」。**
+  ⑧ ⚠️ **「写了类名但没写样式」= 元素裸奔，测试也全绿。** 同一次目视发现：
+     字段编辑区用了 `af-fields` / `af-field` / `af-num` / `af-select` 等 **7 个类名，
+     `<style>` 里一个规则都没有**——于是标签和输入框断成两行（「时间 [1950]」后面
+     孤零零挂一个「X」，看着像它的后缀）、下拉是原生样式。补样式时给 `.af-field`
+     加了 `white-space: nowrap`（**整体**换行，不许从中间断），`.af-lib-row` 改成
+     `flex-wrap: wrap` + `.af-lib-meta { flex: 1 1 140px }`——侧栏只有 ~350px，
+     一行最多 5 颗按钮（载入 / 直接编辑 / 落到画布 / 改名 / 删除）装不下，
+     原来会把名字压成「录制 …」、副标题折成四行。
+     新增 `tauri/tests/ui-wiring.test.mjs`：① 组件里每个 `on[A-Z]` 处理函数都必须在
+     模板里被引用过；② 模板里每个 `af-*` 类名要么有样式规则、要么在
+     `UNSTYLED_OK` 里**写清为什么不需要**（纯钩子 / 状态变体基名），并断言这张表
+     **没有陈旧项**。两个实现细节（都栽过）：类名要作为**完整记号**匹配
+     （`.af-field` 不能被 `.af-fields` 冒充成已定义，正则用负向断言
+     `\.af-field(?![a-z0-9_-])`）；**样式块必须先剥注释**——注释里引用了
+     `.af-field`，不剥的话把规则改名成 `.af-field-x` 后断言**照样绿**。
+
+  **F-UI-18b 真机目视验收**（2026-09-17，**安装版**；判据是**日志里的 RPC 帧 + 副作用**，
+  不是「截图看着像点中了」）：
+
+  | 操作 | RPC 帧 | 副作用 |
+  | --- | --- | --- |
+  | 点「直接编辑」 | `record.lib.edit {"id":"20260917-095335-f0b115"}` | 浅蓝提示条出现、该按钮高亮 |
+  | 点「复制」 | `record.duplicate {"index":28}` | 库文件 42 → **43 条** |
+  | 点「下移」 | `record.moveEvent {"index":29,"delta":1}` | `[29]`/`[30]` 内容换位（524,300 ↔ 532,312）、**时间戳留在原槽位**（1950 / 1979）⇒ 时间线仍单调 |
+  | 点「完成编辑」 | `record.lib.endEdit` | 提示条消失 |
+  | 再点「直接编辑」 | `record.lib.edit`（第二次） | 提示条回来 |
+
+  布局修复**复核**：新包（`index-B_39m3P1.js`）上库行名字完整显示、副标题可读、
+  五颗按钮折成两行；选中一行后字段编辑区是
+  `这一条 时间[2020] X[548]` / `Y[336] 拖拽[☐]` 两行——标签与输入框**整体**成组，
+  下拉也是自绘样式（不再是原生控件）。
+
+  ⚠️ **驱动安装版界面时，坐标必须靠像素分析，不能靠目测**：窗口截图是 Retina 2x
+  （2200×1440 px = 1100×720 pt），`屏幕坐标 = 窗口原点 + 截图像素 / 2`。
+  按目测换算 `y` 差了 15~24 pt，连点三次都落在按钮上沿之外——而
+  **窗口截图会穿透遮挡，「看着像点中了」完全不算数**，只有日志里有没有那一帧说话。
+  用「在某个 y 带里找文字簇」的工具定位时，那个 y 带必须**紧贴目标行**：
+  我扫 `y∈[296,313]` 时扫到的其实是「更新到库 / 另存为新的」那一行，
+  于是把它的 x 当成了「直接编辑」的 x，按那个坐标点自然落空。
+  可靠做法是在截图上量出目标按钮的**包围盒**再取中心（`crop(726,356)` →
+  窗口 `(1043,328)` → 屏幕 `(1133,362)`，这一点才命中）。
+
+- **F-UI-19 系统托盘**（2026-09-15）：`app-store.test.mjs` 7 例（状态同步去重、
+  隐藏命令、**事件名/命令名前后端逐字一致**、关窗只隐藏、录制开关不弹窗、
+  界面有隐藏入口、**运行期诊断日志齐全**）。
+  `syncTray` 的去重不能省：`$subscribe` 在任何状态变更后都触发，而录制中事件流每秒
+  造成几十次变更。事件名 `tray_action` 与两个命令名是**跨语言协议**（Rust 写错了不会
+  编译失败，表现是「点菜单没反应」），所以直接读 `src-tauri/src/lib.rs` 源码来比。
+  反向验证 3 条：去掉 `syncTray` 去重 / 去掉 `api.prevent_close()` / 往录制开关那一支
+  塞 `show_main(app)` ⇒ 各自对应的用例挂。
+
+  **「图标到底在不在菜单栏」怎么验**（这题没法和别处一样靠二进制搜或截图）：
+
+  - 二进制搜**搜不到**，而且有四种成因，别据此下结论，**搜不到 ≠ 没打包进去**：
+    ① `TrayIconBuilder::with_id` 的 id、`generate_handler!` 的命令名被 LLVM 内联成立即数比较；
+    ② **常量合并**——`退出 Auto Flow`、`● 开始录制`、`■ 停止录制` 在安装版里 `grep -a -c`
+    全为 0，切 `.rodata` 才知道它们恰好是那条日志字面量
+    （`托盘已创建（显示主窗口 / 开始录制 / 退出）`）的**子串**，被并成了"指向长常量中段"；
+    ③ **`format!` 按占位符切段**——状态行在 `.rodata` 里是
+    `托盘状态项 recording=` / ` 菜单文案=` / ` set_menu=` / ` set_title=` / ` set_tooltip=` / ` rect=`
+    若干片段，搜 `角标={badge:?}` 必然为 0（`{badge:?}` 不是字面量的一部分）；
+    ④ 片段还会被**去重搬到别处**：` 角标=` 就在偏移 3444513 的另一处常量池里（旁边是
+    `set_text` / `rpc_down` 这些），与同一条 `format!` 的其它片段不连续。
+  - 截图**不可靠**：显示器休眠时 `screencapture` 全黑 / `could not create image from rect`；
+    锁屏时菜单栏只画系统那几项，第三方状态项根本不画。
+  - 于是把它做成**运行期日志**（`af_tray_state` 里一行，见下表），并且这些日志行是
+    **功能的一部分**，不是调试残留：删了它，「找不到图标」就再没有现场可查。
+    新增的 1 条用例就守这一点，反向验证 8 条（去掉建托盘成功日志 / `rect` 改自造坐标 /
+    状态行整行删 / 缺「打算设的角标」/ 缺 `set_title` 结果 / **把结果写死成成功** /
+    **非录制支不清角标** / 句柄查不到那行删掉）⇒ 各自对应的断言挂。
+
+  | 日志片段 | 回答的问题 |
+  | --- | --- |
+  | `托盘已创建（…）` | 建成功才有；失败另有 `托盘创建失败：…`，两者不混 |
+  | `recording={recording} 角标={badge:?}` | 前端推来的状态、我们**打算**设的角标值 |
+  | `set_menu/set_title/set_tooltip={…}` | 三个调用是否成功——它们原本被 `let _ =` 吞掉，静默失败与"没设"分不开 |
+  | `rect=Ok(Some(Rect {…}))` | AppKit 给出的状态项位置；`None`/`Err` = **没有**状态项 |
+
+  **实测结果**（安装版，`~/Library/Logs/autoflow-tauri.log`，启动时那一次同步）：
+
+  ```
+  托盘状态项 recording=false 菜单文案="● 开始录制" set_menu=Some(true) 角标=None
+            set_title=true set_tooltip=true
+            rect=Ok(Some(Rect { position: Physical(PhysicalPosition { x: 1706, y: 0 }),
+                                size: Physical(PhysicalSize { width: 36, height: 58 }) }))
+  ```
+
+  四个 `set_*` 全 `true`/`Some(true)` ⇒ 改写菜单文案、设（此处是清）角标、设工具提示
+  **都真的成功了**；`rect` 的 `y=0` 就是屏幕顶部菜单栏那一行，`height 58` 是含刘海的
+  菜单栏高度。**这是"图标确实在菜单栏、菜单与角标接口都通"的硬证据**，
+  比截图可靠：不依赖显示器是否休眠。
+  ⚠️ **仍未验到**：录制中角标（`●`）在明暗两种菜单栏下的观感**没有逐帧对比**，
+  也没在真实录制过程中看过它出现/消失（`recording=true` 那一支目前只有源码级断言；
+  有真机日志的是 `recording=false` 那一支）。
+
+- **F-UI-20 工作流库界面**（2026-09-16）：`tauri/tests/workflow-lib.test.mjs` 10 例
+  （纯逻辑 6 + **跨语言常量一致性** 1 + 组件接线 3）+ `app-store.test.mjs` 新增 11 例 +
+  `tests/test_workflow_lib.py` 36 例（存储层 + 控制器）+ `tests/test_rpc.py` 的真实
+  sidecar 往返 1 例。盯的是四类**不会报错**的错法：
+
+  ① **「当前这份在不在库里」只认后端算出来的 `lib_id`**。前端**不另记**一个
+     「我刚存到哪个 id」——两份状态总有一天对不上，症状是「保存写进了 A 文件、
+     界面却显示已保存到 B」，而且**两边都不报错**。反向验证：`applyLocation` 里把
+     `"path" in cur` 改回 `typeof cur.path === "string"` ⇒
+     `新建不沿用上一份的库 id` 挂（`workflow.new` 给的是 `path: null`，用 typeof 判
+     会整帧跳过，于是新建之后界面上「当前」徽标还挂在上一条上）。
+
+  ② **未保存标记只认后端的自增版本号**。`dirty` = `_wf_rev != _wf_saved_rev`，
+     而 `_wf_rev += 1` 钩在 `_broadcast_workflow()` 上——定时任务 `_schedule_fire`
+     会**直接换掉整棵树**，那条路上前端一个请求都没发过，靠前端记账必然漏。
+     反向验证：前端把布尔值以外的东西也写进 `workflowDirty` ⇒
+     `dirty 只认布尔值` 挂（后端字段缺失时会沿用上一次的「有未保存改动」，
+     用户看到 `●` 却怎么也存不掉）。
+
+  ③ **确认框不能用 `window.confirm`——它不是「不灵」，而是「直接做」**。
+     Tauri 会往 WebView 注入
+     `window.confirm = async function(i){ return await invoke("plugin:dialog|confirm", …) }`，
+     返回的是 **Promise**，而 Promise 恒 truthy ⇒ `if (!window.confirm(...)) return;`
+     的 `return` **永不执行**、`window.confirm(...) && doIt()` 的右侧**无条件执行**，
+     两种写法都拦不住；更狠的是本项目**没授予 `dialog:allow-confirm`**
+     （`tauri-plugin-dialog` 的 `default` 权限集只有 allow-message / allow-open /
+     allow-save），那个 invoke **被权限拒绝** ⇒ **连框都不弹**。
+     合起来：`window.confirm` 的语义是「没有任何提示，直接做」——
+     对「永久删除」就是静默的数据丢失（真踩过：`RecordPanel.vue` 删录制）。
+     所以统一走 `utils/confirm.ts` 的 `DialogPlugin.confirm`（渲染在应用窗口内，
+     既不吃 WebView 宿主、也不吃 Tauri 权限），调用方**必须 `await`**；
+     `settle` 必须排在 `destroy()` **前面**（否则 `onClose` 先把 promise 结算成
+     `false`，用户点了「确定」也当取消）。
+
+  ④ **跨语言协议靠读源码对齐**。`UNSAVED_CHANGES = -32006` 这个错误码在
+     `rpc/controller.py` 里定义、在两个 `.vue` 里各写了一遍。Python 侧改码而前端没改
+     不会编译失败，表现是「确认框不弹、直接报错」。所以有 1 条用例**读
+     `rpc/controller.py` 正则取出错误码**，再断言两个 `.vue` 里的常量同值。
+
+  另有 3 条读 `.vue` / `stores/app.ts` 源码的结构断言（SFC 跑不了，只能看源码）：
+  菜单里**没有**「另存为」（它已删除，保存按钮任何时候都可用）、弹层接全六个 store
+  动作、定时面板确实读库。
+
+  ⚠️ **真机目视验收**（2026-09-16 22:05~22:20，安装版 `/Applications/Auto Flow.app`）
+  ——**已做**，逐条记结果：
+
+  | 验收点 | 结果 |
+  | --- | --- |
+  | header 变成 `新建 ｜ 工作流库 ｜ 保存` + 名字 | ✓ 截图确认 |
+  | 加节点后名字后出现橙色 `●` | ✓ 立刻出现 |
+  | 按「保存」后 `●` 消失、库里多一条 | ✓ 且日志里 `workflow.save` → `lib_id` 有值、`dirty:false`，前端随即重拉 `workflow.lib.list` |
+  | 库弹层：空状态 / 路径 / `导入…` `刷新` | ✓ 「库还是空的。先「新建」再连好节点，然后按「保存」；也可以「导入」一份现成的。」 |
+  | 库弹层：列表行（名字 + 「当前」徽标 + `1 个节点 · 0 条连线 · 修改于 09-16 22:11`） | ✓ |
+  | 库弹层：`运行 打开 更名 导出 删除` 五个动作 | ✓（删除是红色） |
+  | 「更名」进入行内编辑（输入框带原文、聚焦、「当前」徽标让位） | ✓ |
+  | 「删除」弹**应用内**确认框（标题 `删除工作流` + 橙色图标 + 两段正文 + `取消`/`移到废纸篓`） | ✓ —— 这是 `DialogPlugin` 决策的正面证据 |
+  | 「新建」遇到未保存改动弹确认框（`有未保存的改动` + `取消`/`丢弃并新建`） | ✓ 且点「丢弃并新建」后日志出现 `workflow.new {"force": true}`（**确认框的按钮真的能点**，不是摆设） |
+  | 点确认框外部能取消 | ✓（`closeOnOverlayClick` 生效，取消后改名/删除都没发生） |
+
+  ⚠️ **两件没验到的**：
+  ① **行内改名的「提交」**——WebView 输入框无法被系统级合成键盘可靠注入
+     （本文件「已知问题」第 1 条），`Cmd+A` 能选中、但 `Cmd+V` / unicode 直投都打不进去，
+     所以提交路径只有 `check_installed.py` 的 RPC 级断言与 store 单测兜着；
+  ② **「删除 → 真进废纸篓」的 UI 路径**——第一次点 `删除` 时确认框正常弹出，
+     但点确认按钮那一下没中（弹层在两次截图之间位移了 59px，见设计要点 15 的坐标坑），
+     改由 RPC 级断言覆盖（`workflow.lib.delete 移进废纸篓…` ✓）。
+  两个确认框的**按钮可点性**已经用「丢弃并新建」证明过了，所以这不是功能问题。
+
+- **全局：界面禁用原生对话框**（2026-09-17）：`tauri/tests/dialog-guard.test.mjs` 4 例。
+  起因是修 `RecordPanel.vue` 删录制的静默数据丢失（见 F-UI-18 的 ⑤），顺手把这条
+  约束从「一处」升级成「扫全仓 `src/**/*.{ts,vue}`」——**只在 RecordPanel 上断言
+  不够，下一个组件再引入照样漏**。四例：① 扫到的文件数自检（路径写错会让整组断言
+  空转）；② 代码里禁 `window.confirm|alert|prompt`；③ `confirmDanger` 调用点必须带
+  `await`；④ `settle` 排在 `destroy()` 前。反向验证 2 条：**换一个组件**
+  （`WorkflowLibDialog.vue`）插一行 `window.confirm` / 去掉它的 `await` ⇒ 各自挂。
+
+  ⚠️ **真机目视验收**（2026-09-17 08:44~08:47，安装版 `/Applications/Auto Flow.app`）
+  ——**已做**，这是本次修复最直接的一条证据（bug 的本质就是「框不弹」，只有目视能证）：
+
+  | 验收点 | 结果 |
+  | --- | --- |
+  | 库里造一条 → 点「刷新」 | ✓ 列表出现「验收用-可删 / 3 条 · 1秒200毫秒 · 2026-09-17 08:44:13」 |
+  | 点「删除」 | ✓ **应用内确认框弹出**（修复前这里**什么都不会弹**）：标题 `⚠ 删除录制`、正文 `「验收用-可删」会被永久删除，不能恢复。`、按钮 `取消` / `永久删除` |
+  | 未被引用的条目不显示引用数 | ✓ 正文只有一句（`used === 0` 时那句被 `.filter(Boolean)` 滤掉） |
+  | 点「取消」 | ✓ 弹层关闭、**文件仍在**（`ls recordings/` 还是那条） |
+  | 再点「删除」→「永久删除」 | ✓ 文件真的没了、列表回到「录制库 0 条 / 库还是空的。」、顶部 toast「✓ 已删除」 |
+  | 是**应用自己**调的 RPC（不是我手动删的） | ✓ `~/Library/Logs/autoflow-tauri.log` 里 `record.lib.delete {"id":"20260917-084413-acc001"}` → 紧接着 `record.lib.list` |
+
+  **驱动方式**（本次新踩的坑，已进 skill）：宿主 IDE 的窗口几乎占满屏幕且**始终在最前**，
+  被遮挡的 Auto Flow **收不到全局点击**（`CGEventPostToPid` 投给进程也无效）。
+  可用的是「`open -a` **之后立刻**点击」——`open -a` 会让它短暂成为 key window
+  （标题栏三个点变彩色即是判据），间隔一旦到秒级就又被宿主抢回去、点击落到宿主身上。
+  所以每条点击命令都写成 `open -a … && sleep 0.8 && <点击>`，并用**副作用**
+  （文件在不在、列表条数、toast）判断这一下到底有没有命中，别只看截图。
 
 ## 设计要点
 
@@ -372,6 +670,45 @@
       - 高亮样式与 `cycleIds` **完全共用**（同一份 `vEdges` 投影），
         不另写一套颜色，否则两处迟早不一致。
 
+15. **工作流库的界面只做展示，状态一律由后端给**（F-UI-20）。存储格式、
+    `dirty` 的判据、未保存保护都在 [workflow-lib.md](workflow-lib.md)，
+    这里只记前端侧的约束：
+    - **「当前这份在不在库里」不记第二份状态**。判据只有后端返回的 `lib_id`
+      （`applyLocation()`），前端**不另存**「我刚存到哪个 id」。记两份的话总有一天
+      对不上，症状是「保存写进了 A 文件、界面显示已保存到 B」，**两边都不报错**。
+    - **`applyLocation` 必须判 `"path" in cur`，不能判 `typeof`**。`workflow.new`
+      返回的 `path` 是 `null`（新建不落盘），用 `typeof === "string"` 判会整帧跳过，
+      于是新建之后「当前」徽标还挂在上一条上——这是真写坏过一次的地方。
+    - **未保存标记 `●` 直接读后端的 `dirty`，前端不算账**。定时任务触发时会直接换掉
+      整棵树，那条路上前端一个请求都没发过，靠前端记账必然漏。
+      赋值前判 `typeof === "boolean"`：字段缺失时沿用上一次的值，用户会看到 `●`
+      却怎么也存不掉。
+    - **确认框统一走 `utils/confirm.ts`**（`DialogPlugin.confirm`），
+      **绝不用 `window.confirm`**。后者在本项目里**拦不住任何东西**：Tauri 把它
+      注入成 `async function(){ return await invoke("plugin:dialog|confirm", …) }`，
+      返回 **Promise**（恒 truthy）⇒ `if (!window.confirm(...)) return;` 的 `return`
+      永不执行、`&&` 形式的右侧无条件执行；而本项目没授予 `dialog:allow-confirm`
+      ⇒ invoke 被权限拒绝，**连框都不弹**。也就是说它的语义是「无提示直接做」。
+      调用方**必须 `await`**（不 await 等于没拦）。`settle` 要排在
+      `destroy()` **前面**，否则 `onClose` 先把 promise 结算成 `false`。
+    - **`-32006 unsaved_changes` 是跨语言常量**：Python 侧定义、两个 `.vue` 各写一遍。
+      改一边不会编译失败，表现是「确认框不弹、直接报错」。所以有 1 条用例读
+      `rpc/controller.py` 把码取出来比对。
+    - **「运行」在库里那一份上要一次请求都不发**：正在运行时直接 `warning` 返回。
+      先发 `open` 再发现不能跑，会把用户当前的工作流换掉——那是数据损失，
+      不是提示问题。
+    - **行内改名输入框用函数式 ref**（`:ref="setNameInput"`）。`ref="x"` 写在
+      `v-for` 里会被收集成**数组**，`x.value.focus()` 报「focus 不是函数」。
+    - **导出文件名要洗过**（`wfExportName`：`/` `:` `\` 与控制字符换下划线、
+      去掉开头的点、截断 80 字）。名字是用户随便起的，含 `/` 时会被系统当路径分隔符，
+      表现是「导出到桌面」却在别处冒出一个目录。
+    - **时间戳格式化用字符串切片，不用 `new Date`**。后端给的是
+      `"2026-09-15 11:20:33"`，这不是 ECMAScript 规定的格式，别的引擎会收成
+      `Invalid Date` 显示成 `NaN-NaN-NaN`。
+    - **定时任务面板的工作流字段从库里下拉选**（+「浏览…」兜底 + 库外路径项）。
+      工作流进库后文件落在 `~/Library/Application Support` 下，还让用户开文件对话框
+      等于让人去翻系统目录——这是工作流入库**顺带修掉的回归**（见已知问题）。
+
 ## 已知问题
 
 - WebView 输入框无法被系统级合成键盘可靠注入（自动化测试限制，人工输入正常）。
@@ -392,6 +729,17 @@
   这个能力存在但**不主动暴露**：用户不知道有这个按钮，就等于没有。
 - **常驻标环开关不持久化**：它是画布组件里的视图态，重启应用回到默认关。
   想记住得走配置，那是另一件事（现在没做）。
+- **标题栏里「未保存 ●」与「● 已连接」挨在一起，读起来分不清**（F-UI-20 真机目视发现）：
+  未保存时整行是 `未命名工作流 ● ● 已连接 v0.1.0` —— 两个圆点相邻，颜色不同
+  （橙 vs 绿）但一眼扫过去像「两个状态点」。当时把标记做成名字的一部分是为了
+  避免「6 像素的点被当成渲染瑕疵」，但没预料到它会紧挨着连接状态点。
+  可能的改法：把连接状态移到最右、或在未保存标记后用括号写「未保存」。
+  **没改**——需要一次设计决定，不是随手能调的小事。
+- **工作流库弹层没有搜索、排序选项、标签、收藏**：列表按「最近修改」倒序（后端给的
+  顺序），条目多了只能自己往下翻。
+- **「新建」不落盘，所以空工作流不会出现在库里**（F-UI-20 的刻意设计，理由见
+  [workflow-lib.md](workflow-lib.md)）。用户新建之后直接关窗口，这份就没了——
+  和「新建即入库」相比这是有意的取舍，但**界面上没有提示**。
 
 ## 变更记录
 
@@ -400,6 +748,16 @@
 - 2026-09-13 诊断面板新增「后端告警」块（F-UI-13）：`log.warning` → `backendNotes`
   （上限 20 条、新的在前），并接进 `formatDiagnostics` 报告文本；
   新增 6 个前端用例（store 4 + 报告 2）
+- 2026-09-15 侧栏改版（画布主导）+ 时长/时刻改选（F-UI-17）+ 连线成环提示与标环（F-UI-16）
+- 2026-09-15 新增录制库界面（F-UI-18）与系统托盘（F-UI-19）：
+  `flow/recording.ts` 抽出来单独测；参数面板第 11 种控件 `recording`；
+  Rust 侧加 `tray-icon` feature 与窗口生命周期处理。前端用例 160 → 180
+- 2026-09-15 托盘补**运行期诊断**（F-UI-19）：`af_tray_state` 的状态行改为带上
+  `recording` / 打算设的角标 / `set_menu`·`set_title`·`set_tooltip` 三个返回值
+  （原先被 `let _ =` 吞掉，静默失败与"没设"在日志里长得一样）+ `rect()`；
+  新增 1 前端用例（8 条反向验证）。前端用例 180 → 181
+  ——起因是「图标在不在菜单栏」既搜不到（LLVM 内联 + 常量合并）又截不到图（休眠/锁屏），
+  只能把它变成运行期日志。实测 `rect=Ok(Some(Rect { position: (1706, 0), size: 36×58 }))`
 - 2026-09-13 **画布取代线性列表**：删掉 `NodeList.vue` 与 `vuedraggable` 依赖，
   新增 `FlowCanvas.vue`（@vue-flow/core + background + controls）与 `src/flow/`
   两个纯逻辑模块；`store` 的节点操作改按 uid 寻址（`indexOfUid` / `setNodePos` /
@@ -439,9 +797,82 @@
   边 id 格式抽成 `edgeId()` 只留一处，高亮由 `cycleIds` 持有并在下一次交互时清掉。
   `flow-cycle.test.mjs` 改为 `pathTo`/`cycleEdges` 并加 `assertClosedWalk`；
   前端用例 110 → 113
+- 2026-09-15 **参数面板加 `duration` / `time` 两种控件**（F-UI-17）：新增纯模块
+  `tauri/src/flow/duration.ts`（`DUR_UNITS` / `partOf` / `withPart` / `formatDuration` /
+  `normalizeTime`）。`ParamsPanel.vue` 加两个分支：时长四格数字框（值仍是毫秒整数）与
+  `t-time-picker`（`allowInput=false` 只能选、`clearable=false` 不能清空，旧值 `HH:mm`
+  先补成 `HH:mm:ss`）。四格的写入按 `uid:key` **串行排队**——`store.setParam` 是
+  「发 RPC → 等响应 → 回写本地」，连改两格时第二次读到的可能还是没算上第一次的旧值，
+  会把前一次的修改覆盖掉。`flow/summary.ts` 按 ptype 把毫秒总数显示成「1时30分」
+  （`formatValue` 多收一个 ptype；仍是**按控件类型**格式化，与节点类型无关的性质没破）。
+  `summary.ts` 由此有了第一个**值**导入，`flow-ports.test.mjs` 的 `loadTs` 补了 `deps`
+  参数把编译好的 `duration` 递进去。新增 `tauri/tests/duration.test.mjs` 19 例 +
+  摘要 2 例；前端用例 139 → 160
 - 2026-09-15 **常驻标出所有环的开关**（同 F-UI-16）：`cycle.ts` 新增 `edgesOnCycles`
   （迭代 Tarjan 求强连通分量）；画布加 `showCycles`（默认关）+ `cycleAllIds`（computed）
   + 工具栏按钮（开启时显示条数），`vEdges` 的高亮集合改为 `cycleIds ∪ cycleAllIds`；
   `.af-flow-bar` 加 `flex-wrap: wrap`（第四个控件会溢出）。新增
   `flow-cycle.test.mjs` 13 例 + 画布结构断言 1 例；前端用例 113 → 127
+- 2026-09-16 **新增工作流库界面**（F-UI-20）：`WorkflowMenu.vue` 重写为
+  `新建 / 工作流库 / 保存` + 当前名字（有未保存改动时名字后跟 `●`）；新增
+  `WorkflowLibDialog.vue`（列表 / 运行 / 打开 / 行内更名 / 导出 / 删除 / 导入）与
+  两个纯逻辑模块 `flow/workflow.ts`、`utils/confirm.ts`。`stores/app.ts` 加
+  `workflowLib` / `workflowLibCurrent` / `workflowLibDir` / `workflowPath` /
+  `workflowDirty` 五个 state 与八个动作，删掉 `saveWorkflowAs`（保存按钮任何时候
+  都可用，不再需要「另存为」）。
+  `ScheduleDialog.vue` 的工作流字段从「只读输入框 + 文件对话框」改为**从库里下拉选**
+  + 「浏览…」兜底——工作流进库后文件落在 `~/Library/Application Support` 下，
+  再让用户开文件对话框等于让人去翻系统目录（这是工作流入库**顺带引入又修掉的回归**）。
+  新增 `tauri/tests/workflow-lib.test.mjs` 10 例（含 1 条读 `rpc/controller.py`
+  正则取出 `-32006` 再比对两个 `.vue` 常量的**跨语言一致性**断言）+
+  `app-store.test.mjs` 11 例；前端用例 182 → 203
+- 2026-09-17 **修掉录制库「删除」的静默数据丢失**（F-UI-18）：`RecordPanel.vue`
+  的删除原先用 `window.confirm` 做二次确认——在 Tauri 下它**拦不住任何东西**：
+  宿主把它注入成 `async function(){ return await invoke("plugin:dialog|confirm", …) }`，
+  返回 **Promise**（恒 truthy）⇒ 无论 `if (!…) return;` 还是 `… && doIt()` 的拦截条件
+  **恒不成立**；而本项目**未授予 `dialog:allow-confirm`** ⇒ invoke 被权限拒绝、
+  **连框都不弹**。合起来就是「点『删除』→ 没有任何提示 → `os.remove` 永久删掉」。
+  改用 `utils/confirm.ts` 的 `confirmDanger`（TDesign `DialogPlugin`）+ **`await`**，
+  文案写明「会被永久删除，不能恢复」（录制库是 `os.remove`，**不是**工作流库那种
+  进废纸篓、可捞回）并带上引用它的节点数。
+  `recording.test.mjs` 里那条 `assert.ok(recordSrc.includes("window.confirm"))`
+  ——它把 bug 钉住了——改为断言「走 `confirmDanger` 且**有 `await`**」+
+  「文案带引用数」+「**代码**里不再出现 `window.confirm`」（回归断言按行首跳过注释，
+  所以注释里解释成因是允许的）。  反向验证 3 条（都实测过）：去 `await` /
+  整段换回 `window.confirm` / 单插一行 `window.confirm` ⇒ 各自对应用例挂。
+  另新增 `tauri/tests/dialog-guard.test.mjs` 4 例，把这条约束从「RecordPanel 一处」
+  升级为**扫全仓 `src/**/*.{ts,vue}`**（只在 RecordPanel 上断言不够，下一个组件
+  再引入照样漏）：① 代码里禁 `window.confirm|alert|prompt`（按行首跳过注释，
+  注释里解释成因是允许的）；② 每个 `confirmDanger` 调用点必须带 `await`；
+  ③ `settle` 排在 `destroy()` 前面；④ 自检「扫到的文件数 > 10 且含
+  `utils/confirm.ts`」（防止路径写错导致整组断言空转）。
+  反向验证 2 条：在 `WorkflowLibDialog.vue` 里插一行 `window.confirm` /
+  去掉它的 `await` ⇒ 各自对应用例挂（**证明换一个组件也抓得到**）。
+  前端用例 203 → 207。
+- 2026-09-17 **单条事件的编辑区**（F-UI-18b）：面板选中一行即可改字段 / 增删 / 重排。
+  字段区用「草稿 + `@change` 提交」（逐键提交会把 `640` 拆成三次写入、各占一格撤销）；
+  上移 / 下移传**相对位移**（后端连 `ts_ms` 一起换，否则被提前的步骤 `due` 已过、
+  立刻执行）；库条目多一个「**直接编辑**」入口（`record.lib.edit`，改动立刻写回）。
+  `recording.test.mjs` 12 → 19 例，其中 4 条是**读 `rpc/controller.py` 的跨语言契约**
+  （界面字段 ⊆ 后端白名单、插入下拉 == `_KINDS`、方法名都已注册）。
+  11 条源码变异全部被拦；其中「去掉一个控件的 `@change`」**第一版没拦住**
+  （当时用「`@change` 出现次数 ≥ 8」这个魔数阈值），改成逐个控件核对后才拦得住——
+  见 F-UI-18b 验收块 ③。前端用例 207 → 214。
+- 2026-09-17 **修掉「写了处理函数但没挂模板」**（F-UI-18b）：`onLibEdit` 只有定义、
+  模板里没挂 `@click` ⇒ **「直接编辑库条目」这个入口在界面上点不到**，而当时那条
+  `includes("onLibEdit")` 的断言**被函数定义本身满足**、全绿。改成断言模板里的接线，
+  并在 `dialog-guard.test.mjs` 加**全仓**守卫（组件里每个 `on[A-Z]` 处理函数都必须在
+  模板里被引用过）。前端用例 214 → 215。
+- 2026-09-17 **修掉「写了类名但没写样式」**（F-UI-18b）：字段编辑区用的 7 个
+  `af-*` 类名只有模板在引用、`<style>` 里一条规则都没有 ⇒ 标签与输入框断成两行、
+  下拉是原生样式、库行被 5 颗按钮挤爆。补齐样式（`.af-field` 加
+  `white-space: nowrap`；`.af-lib-row` 改 `flex-wrap: wrap` + `.af-lib-meta`
+  给 140px 下限），并把两条全仓结构守卫抽到新文件 `tauri/tests/ui-wiring.test.mjs`
+  （处理函数必须挂到模板 / `af-*` 类名必须有样式或登记理由）。前端用例 215 → 217。
+  两次反向验证各逼出一个漏洞：类名匹配不加负向断言时 `.af-fields` 会冒充
+  `.af-field`；`styleOf()` 不剥 CSS 注释时，把规则改名后断言**照样绿**。
+- 2026-09-17 **F-UI-18b 真机目视验收**（安装版）：直接编辑 / 复制 / 下移 / 完成编辑
+  四个动作全部命中，副作用与 RPC 帧一一对上（含 `moveEvent` 的「内容换位、时间戳留槽」）。
+  顺带确认布局修复没破坏入口。**坐标必须靠像素分析**——目测换算差了 15~24 pt，
+  连点三次全落空，而窗口截图会穿透遮挡，「看着像点中了」不算数。
 

@@ -140,6 +140,40 @@ def test_find_template_still_works_on_single_display(monkeypatch):
     assert (m.x, m.y) == (220, 110)
 
 
+def test_find_template_reports_box_size_in_logical_points(two_screens):
+    """匹配框的宽高必须是**逻辑点**（物理像素 / 该屏 scale），不是图像像素。
+
+    模板 40x20 物理像素贴在 2x 的右屏上 ⇒ 逻辑尺寸 20x10。
+    忘了除 scale 时框会大一倍，「框内随机 / 框内自定义」取的点有一半落在目标
+    外面——而 `x/y` 仍然是对的，只断言坐标的用例完全抓不到。
+    """
+    tpl, _ = two_screens
+    m = vision.find_template(0.9, template_bgr=tpl)
+    assert m.found
+    assert (m.w, m.h) == (20, 10)
+
+
+def test_find_template_box_size_is_unscaled_on_a_1x_screen(monkeypatch):
+    """对照：同一张模板在 1x 屏上逻辑尺寸就是原尺寸（40x20）。
+
+    与上一条配对，让「除以 scale」成为唯一变量：漏了除法时这条照样过、
+    上面那条必红。
+    """
+    tpl = _pattern(40, 20, seed=11)
+    screen = _blank(1280, 832)
+    screen[100:120, 200:240] = tpl
+    monkeypatch.setattr(vision, "_raw_screens",
+                        lambda: [({"left": 0, "top": 0, "width": 1280, "height": 832}, screen)])
+    m = vision.find_template(0.9, template_bgr=tpl)
+    assert (m.x, m.y, m.w, m.h) == (220, 110, 40, 20)
+
+
+def test_find_template_missing_template_gives_no_box():
+    """缺模板这条路给不出框（w/h 为 0）⇒ 调用方回落中心，不能拿 (0,0) 去点。"""
+    m = vision.find_template(0.8, template_path="/nonexistent/tpl.png")
+    assert not m.found and (m.w, m.h) == (0, 0)
+
+
 def test_find_template_not_present_reports_best_score_below_threshold(two_screens):
     """屏幕上没有的目标：found=False，但仍回传最高分供排查。"""
     absent = _pattern(40, 20, seed=99)
@@ -293,6 +327,24 @@ def test_ocr_box_center_includes_display_origin():
                           size=SimpleNamespace(width=0.2, height=0.1))
     # cx = 1280 + (0.1+0.1)*2880/2 = 1568；cy = (1-(0.2+0.05))*1800/2 = 675
     assert ocr._center_from_box(box, 2880, 1800, cap) == (1568, 675)
+
+
+def test_ocr_box_size_undoes_scale():
+    """文字框尺寸同样是**逻辑点**：归一化 0.2x0.1 在 2880 宽 @2x 上是 288x90 点。
+
+    与 `_center_from_box` 同一套换算（物理像素 / scale）。除错了不会报错，
+    只是「框内随机」的落点范围偏大或偏小，用户看到的是「有时点得准有时点不准」。
+    """
+    from core import ocr
+
+    box = SimpleNamespace(origin=SimpleNamespace(x=0.1, y=0.2),
+                          size=SimpleNamespace(width=0.2, height=0.1))
+    # 2x 副屏：0.2*2880/2 = 288、0.1*1800/2 = 90
+    cap2x = vision.ScreenCapture(image=_blank(2880, 1800), scale=2.0, left=1280, top=0)
+    assert ocr._box_size(box, 2880, 1800, cap2x) == (288, 90)
+    # 对照：同样像素的 1x 屏，逻辑尺寸翻倍 —— 与上面配对，锁住「除 scale」这一步
+    cap1x = vision.ScreenCapture(image=_blank(2880, 1800), scale=1.0, left=0, top=0)
+    assert ocr._box_size(box, 2880, 1800, cap1x) == (576, 180)
 
 
 def test_ocr_empty_capture_returns_no_hits():

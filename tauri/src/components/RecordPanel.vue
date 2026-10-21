@@ -5,6 +5,8 @@ import { MessagePlugin } from "tdesign-vue-next";
 import { computeWindow } from "@/utils/vlist";
 
 import { errMessage } from "@/rpc/client";
+import { fmtRecDuration, type RecMeta } from "@/flow/recording";
+import { confirmDanger } from "@/utils/confirm";
 const store = useAppStore();
 
 // ---- 事件流虚拟滚动 ----
@@ -94,30 +96,23 @@ async function onUndo() {
   await edit("record.undo");
 }
 
-// ---- 文本事件内容编辑 ----
-// 输入法提交的内容经常需要改（同音字、多打的字）。直接改这一条，比"重录一遍"省事。
+// 当前选中的那一条（字段编辑区、按键转文本、行操作都读它）。
 const selectedEvent = computed(() => {
   const i = selected.value;
   const b = store.recordBuffer;
   return i >= 0 && i < b.length ? b[i] : null;
 });
-const textDraft = ref("");
+
+// ---- 文本事件内容编辑 ----
+// 输入法提交的内容经常需要改（同音字、多打的字）。直接改这一条，比"重录一遍"省事。
 // 把一段连续按键替换成一条 text 事件时填的实际文字。
 // 中文录制录下来的是拼音按键（上屏不投递事件，见 core/inputsource.py），回放靠
 // 重新驱动输入法——能用但不确定。换成文本事件后回放走 Unicode 通道，结果确定。
 const keysToTextDraft = ref("");
 
-watch(selectedEvent, (ev) => {
-  textDraft.value = ev && ev.kind === "text" ? String(ev.text ?? "") : "";
+watch(selectedEvent, () => {
   keysToTextDraft.value = "";
 });
-
-async function onApplyText() {
-  const ev = selectedEvent.value;
-  if (!ev || ev.kind !== "text") return;
-  if (textDraft.value === String(ev.text ?? "")) return;
-  await edit("record.setText", { index: selected.value, text: textDraft.value });
-}
 
 async function onKeysToText() {
   const ev = selectedEvent.value;
@@ -125,6 +120,67 @@ async function onKeysToText() {
   await edit("record.keysToText", {
     index: selected.value,
     text: keysToTextDraft.value,
+  });
+}
+
+// ---- 单条事件的字段编辑（坐标 / 按键 / 时间 / 按钮 / 滚轮 / 文本）----
+// 用「草稿 + 提交」而不是逐键提交：每敲一个字符就发一次 RPC 会把 "640" 拆成
+// 6 / 64 / 640 三次写入（还会各占一格撤销）。草稿在选中行变化时重置。
+const fieldDraft = ref<Record<string, any>>({});
+watch(selectedEvent, (ev) => {
+  fieldDraft.value = ev ? { ...ev } : {};
+});
+
+/** 只提交与当前值**不同**的字段（后端还会再判一次「没变就不占撤销栈」）。 */
+async function commitFields() {
+  const ev: any = selectedEvent.value;
+  if (!ev) return;
+  const fields: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fieldDraft.value)) {
+    if (k === "kind") continue; // 类型不可改——那是「换一条事件」，不是改字段
+    if (v !== ev[k]) fields[k] = v;
+  }
+  if (!Object.keys(fields).length) return;
+  await edit("record.patch", { index: selected.value, fields });
+}
+
+/** 在选中行**后面**插入一条新事件；没选中就追加到末尾。 */
+const insertKind = ref("move");
+async function onInsertEvent() {
+  const idx =
+    selected.value >= 0 ? selected.value + 1 : store.recordBuffer.length;
+  await edit("record.insert", { index: idx, event: { kind: insertKind.value } });
+  selected.value = idx; // 选中刚插入的那条，便于接着填字段
+}
+
+async function onDuplicate() {
+  if (selected.value < 0) return;
+  const idx = selected.value;
+  await edit("record.duplicate", { index: idx });
+  selected.value = idx + 1; // 复制品就在它后面
+}
+
+async function onMoveEvent(delta: number) {
+  if (selected.value < 0) return;
+  const idx = selected.value;
+  await edit("record.moveEvent", { index: idx, delta });
+  selected.value = idx + delta; // 选中跟着走，方便连按
+}
+
+// ---- 直接编辑库里的条目 ----
+// 与「载入」的区别只在收尾：载入之后编辑只改内存（界面提示「改动未更新」），
+// 这个入口把落盘也接管了——每次编辑后端自动写回库里那条。
+async function onLibEdit(m: RecMeta) {
+  await withLib(async () => {
+    await store.recordingLibEdit(m.id);
+    selected.value = -1;
+    MessagePlugin.success(`正在直接编辑「${m.name}」：改动会立刻写回库里`);
+  });
+}
+
+async function onLibEndEdit() {
+  await withLib(async () => {
+    await store.recordingLibEndEdit();
   });
 }
 
@@ -298,6 +354,120 @@ async function onToNode() {
     MessagePlugin.error("写入失败：" + errMessage(e));
   }
 }
+
+// ---- 录制库 ----
+// 一次录制 = 库里一条可复用资产；节点按 id 引用，"在库里改一次，所有引用它的
+// 节点一起变"。面板这里管的是库本身：存、改名、删、载入、落到画布。
+const libBusy = ref(false);
+/** 存入库时用的名字。默认跟着当前条目的名字走，用户改完按「存入库」即覆盖。 */
+const libName = ref("");
+const renamingId = ref("");
+const renameDraft = ref("");
+
+// 当前条目变了就同步一次草稿名——用户在库里改名后，输入框要跟着变，
+// 否则下一次「存入库」会把它改回旧名字（覆盖是静默的，很难发现）。
+watch(
+  () => store.recordingLibCurrent?.name,
+  (n) => {
+    if (typeof n === "string") libName.value = n;
+  },
+  { immediate: true }
+);
+
+const libItems = computed<RecMeta[]>(() => store.recordingLib);
+const libCurrent = computed(() => store.recordingLibCurrent);
+
+/** 库里一条的副标题：条数 / 时长 / 创建时间，列表上一行看完。 */
+function libSub(m: RecMeta): string {
+  const parts = [`${m.count} 条`];
+  if (m.duration_ms) parts.push(fmtRecDuration(m.duration_ms));
+  if (m.created_at) parts.push(m.created_at);
+  return parts.join(" · ");
+}
+
+async function withLib<T>(fn: () => Promise<T>): Promise<void> {
+  if (libBusy.value) return;
+  libBusy.value = true;
+  try {
+    await fn();
+  } catch (e) {
+    MessagePlugin.error("录制库操作失败：" + errMessage(e));
+  } finally {
+    libBusy.value = false;
+  }
+}
+
+/** 存入库。`rid` 空 = 新建一条，给了 = 覆盖那一条（引用的节点会跟着变）。 */
+function onLibSave(rid: string) {
+  void withLib(async () => {
+    await store.recordingLibSave(libName.value, rid);
+    MessagePlugin.success(rid ? "已更新库里的录制" : "已存入录制库");
+  });
+}
+
+function onLibLoad(m: RecMeta) {
+  void withLib(async () => {
+    await store.recordingLoadFromLib(m.id);
+    // 载入后事件流是后端权威序列，滚动到底看最新那条
+    selected.value = -1;
+    MessagePlugin.success(`已载入「${m.name}」`);
+  });
+}
+
+function onLibToNode(m: RecMeta) {
+  void withLib(async () => {
+    await store.recordingLibToNode(m.id);
+    MessagePlugin.success(`已把「${m.name}」放到画布`);
+  });
+}
+
+function onLibStartRename(m: RecMeta) {
+  renamingId.value = m.id;
+  renameDraft.value = m.name;
+}
+
+function onLibRename(m: RecMeta) {
+  const name = renameDraft.value.trim();
+  renamingId.value = "";
+  if (!name || name === m.name) return;
+  void withLib(async () => {
+    await store.recordingLibRename(m.id, name);
+    MessagePlugin.success("已改名");
+  });
+}
+
+async function onLibDelete(m: RecMeta) {
+  // 库里删掉不影响已经引用它的节点（节点只存 id），所以必须说清后果：
+  // 那些节点回放时会**报错取不到录制**，得让用户先知道。
+  const used = store.workflow.nodes.filter(
+    (n) => n.type === "record_replay" && String(n.params?.recording_id ?? "") === m.id
+  ).length;
+  // ⚠️ 这里**必须**用应用内确认框，且**必须 await**。原先用的是 `window.confirm`，
+  // 它在本项目里**拦不住任何东西**，两条原因叠加：
+  //   1. Tauri 往 WebView 注入
+  //      `window.confirm = async function(i){ return await invoke("plugin:dialog|confirm", …) }`
+  //      ——返回的是 **Promise**。Promise 恒为 truthy，所以无论写成
+  //      `if (!window.confirm(...)) return;` 还是 `window.confirm(...) && doIt()`，
+  //      拦截条件**恒不成立**（`!Promise` 恒 false ⇒ `return` 永不执行；
+  //      而 `Promise && …` 恒真 ⇒ 右侧无条件执行）。
+  //   2. 本项目**没授予 `dialog:allow-confirm`**（`tauri-plugin-dialog` 的 `default`
+  //      权限集只有 allow-message / allow-open / allow-save），那个 invoke 会被
+  //      权限拒绝 ⇒ **连框都不弹**。
+  // 合起来：点「删除」→ 没有任何提示 → 文件被永久删掉。
+  // 确认文案要写「不能恢复」：录制库的删除是 `os.remove`（不是进废纸篓），
+  // 与工作流库那条「可以从 Finder 的废纸篓恢复」**不一样**。
+  const body = [
+    `「${m.name}」会被永久删除，不能恢复。`,
+    used ? `有 ${used} 个节点正在引用它，删掉后那些节点回放会失败。` : "",
+  ].filter(Boolean).join("\n");
+  if (!(await confirmDanger({ header: "删除录制", body, confirmBtn: "永久删除" }))) {
+    return;
+  }
+  void withLib(async () => {
+    await store.recordingLibDelete(m.id);
+    MessagePlugin.success("已删除");
+  });
+}
 </script>
 
 <template>
@@ -341,6 +511,102 @@ async function onToNode() {
       <template v-if="store.lastRecordInfo.mouse_died || store.lastRecordInfo.kb_died">
         · <span style="color:#e34d59">监听中断</span></template>
     </div>
+    <div class="af-lib">
+      <div class="af-lib-head">
+        <b>录制库</b>
+        <span class="af-lib-count">{{ libItems.length }} 条</span>
+        <span style="flex: 1" />
+        <button
+          class="af-chip"
+          :disabled="store.recording || libBusy"
+          :title="store.recordingLibDir"
+          @click="withLib(() => store.refreshRecordingLib())"
+        >
+          刷新
+        </button>
+      </div>
+
+      <!-- 当前这份录制的入库状态。三种：已同步 / 有改动未更新 / 还没入库。
+           「有改动」由后端按 rev 比对判定（不是前端自己记），编辑接口漏一个也会显示出来。 -->
+      <div class="af-lib-state">
+        <template v-if="!store.lastRecordCount">
+          <span class="af-lib-hint">还没有录制内容，录完会自动存进库。</span>
+        </template>
+        <template v-else-if="libCurrent && !libCurrent.dirty">
+          <span class="af-probe ok">✓ 已同步到「{{ libCurrent.name }}」</span>
+        </template>
+        <template v-else-if="libCurrent">
+          <span class="af-probe bad">● 改动未更新（库里还是旧的那份）</span>
+        </template>
+        <template v-else>
+          <span class="af-lib-hint">这份录制还没入库。</span>
+        </template>
+      </div>
+
+      <div v-if="store.lastRecordCount" class="af-lib-save">
+        <input
+          v-model="libName"
+          class="af-textinput"
+          placeholder="录制名称"
+          @keydown.enter.prevent="onLibSave(libCurrent?.id ?? '')"
+        />
+        <button
+          class="af-chip on"
+          :disabled="libBusy"
+          @click="onLibSave(libCurrent?.id ?? '')"
+        >
+          {{ libCurrent ? "更新到库" : "存入库" }}
+        </button>
+        <button
+          class="af-chip"
+          :disabled="libBusy"
+          title="用这个名字另存一条，不动原来那条"
+          @click="onLibSave('')"
+        >
+          另存为新的
+        </button>
+      </div>
+
+      <div v-if="!libItems.length" class="af-lib-hint">库还是空的。</div>
+      <div v-for="m in libItems" :key="m.id" class="af-lib-row">
+        <template v-if="renamingId === m.id">
+          <input
+            v-model="renameDraft"
+            class="af-textinput"
+            @keydown.enter.prevent="onLibRename(m)"
+            @keydown.esc.prevent="renamingId = ''"
+          />
+          <button class="af-chip on" @click="onLibRename(m)">确定</button>
+          <button class="af-chip" @click="renamingId = ''">取消</button>
+        </template>
+        <template v-else>
+          <div class="af-lib-meta">
+            <div class="af-lib-name" :title="m.id">
+              {{ m.name }}
+              <span v-if="libCurrent?.id === m.id" class="af-lib-cur">当前</span>
+            </div>
+            <div class="af-lib-sub">{{ libSub(m) }}</div>
+          </div>
+          <button class="af-chip" :disabled="libBusy || store.recording" @click="onLibLoad(m)">
+            载入
+          </button>
+          <!-- 「直接编辑」= 载入 + 每次编辑自动写回。与「载入」只差收尾，
+               所以紧挨着放，用户一眼能看出这是同一件事的两种收尾方式。 -->
+          <button
+            class="af-chip"
+            :disabled="libBusy || store.recording"
+            :class="{ on: libCurrent?.editing && libCurrent?.id === m.id }"
+            @click="onLibEdit(m)"
+          >
+            直接编辑
+          </button>
+          <button class="af-chip" :disabled="libBusy" @click="onLibToNode(m)">落到画布</button>
+          <button class="af-chip" :disabled="libBusy" @click="onLibStartRename(m)">改名</button>
+          <button class="af-chip" :disabled="libBusy" @click="onLibDelete(m)">删除</button>
+        </template>
+      </div>
+    </div>
+
     <div class="af-textprobe">
       <button class="af-chip" :disabled="store.recording" @click="onProbeText">
         文本链路自检
@@ -383,32 +649,153 @@ async function onToNode() {
         {{ f.label }}
       </button>
     </div>
+    <!-- 正在「直接编辑」库里某条：每次改动都会自动写回库里那条 -->
+    <div v-if="libCurrent?.editing" class="af-lib-editing">
+      <span class="af-probe ok">
+        ✎ 正在直接编辑库里的「{{ libCurrent.name }}」——改动会立刻写回
+      </span>
+      <button class="af-chip" @click="onLibEndEdit">完成编辑</button>
+    </div>
     <div v-if="store.recordBuffer.length && !store.recording" class="af-edit">
       <span class="af-edit-sel">
         {{ selected >= 0 ? `已选 #${selected}` : "点一行选中（Delete 可删）" }}
       </span>
       <button class="af-chip" :disabled="selected < 0" @click="onDeleteSelected">删除</button>
+      <button class="af-chip" :disabled="selected < 0" @click="onDuplicate">复制</button>
+      <button class="af-chip" :disabled="selected < 1" @click="onMoveEvent(-1)">上移</button>
+      <button
+        class="af-chip"
+        :disabled="selected < 0 || selected >= store.recordBuffer.length - 1"
+        @click="onMoveEvent(1)"
+      >
+        下移
+      </button>
       <button class="af-chip" :disabled="selected < 0" @click="onDropMovesBefore">
         删此前的移动
       </button>
       <button class="af-chip" :disabled="selected < 0" @click="onSetOrigin">设为原点</button>
       <button class="af-chip" :disabled="!store.recordCanUndo" @click="onUndo">撤销</button>
     </div>
-    <div v-if="selectedEvent?.kind === 'text' && !store.recording" class="af-textedit">
-      <span class="af-edit-sel">文本内容</span>
-      <input
-        v-model="textDraft"
-        class="af-textinput"
-        placeholder="改写这条文本事件"
-        @keydown.enter.prevent="onApplyText"
-      />
-      <button
-        class="af-chip"
-        :disabled="textDraft === String(selectedEvent.text ?? '')"
-        @click="onApplyText"
-      >
-        应用
-      </button>
+    <div v-if="store.recordBuffer.length && !store.recording" class="af-edit">
+      <span class="af-edit-sel">插入</span>
+      <select v-model="insertKind" class="af-select">
+        <option value="move">移动</option>
+        <option value="mouse">鼠标</option>
+        <option value="wheel">滚轮</option>
+        <option value="key">按键</option>
+        <option value="text">文本</option>
+      </select>
+      <button class="af-chip" @click="onInsertEvent">插到选中行后面</button>
+    </div>
+    <!-- 单条事件的字段编辑：时间/坐标所有类型都能改，其余按类型给 -->
+    <div v-if="selectedEvent && !store.recording" class="af-fields">
+      <span class="af-edit-sel">这一条</span>
+      <label class="af-field">
+        <span>时间</span>
+        <input
+          v-model.number="fieldDraft.ts_ms"
+          type="number"
+          class="af-num"
+          @change="commitFields"
+        />
+      </label>
+      <label class="af-field">
+        <span>X</span>
+        <input v-model.number="fieldDraft.x" type="number" class="af-num" @change="commitFields" />
+      </label>
+      <label class="af-field">
+        <span>Y</span>
+        <input v-model.number="fieldDraft.y" type="number" class="af-num" @change="commitFields" />
+      </label>
+      <template v-if="selectedEvent.kind === 'mouse'">
+        <label class="af-field">
+          <span>按钮</span>
+          <select v-model="fieldDraft.button" class="af-select" @change="commitFields">
+            <option value="left">左键</option>
+            <option value="right">右键</option>
+            <option value="middle">中键</option>
+          </select>
+        </label>
+        <label class="af-field">
+          <span>动作</span>
+          <select v-model="fieldDraft.pressed" class="af-select" @change="commitFields">
+            <option :value="true">按下</option>
+            <option :value="false">释放</option>
+          </select>
+        </label>
+        <label class="af-field">
+          <span>连击</span>
+          <input
+            v-model.number="fieldDraft.clicks"
+            type="number"
+            min="1"
+            class="af-num"
+            @change="commitFields"
+          />
+        </label>
+      </template>
+      <template v-else-if="selectedEvent.kind === 'key'">
+        <label class="af-field">
+          <span>按键</span>
+          <input
+            v-model="fieldDraft.key"
+            class="af-textinput af-key"
+            @keydown.enter.prevent="commitFields"
+            @blur="commitFields"
+          />
+        </label>
+        <label class="af-field">
+          <span>动作</span>
+          <select v-model="fieldDraft.pressed" class="af-select" @change="commitFields">
+            <option :value="true">按下</option>
+            <option :value="false">抬起</option>
+          </select>
+        </label>
+      </template>
+      <template v-else-if="selectedEvent.kind === 'wheel'">
+        <label class="af-field">
+          <span>dy</span>
+          <input
+            v-model.number="fieldDraft.wheel_dy"
+            type="number"
+            class="af-num"
+            @change="commitFields"
+          />
+        </label>
+        <label class="af-field">
+          <span>dx</span>
+          <input
+            v-model.number="fieldDraft.wheel_dx"
+            type="number"
+            class="af-num"
+            @change="commitFields"
+          />
+        </label>
+        <label class="af-field">
+          <span>单位</span>
+          <select v-model="fieldDraft.wheel_unit" class="af-select" @change="commitFields">
+            <option value="line">行</option>
+            <option value="pixel">像素</option>
+          </select>
+        </label>
+      </template>
+      <template v-else-if="selectedEvent.kind === 'move'">
+        <label class="af-field">
+          <span>拖拽</span>
+          <input v-model="fieldDraft.dragged" type="checkbox" @change="commitFields" />
+        </label>
+      </template>
+      <template v-else-if="selectedEvent.kind === 'text'">
+        <label class="af-field">
+          <span>文本</span>
+          <input
+            v-model="fieldDraft.text"
+            class="af-textinput af-text"
+            @keydown.enter.prevent="commitFields"
+            @blur="commitFields"
+          />
+        </label>
+      </template>
     </div>
     <div v-if="selectedEvent?.kind === 'key' && !store.recording" class="af-textedit">
       <span class="af-edit-sel">这段按键</span>
@@ -544,6 +931,72 @@ async function onToNode() {
   outline: none;
   border-color: #0052d9;
 }
+/* ---- 单条事件的字段编辑区 ---- */
+/* 每个字段必须**整体**换行：`.af-field` 不加 `white-space: nowrap` 时，实测会出现
+   「标签在上一行末尾、它的输入框在下一行开头」——读起来像那个标签是上一个输入框的
+   后缀（真机目视 2026-09-17 发现：「时间 [1950]」后面孤零零一个「X」）。 */
+.af-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 6px;
+}
+.af-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #888;
+}
+.af-num {
+  width: 64px;
+  border: 1px solid #d5d8dd;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #444;
+}
+.af-num:focus {
+  outline: none;
+  border-color: #0052d9;
+}
+.af-select {
+  border: 1px solid #d5d8dd;
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: #444;
+  background: #fff;
+}
+.af-select:focus {
+  outline: none;
+  border-color: #0052d9;
+}
+/* 文本类字段（按键 / 文本）给足宽度：`.af-textinput` 是 flex:1，在 shrink-to-fit
+   的 `.af-field` 里会缩到只剩一个字，看不出改的是什么。 */
+.af-key {
+  flex: 0 0 auto;
+  width: 76px;
+}
+.af-text {
+  flex: 0 0 auto;
+  width: 150px;
+}
+/* 「正在直接编辑库里的 xxx」常驻提示。它改变了编辑的**收尾语义**（自动写回），
+   不能只靠一个小图标暗示——做成显眼的浅蓝块，让用户知道现在的改动会立刻落盘。 */
+.af-lib-editing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 1px solid #b9d0f5;
+  border-radius: 8px;
+  background: #f2f7ff;
+}
 .af-chip:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -565,6 +1018,72 @@ async function onToNode() {
   margin-top: 6px;
   font-size: 11px;
   color: #666;
+}
+/* ---- 录制库 ---- */
+.af-lib {
+  margin-top: 10px;
+  border-top: 1px solid #eceef1;
+  padding-top: 8px;
+}
+.af-lib-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.af-lib-head b {
+  font-size: 13px;
+}
+.af-lib-count {
+  font-size: 11px;
+  color: #aaa;
+}
+.af-lib-state {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.af-lib-hint {
+  font-size: 11px;
+  color: #999;
+}
+.af-lib-save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.af-lib-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px dashed #f0f1f3;
+}
+.af-lib-meta {
+  /* 侧栏只有 ~350px，而这一行最多有 5 颗按钮（载入 / 直接编辑 / 落到画布 /
+     改名 / 删除）——`flex: 1` + `min-width: 0` 会让名字被压成「录制 …」、
+     副标题折成四行。给 meta 一个下限，装不下时**整行按钮换到下一行**。 */
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.af-lib-name {
+  font-size: 12px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.af-lib-cur {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #0052d9;
+  border: 1px solid #b9d0f5;
+  border-radius: 8px;
+  padding: 0 5px;
+}
+.af-lib-sub {
+  font-size: 10px;
+  color: #aaa;
 }
 .af-filters {
   display: flex;
