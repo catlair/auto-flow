@@ -1,0 +1,181 @@
+{
+  "version": 4,
+  "name": "自检·OCR 与按键（测试用）",
+  "speed": 1,
+  "repeat": 1,
+  "start": "start",
+  "nodes": [
+    {
+      "type": "note",
+      "params": {
+        "text": "这是个自检流，只做一件事：看当前屏幕是哪张脸，然后做对应动作，然后结束。① 停在大厅跑 → 应真的点中「开始匹配」（会开始排队）；② 停在出生地地图跑 → 应按 Space 前往出生地；③ 停在「获得花蕊织」结算页跑 → 应按 F 再来一局。三张都不是 → 会主动停掉并报错（说明 OCR 没认出这张界面）。按 F10 可随时停。"
+      },
+      "enabled": true,
+      "uid": "note",
+      "name": "怎么用（不执行）",
+      "x": 40,
+      "y": 40
+    },
+    {
+      "type": "start",
+      "params": {},
+      "enabled": true,
+      "uid": "start",
+      "name": "开始",
+      "x": 40,
+      "y": 320
+    },
+    {
+      "type": "branch",
+      "params": {
+        "case_count": 3,
+        "case1_kind": "文字存在",
+        "case1_value": "开始匹配",
+        "case2_kind": "文字存在",
+        "case2_value": "出生地",
+        "case3_kind": "文字存在",
+        "case3_value": "获得花蕊织",
+        "confidence": 0.8,
+        "timeout_s": 0
+      },
+      "enabled": true,
+      "uid": "probe",
+      "name": "看当前是哪张界面",
+      "x": 320,
+      "y": 320
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "开始匹配",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "停止工作流",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "t_click",
+      "name": "点「开始匹配」",
+      "x": 700,
+      "y": 160
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "Space"
+      },
+      "enabled": true,
+      "uid": "t_space",
+      "name": "按 Space 前往出生地",
+      "x": 700,
+      "y": 300
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "F"
+      },
+      "enabled": true,
+      "uid": "t_f",
+      "name": "按 F 再来一局",
+      "x": 700,
+      "y": 440
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "__自检_没认出这张界面__",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "停止工作流",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "t_fail",
+      "name": "自检失败：没认出这张界面",
+      "x": 700,
+      "y": 580
+    },
+    {
+      "type": "end",
+      "params": {},
+      "enabled": true,
+      "uid": "end",
+      "name": "结束",
+      "x": 1000,
+      "y": 320
+    }
+  ],
+  "edges": [
+    {
+      "src": "start",
+      "port": "out",
+      "dst": "probe",
+      "dst_side": "left"
+    },
+    {
+      "src": "probe",
+      "port": "case:1",
+      "dst": "t_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "probe",
+      "port": "case:2",
+      "dst": "t_space",
+      "dst_side": "left"
+    },
+    {
+      "src": "probe",
+      "port": "case:3",
+      "dst": "t_f",
+      "dst_side": "left"
+    },
+    {
+      "src": "probe",
+      "port": "else",
+      "dst": "t_fail",
+      "dst_side": "left"
+    },
+    {
+      "src": "t_click",
+      "port": "out",
+      "dst": "end",
+      "dst_side": "left"
+    },
+    {
+      "src": "t_space",
+      "port": "out",
+      "dst": "end",
+      "dst_side": "left"
+    },
+    {
+      "src": "t_f",
+      "port": "out",
+      "dst": "end",
+      "dst_side": "left"
+    },
+    {
+      "src": "t_fail",
+      "port": "out",
+      "dst": "end",
+      "dst_side": "left"
+    }
+  ]
+}

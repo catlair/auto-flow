@@ -1,0 +1,122 @@
+{
+  "version": 4,
+  "name": "键盘测试·R 键（两种方式）",
+  "speed": 1,
+  "repeat": 1,
+  "start": "start",
+  "nodes": [
+    {
+      "type": "note",
+      "params": {
+        "text": "在**大厅**跑（大厅里 R = 排行榜，按了会有明显反应）。运行后 5 秒内点一下游戏让它到前台。第 1 次用虚拟键码 vk:15（= R）；第 2 次用字符 R。哪一次打开了排行榜，就说明那种方式游戏认。两次都没反应 = 合成键盘事件被游戏/系统过滤，只能用鼠标点击。"
+      },
+      "enabled": true,
+      "uid": "note",
+      "name": "怎么用（不执行）",
+      "x": 40,
+      "y": 40
+    },
+    {
+      "type": "start",
+      "params": {},
+      "enabled": true,
+      "uid": "start",
+      "name": "开始",
+      "x": 40,
+      "y": 200
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 5000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "wait",
+      "name": "等 5s（把游戏点前台）",
+      "x": 260,
+      "y": 200
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:15"
+      },
+      "enabled": true,
+      "uid": "press_vk_r",
+      "name": "按 vk:15（虚拟键码 R）",
+      "x": 520,
+      "y": 200
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 8000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "gap",
+      "name": "隔 8s 再试下一种",
+      "x": 780,
+      "y": 200
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "R"
+      },
+      "enabled": true,
+      "uid": "press_char_r",
+      "name": "按字符 R",
+      "x": 1040,
+      "y": 200
+    },
+    {
+      "type": "end",
+      "params": {},
+      "enabled": true,
+      "uid": "end",
+      "name": "结束",
+      "x": 1300,
+      "y": 200
+    }
+  ],
+  "edges": [
+    {
+      "src": "start",
+      "port": "out",
+      "dst": "wait",
+      "dst_side": "left"
+    },
+    {
+      "src": "wait",
+      "port": "out",
+      "dst": "press_vk_r",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_vk_r",
+      "port": "out",
+      "dst": "gap",
+      "dst_side": "left"
+    },
+    {
+      "src": "gap",
+      "port": "out",
+      "dst": "press_char_r",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_char_r",
+      "port": "out",
+      "dst": "end",
+      "dst_side": "left"
+    }
+  ]
+}

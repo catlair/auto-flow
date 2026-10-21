@@ -65,3 +65,4 @@ docs/
 - 全局状态 → [STATUS.md](STATUS.md)
 - 架构总览 → [architecture.md](architecture.md)
 - 各模块 → `modules/` 目录，见上方结构
+- 可直接导入的示例工作流 → [`../examples/`](../examples/)（含判据选择的踩坑记录）

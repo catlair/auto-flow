@@ -1,0 +1,672 @@
+{
+  "version": 4,
+  "name": "燕云·觉障林 自动匹配循环 v5",
+  "speed": 1,
+  "repeat": 1,
+  "start": "start",
+  "nodes": [
+    {
+      "type": "note",
+      "params": {
+        "text": "两级判定。第一级只看「对局内」高频状态（3 项，省 OCR）：确定退出吗 / 观战中 / 存活；第二级在「不是对局内」时才跑（5 项 + 弹窗兜底）：获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定。死亡后不观战：观战中 → 按 Esc（vk:53）→ 弹窗「确定退出吗」→ 点「确认」→ 结算页。复活点界面点「返回」放弃复活，直接走退出结算。全部用鼠标点击（键盘只用于 Esc）。"
+      },
+      "enabled": true,
+      "uid": "note",
+      "name": "使用说明（不执行）",
+      "x": 40,
+      "y": 40
+    },
+    {
+      "type": "start",
+      "params": {},
+      "enabled": true,
+      "uid": "start",
+      "name": "开始",
+      "x": 40,
+      "y": 300
+    },
+    {
+      "type": "branch",
+      "params": {
+        "case_count": 3,
+        "case1_kind": "文字存在",
+        "case1_value": "确定退出吗",
+        "case2_kind": "文字存在",
+        "case2_value": "观战中",
+        "case3_kind": "文字存在",
+        "case3_value": "存活",
+        "confidence": 0.8,
+        "timeout_s": 15
+      },
+      "enabled": true,
+      "uid": "judge_in",
+      "name": "判定·对局内",
+      "x": 300,
+      "y": 300
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "确认",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_confirm",
+      "name": "点「确认」（退出对局）",
+      "x": 660,
+      "y": 180
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 2500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_confirm",
+      "name": "等结算",
+      "x": 960,
+      "y": 180
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:53"
+      },
+      "enabled": true,
+      "uid": "press_esc",
+      "name": "按 Esc 退出观战",
+      "x": 660,
+      "y": 300
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_esc",
+      "name": "等弹窗出现",
+      "x": 960,
+      "y": 300
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 20000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "idle_inmatch",
+      "name": "对局中·空等 20s",
+      "x": 660,
+      "y": 420
+    },
+    {
+      "type": "branch",
+      "params": {
+        "case_count": 6,
+        "case1_kind": "文字存在",
+        "case1_value": "获得花蕊织",
+        "case2_kind": "文字存在",
+        "case2_value": "继续",
+        "case3_kind": "文字存在",
+        "case3_value": "请选择复活点",
+        "case4_kind": "文字存在",
+        "case4_value": "出生地",
+        "case5_kind": "文字存在",
+        "case5_value": "开始匹配",
+        "case6_kind": "文字存在",
+        "case6_value": "确定",
+        "confidence": 0.8,
+        "timeout_s": 0
+      },
+      "enabled": true,
+      "uid": "judge_flow",
+      "name": "判定·流程界面",
+      "x": 300,
+      "y": 620
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "再来一局",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_again",
+      "name": "点「再来一局」",
+      "x": 660,
+      "y": 520
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 6000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_again",
+      "name": "等重新排队",
+      "x": 960,
+      "y": 520
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "继续",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_continue",
+      "name": "点「继续」（结算页）",
+      "x": 660,
+      "y": 640
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 4000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_continue",
+      "name": "等下一屏",
+      "x": 960,
+      "y": 640
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "返回",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_back",
+      "name": "点「返回」（放弃复活）",
+      "x": 660,
+      "y": 760
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 2000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_back",
+      "name": "等退出",
+      "x": 960,
+      "y": 760
+    },
+    {
+      "type": "branch",
+      "params": {
+        "case_count": 2,
+        "case1_kind": "文字存在",
+        "case1_value": "菩提苦海",
+        "case2_kind": "文字存在",
+        "case2_value": "佛光顶",
+        "confidence": 0.75,
+        "timeout_s": 3
+      },
+      "enabled": true,
+      "uid": "birth",
+      "name": "选出生地（菩提苦海 > 佛光顶）",
+      "x": 660,
+      "y": 880
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "菩提苦海",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_pu",
+      "name": "点「菩提苦海」",
+      "x": 1000,
+      "y": 850
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_pu",
+      "name": "等选中",
+      "x": 1240,
+      "y": 850
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "佛光顶",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_fg",
+      "name": "点「佛光顶」",
+      "x": 1000,
+      "y": 940
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_fg",
+      "name": "等选中",
+      "x": 1240,
+      "y": 940
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "前往出生地",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_go",
+      "name": "点「前往出生地」",
+      "x": 1000,
+      "y": 1030
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 4000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_go",
+      "name": "等进对局",
+      "x": 1240,
+      "y": 1030
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "开始匹配",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_match",
+      "name": "点「开始匹配」",
+      "x": 660,
+      "y": 1100
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 5000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_match",
+      "name": "等匹配界面切换",
+      "x": 960,
+      "y": 1100
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "确定",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 300,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_ok",
+      "name": "点「确定」（弹窗兜底）",
+      "x": 660,
+      "y": 1180
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_ok",
+      "name": "等弹窗关闭",
+      "x": 960,
+      "y": 1180
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "idle",
+      "name": "空转 0.2s",
+      "x": 300,
+      "y": 1180
+    }
+  ],
+  "edges": [
+    {
+      "src": "start",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_in",
+      "port": "case:1",
+      "dst": "click_confirm",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_confirm",
+      "port": "out",
+      "dst": "delay_confirm",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_confirm",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_in",
+      "port": "case:2",
+      "dst": "press_esc",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_esc",
+      "port": "out",
+      "dst": "delay_esc",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_esc",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_in",
+      "port": "case:3",
+      "dst": "idle_inmatch",
+      "dst_side": "left"
+    },
+    {
+      "src": "idle_inmatch",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_in",
+      "port": "else",
+      "dst": "judge_flow",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:1",
+      "dst": "click_again",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_again",
+      "port": "out",
+      "dst": "delay_again",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_again",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:2",
+      "dst": "click_continue",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_continue",
+      "port": "out",
+      "dst": "delay_continue",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_continue",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:3",
+      "dst": "click_back",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_back",
+      "port": "out",
+      "dst": "delay_back",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_back",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:4",
+      "dst": "birth",
+      "dst_side": "left"
+    },
+    {
+      "src": "birth",
+      "port": "case:1",
+      "dst": "click_pu",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_pu",
+      "port": "out",
+      "dst": "delay_pu",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_pu",
+      "port": "out",
+      "dst": "click_go",
+      "dst_side": "left"
+    },
+    {
+      "src": "birth",
+      "port": "case:2",
+      "dst": "click_fg",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_fg",
+      "port": "out",
+      "dst": "delay_fg",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_fg",
+      "port": "out",
+      "dst": "click_go",
+      "dst_side": "left"
+    },
+    {
+      "src": "birth",
+      "port": "else",
+      "dst": "click_go",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_go",
+      "port": "out",
+      "dst": "delay_go",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_go",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:5",
+      "dst": "click_match",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_match",
+      "port": "out",
+      "dst": "delay_match",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_match",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:6",
+      "dst": "click_ok",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_ok",
+      "port": "out",
+      "dst": "delay_ok",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_ok",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "else",
+      "dst": "idle",
+      "dst_side": "left"
+    },
+    {
+      "src": "idle",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    }
+  ]
+}
