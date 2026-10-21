@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·觉障林 自动匹配循环 v8",
+  "name": "燕云·觉障林 自动匹配循环 v9",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +8,7 @@
     {
       "type": "note",
       "params": {
-        "text": "两级判定 + 结算固定序列。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 8s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算流程是**固定的**：个人战况（继续）→ 加分界面（继续）→ 奖励界面（再来一局），所以一旦认出「继续」就按固定序列连点，不再逐屏判定（每屏判定要 6 次 OCR + 超时等待，慢得多）。MVP 局多一页，所以放了 3 次「继续」，多出来的那次找不到就跳过（0.8s）。观战中不能按 Esc，点右上角「退出」图标（前台窗口右上角 -20,+46）。"
+        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算页序固定：个人战况 → 加分 → 奖励（MVP 局前面多一页）。认出「继续」后不再逐屏判定：按窗口右下角 (-29,-30) 盲点「Space 继续」，先花 0.8s 判一次是不是 MVP 页（多一页就多按一次），然后到奖励页点「再来一局」——它会**自动匹配**，不用回大厅点开始匹配。任何一步对不上就回第一级的完整界面检查兜底。观战中和复活点界面都不能按 Esc / 点返回，只能点右上角那个「退出」图标（右上角 -20,+46）；复活点也可以等计时结束自动进观战，但没必要等。两条路都会到「确定退出吗」弹窗，由第一级 case1 点「确认」。"
       },
       "enabled": true,
       "uid": "note",
@@ -36,7 +36,7 @@
         "case3_kind": "文字存在",
         "case3_value": "复活机会",
         "confidence": 0.8,
-        "timeout_s": 8
+        "timeout_s": 6
       },
       "enabled": true,
       "uid": "judge_in",
@@ -162,41 +162,23 @@
       },
       "enabled": true,
       "uid": "click_again",
-      "name": "点「再来一局」",
+      "name": "点「再来一局」（自动匹配）",
       "x": 660,
       "y": 520
     },
     {
-      "type": "delay",
+      "type": "mouse",
       "params": {
-        "mode": "延时毫秒",
-        "ms": 5000,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "delay_again",
-      "name": "等重新排队",
-      "x": 960,
-      "y": 520
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "继续",
         "action": "click",
-        "timeout_s": 0.8,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0
+        "button": "left",
+        "anchor": "win_br",
+        "x": -29,
+        "y": -30,
+        "use_relative": false
       },
       "enabled": true,
       "uid": "click_continue",
-      "name": "点「继续」①",
+      "name": "点「继续」①（盲点右下角）",
       "x": 660,
       "y": 640
     },
@@ -204,33 +186,28 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2500,
+        "ms": 2200,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_continue",
-      "name": "等个人战况",
+      "name": "等个人战况→加分",
       "x": 960,
       "y": 640
     },
     {
-      "type": "ocr_click",
+      "type": "mouse",
       "params": {
-        "text": "返回",
         "action": "click",
-        "timeout_s": 2,
-        "interval_ms": 300,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -20,
+        "y": 46,
+        "use_relative": false
       },
       "enabled": true,
       "uid": "click_back",
-      "name": "点「返回」（放弃复活）",
+      "name": "点右上角「退出」（复活点界面）",
       "x": 660,
       "y": 760
     },
@@ -238,12 +215,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2000,
+        "ms": 1500,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_back",
-      "name": "等退出",
+      "name": "等退出确认弹窗",
       "x": 960,
       "y": 760
     },
@@ -448,72 +425,105 @@
       "y": 1180
     },
     {
-      "type": "ocr_click",
+      "type": "branch",
       "params": {
-        "text": "继续",
-        "action": "click",
-        "timeout_s": 0.8,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0
+        "case_count": 1,
+        "case1_kind": "文字存在",
+        "case1_value": "全场最佳",
+        "confidence": 0.8,
+        "timeout_s": 0.8
       },
       "enabled": true,
-      "uid": "click_continue2",
-      "name": "点「继续」②",
+      "uid": "judge_mvp",
+      "name": "是不是 MVP 页（多一页就多按一次）",
       "x": 660,
-      "y": 1180
+      "y": 1300
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_br",
+        "x": 1000,
+        "y": 1300,
+        "use_relative": false
+      },
+      "enabled": true,
+      "uid": "click_br_mvp",
+      "name": "点「继续」（跳过 MVP 页）",
+      "x": 1000,
+      "y": 1300
     },
     {
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2500,
+        "ms": 2200,
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "delay_continue2",
-      "name": "等加分界面",
-      "x": 960,
-      "y": 1180
+      "uid": "delay_mvp",
+      "name": "等 MVP→个人战况",
+      "x": 1300,
+      "y": 1300
     },
     {
-      "type": "ocr_click",
+      "type": "mouse",
       "params": {
-        "text": "继续",
         "action": "click",
-        "timeout_s": 0.8,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0
+        "button": "left",
+        "anchor": "win_br",
+        "x": 660,
+        "y": 1360,
+        "use_relative": false
       },
       "enabled": true,
-      "uid": "click_continue3",
-      "name": "点「继续」③（MVP 多一页）",
+      "uid": "click_br_2",
+      "name": "点「继续」②（盲点右下角）",
       "x": 660,
-      "y": 1240
+      "y": 1360
     },
     {
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2500,
+        "ms": 2200,
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "delay_continue3",
-      "name": "等奖励界面",
+      "uid": "delay_br2",
+      "name": "等加分→奖励",
       "x": 960,
-      "y": 1240
+      "y": 1360
+    },
+    {
+      "type": "branch",
+      "params": {
+        "case_count": 1,
+        "case1_kind": "文字存在",
+        "case1_value": "再来一局",
+        "confidence": 0.8,
+        "timeout_s": 1.2
+      },
+      "enabled": true,
+      "uid": "judge_again",
+      "name": "奖励页到了吗（有「再来一局」）",
+      "x": 660,
+      "y": 1420
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 8000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_autoqueue",
+      "name": "等自动匹配/加载",
+      "x": 1000,
+      "y": 1420
     }
   ],
   "edges": [
@@ -581,18 +591,6 @@
       "src": "judge_flow",
       "port": "case:1",
       "dst": "click_again",
-      "dst_side": "left"
-    },
-    {
-      "src": "click_again",
-      "port": "out",
-      "dst": "delay_again",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_again",
-      "port": "out",
-      "dst": "judge_in",
       "dst_side": "left"
     },
     {
@@ -730,37 +728,73 @@
     {
       "src": "judge_flow",
       "port": "case:2",
+      "dst": "judge_mvp",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_mvp",
+      "port": "case:1",
+      "dst": "click_br_mvp",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_br_mvp",
+      "port": "out",
+      "dst": "delay_mvp",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_mvp",
+      "port": "out",
+      "dst": "click_continue",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_mvp",
+      "port": "else",
       "dst": "click_continue",
       "dst_side": "left"
     },
     {
       "src": "delay_continue",
       "port": "out",
-      "dst": "click_continue2",
+      "dst": "click_br_2",
       "dst_side": "left"
     },
     {
-      "src": "click_continue2",
+      "src": "click_br_2",
       "port": "out",
-      "dst": "delay_continue2",
+      "dst": "delay_br2",
       "dst_side": "left"
     },
     {
-      "src": "delay_continue2",
+      "src": "delay_br2",
       "port": "out",
-      "dst": "click_continue3",
+      "dst": "judge_again",
       "dst_side": "left"
     },
     {
-      "src": "click_continue3",
-      "port": "out",
-      "dst": "delay_continue3",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_continue3",
-      "port": "out",
+      "src": "judge_again",
+      "port": "case:1",
       "dst": "click_again",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_again",
+      "port": "out",
+      "dst": "delay_autoqueue",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_autoqueue",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_again",
+      "port": "else",
+      "dst": "judge_in",
       "dst_side": "left"
     }
   ]
