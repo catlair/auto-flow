@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·觉障林 自动匹配循环 v11",
+  "name": "燕云·觉障林 自动匹配循环 v12",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +8,7 @@
     {
       "type": "note",
       "params": {
-        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算页序固定（个人战况 → 加分 → 奖励，MVP 局多一页），认出「继续」后按窗口右下角 (-29,-30) 盲点，只用两个「条件判断」确认页数对不对；对不上就回第一级完整检查兜底。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」（-20,+46）。注意结束动画约 4s，点完「确认」要等 5s 再判定，否则会在动画中途瞎操作。"
+        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算：认出「继续」后按窗口右下角 (-29,-30) 盲点，每点一次等 3.5s（翻页有动画）再查一次「再来一局」——查到就点它（会自动匹配），三次都没查到就回第一级完整检查兜底。这样不管结算有几页（MVP 局多一页）都能走通，也不会在奖励页多点一次「继续」。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」(-20,+46)。结束动画约 4s，点完「确认」等 5s 再判定。"
       },
       "enabled": true,
       "uid": "note",
@@ -186,12 +186,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2200,
+        "ms": 3500,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_continue",
-      "name": "等个人战况→加分",
+      "name": "等翻页①",
       "x": 960,
       "y": 640
     },
@@ -425,52 +425,6 @@
       "y": 1180
     },
     {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "全场最佳",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 0.8
-      },
-      "enabled": true,
-      "uid": "judge_mvp",
-      "name": "是不是 MVP 页（多一页就多按一次）",
-      "x": 660,
-      "y": 1300
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "click",
-        "button": "left",
-        "anchor": "win_br",
-        "x": 1000,
-        "y": 1300,
-        "use_relative": false
-      },
-      "enabled": true,
-      "uid": "click_br_mvp",
-      "name": "点「继续」（跳过 MVP 页）",
-      "x": 1000,
-      "y": 1300
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 2200,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "delay_mvp",
-      "name": "等 MVP→个人战况",
-      "x": 1300,
-      "y": 1300
-    },
-    {
       "type": "mouse",
       "params": {
         "action": "click",
@@ -490,12 +444,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2200,
+        "ms": 3500,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_br2",
-      "name": "等加分→奖励",
+      "name": "等翻页②",
       "x": 960,
       "y": 1360
     },
@@ -512,7 +466,7 @@
       },
       "enabled": true,
       "uid": "judge_again",
-      "name": "奖励页到了吗（有「再来一局」）",
+      "name": "到奖励页了吗①（有「再来一局」）",
       "x": 660,
       "y": 1420
     },
@@ -528,6 +482,69 @@
       "name": "等自动匹配/加载",
       "x": 1000,
       "y": 1420
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_br",
+        "x": -29,
+        "y": -30,
+        "use_relative": false
+      },
+      "enabled": true,
+      "uid": "click_br_3",
+      "name": "点「继续」③（盲点右下角）",
+      "x": 660,
+      "y": 1360
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 3500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_br3",
+      "name": "等翻页③",
+      "x": 960,
+      "y": 1360
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "再来一局",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.5
+      },
+      "enabled": true,
+      "uid": "judge_again2",
+      "name": "到奖励页了吗②",
+      "x": 1260,
+      "y": 1360
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "再来一局",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.5
+      },
+      "enabled": true,
+      "uid": "judge_again3",
+      "name": "到奖励页了吗③",
+      "x": 1260,
+      "y": 1360
     }
   ],
   "edges": [
@@ -595,12 +612,6 @@
       "src": "judge_flow",
       "port": "case:1",
       "dst": "click_again",
-      "dst_side": "left"
-    },
-    {
-      "src": "click_continue",
-      "port": "out",
-      "dst": "delay_continue",
       "dst_side": "left"
     },
     {
@@ -730,60 +741,6 @@
       "dst_side": "left"
     },
     {
-      "src": "judge_flow",
-      "port": "case:2",
-      "dst": "judge_mvp",
-      "dst_side": "left"
-    },
-    {
-      "src": "judge_mvp",
-      "port": "true",
-      "dst": "click_br_mvp",
-      "dst_side": "left"
-    },
-    {
-      "src": "click_br_mvp",
-      "port": "out",
-      "dst": "delay_mvp",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_mvp",
-      "port": "out",
-      "dst": "click_continue",
-      "dst_side": "left"
-    },
-    {
-      "src": "judge_mvp",
-      "port": "false",
-      "dst": "click_continue",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_continue",
-      "port": "out",
-      "dst": "click_br_2",
-      "dst_side": "left"
-    },
-    {
-      "src": "click_br_2",
-      "port": "out",
-      "dst": "delay_br2",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_br2",
-      "port": "out",
-      "dst": "judge_again",
-      "dst_side": "left"
-    },
-    {
-      "src": "judge_again",
-      "port": "true",
-      "dst": "click_again",
-      "dst_side": "left"
-    },
-    {
       "src": "click_again",
       "port": "out",
       "dst": "delay_autoqueue",
@@ -796,7 +753,79 @@
       "dst_side": "left"
     },
     {
+      "src": "judge_flow",
+      "port": "case:2",
+      "dst": "click_continue",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_continue",
+      "port": "out",
+      "dst": "delay_continue",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_continue",
+      "port": "out",
+      "dst": "judge_again",
+      "dst_side": "left"
+    },
+    {
       "src": "judge_again",
+      "port": "true",
+      "dst": "click_again",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_again",
+      "port": "false",
+      "dst": "click_br_2",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_br_2",
+      "port": "out",
+      "dst": "delay_br2",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_br2",
+      "port": "out",
+      "dst": "judge_again2",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_again2",
+      "port": "true",
+      "dst": "click_again",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_again2",
+      "port": "false",
+      "dst": "click_br_3",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_br_3",
+      "port": "out",
+      "dst": "delay_br3",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_br3",
+      "port": "out",
+      "dst": "judge_again3",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_again3",
+      "port": "true",
+      "dst": "click_again",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_again3",
       "port": "false",
       "dst": "judge_in",
       "dst_side": "left"

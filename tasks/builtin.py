@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import logging
 import random
 
 from pynput.mouse import Button
@@ -23,6 +24,8 @@ from core.player import PlayOptions
 from core.events import (MacroEvent, MAX_BRANCH_CASES, MAX_GROUP_CONDITIONS,
                          PORT_OUT, PORT_TRUE, PORT_FALSE, PORT_ELSE, case_port)
 from core.keymap import name_to_key
+
+logger = logging.getLogger("tasks.builtin")
 
 # 全局热键名：回放录制事件时跳过，避免回放又触发热键
 HOTKEY_NAMES = {"F9", "F10", "F11"}
@@ -191,6 +194,10 @@ class MouseActionTask(BaseTask):
                        "（多半是前台窗口不是游戏，或窗口刚在切场景）。")
             return
         dx, dy = pt
+        if anchor != "absolute":
+            logger.info("鼠标：基准 %s + (%d,%d) → 实际点 (%d,%d)%s",
+                        anchor, int(p.get("x", 0)), int(p.get("y", 0)), dx, dy,
+                        ("（前台窗口 %s）" % (win,)) if win else "")
         m = ctx.player.mouse
         if p.get("action") == "move":
             ctx.player.glide_now((dx, dy))
