@@ -631,7 +631,15 @@ class AppController:
             if t == "keyboard":
                 return "按键 " + str(p.get("keys", "") or p.get("text", ""))
             if t == "mouse":
-                return "%s (%s,%s)" % (p.get("action", ""), p.get("x", 0), p.get("y", 0))
+                act = str(p.get("action", ""))
+                if act == "scroll":
+                    return "滚动 (%s,%s) 格 @(%s,%s)" % (
+                        p.get("scroll_dx", 0), p.get("scroll_dy", 0),
+                        p.get("x", 0), p.get("y", 0))
+                anchor = str(p.get("anchor", "absolute") or "absolute")
+                if anchor == "absolute":
+                    return "%s (%s,%s)" % (act, p.get("x", 0), p.get("y", 0))
+                return "%s %s+(%s,%s)" % (act, anchor, p.get("x", 0), p.get("y", 0))
         except Exception:  # noqa: BLE001  脏参数不该让状态上报失败
             return ""
         return ""

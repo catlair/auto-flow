@@ -161,7 +161,8 @@ class MouseActionTask(BaseTask):
     def __init__(self) -> None:
         super().__init__()
         self.params = [
-            ParamDef("action", "动作", "select", "click", ["click", "double_click", "move", "press", "release"]),
+            ParamDef("action", "动作", "select", "click",
+                     ["click", "double_click", "move", "press", "release", "scroll"]),
             ParamDef("button", "按键", "select", "left", ["left", "right", "middle"]),
             ParamDef("anchor", "坐标基准", "select", "absolute",
                      ["absolute", "base", "win_tl", "win_tr", "win_bl", "win_br"],
@@ -170,6 +171,9 @@ class MouseActionTask(BaseTask):
             ParamDef("x", "X", "int", 0),
             ParamDef("y", "Y", "int", 0),
             ParamDef("use_relative", "相对偏移", "bool", False, tooltip="以工作流基点为原点计算偏移（旧字段，等价于坐标基准=base）"),
+            ParamDef("scroll_dy", "滚动格数(Y)", "int", 0,
+                     tooltip="动作=scroll 时使用：正数向下滚，负数向上滚（一格 ≈ 3 行）"),
+            ParamDef("scroll_dx", "滚动格数(X)", "int", 0, tooltip="动作=scroll 时使用：横向滚动，一般留 0"),
         ]
 
     def run(self, ctx) -> None:
@@ -199,6 +203,12 @@ class MouseActionTask(BaseTask):
                         anchor, int(p.get("x", 0)), int(p.get("y", 0)), dx, dy,
                         ("（前台窗口 %s）" % (win,)) if win else "")
         m = ctx.player.mouse
+        if p.get("action") == "scroll":
+            # 滚轮事件落在**光标所在的那个窗口**上，所以先把光标挪到目标位置再滚，
+            # 否则滚的是别的地方（游戏里最常见的表现就是「滚了没反应」）。
+            ctx.player.glide_now((dx, dy))
+            ctx.player.scroll(int(p.get("scroll_dx", 0)), int(p.get("scroll_dy", 0)))
+            return
         if p.get("action") == "move":
             ctx.player.glide_now((dx, dy))
             return
