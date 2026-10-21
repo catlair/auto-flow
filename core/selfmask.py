@@ -166,3 +166,50 @@ def reset_cache() -> None:
     """测试用：清掉缓存与闸门。"""
     _cache.update(t=0.0, rects=[])
     _noted["done"] = False
+
+def front_window_from_windows(windows: list) -> tuple | None:
+    """窗口列表（前到后）→ 最前面那个**不属于我们**的窗口矩形 `(left, top, w, h)`。
+
+    给「按窗口定位点击」用：游戏窗口的右上角这类位置没有文字、也没法用模板稳定匹配
+    （背后是随时变化的游戏画面），只能按窗口几何算。取不到就返回 None，
+    调用方应当**跳过这次点击**而不是瞎点——点到别处比不点危险得多。
+    """
+    for w in windows or []:
+        if int(w.get("layer", 0) or 0) != 0:
+            continue
+        if float(w.get("alpha", 1.0) or 0.0) <= 0.01:
+            continue
+        wd, ht = int(w.get("w", 0) or 0), int(w.get("h", 0) or 0)
+        if wd <= 0 or ht <= 0:
+            continue
+        owner = str(w.get("owner", "") or "").lower()
+        if any(k in owner for k in _OWNER_KEYS):
+            continue
+        return (int(w.get("x", 0) or 0), int(w.get("y", 0) or 0), wd, ht)
+    return None
+
+
+def _window_list() -> list:
+    """当前屏上窗口列表（前到后，已转成普通 dict）；读不到返回空列表。"""
+    try:
+        import Quartz
+        opts = (Quartz.kCGWindowListOptionOnScreenOnly
+                | Quartz.kCGWindowListExcludeDesktopElements)
+        out = []
+        for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
+            b = w.get("kCGWindowBounds") or {}
+            out.append({
+                "layer": w.get("kCGWindowLayer", 0),
+                "alpha": w.get("kCGWindowAlpha", 1.0),
+                "owner": w.get("kCGWindowOwnerName", ""),
+                "x": b.get("X", 0), "y": b.get("Y", 0),
+                "w": b.get("Width", 0), "h": b.get("Height", 0),
+            })
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def front_window_rect() -> tuple | None:
+    """最前面那个不属于我们的窗口矩形（游戏窗口）；读不到返回 None。"""
+    return front_window_from_windows(_window_list())

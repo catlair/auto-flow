@@ -126,3 +126,38 @@ def test_minus_splits_into_at_most_four_pieces():
     pieces = selfmask._minus((0, 0, 100, 100), (25, 25, 50, 50))
     assert len(pieces) == 4
     assert sum(w * h for _, _, w, h in pieces) == 100 * 100 - 50 * 50
+
+
+# ---- 按窗口几何点击（图标类按钮没有文字，只能这么点）----
+
+
+def test_front_window_skips_our_own_windows():
+    win = selfmask.front_window_from_windows([
+        {"owner": "控制中心", "layer": 25, "x": 0, "y": 0, "w": 1280, "h": 29},
+        {"owner": "Auto Flow", "x": 90, "y": 34, "w": 1100, "h": 720},
+        {"owner": "燕云十六声", "x": 4, "y": 98, "w": 800, "h": 482},
+    ])
+    assert win == (4, 98, 800, 482), "应该拿到游戏窗口，而不是自己的窗口/菜单栏"
+
+
+def test_front_window_none_when_only_we_are_visible():
+    assert selfmask.front_window_from_windows([
+        {"owner": "Auto Flow", "x": 0, "y": 0, "w": 100, "h": 100},
+    ]) is None
+
+
+def test_resolve_anchor_point_variants():
+    from tasks.builtin import resolve_anchor_point
+    win = (100, 50, 800, 482)
+    # 右上角 + 偏移（游戏里「退出」图标就在这个位置：距右边 ~20、距顶 ~46）
+    assert resolve_anchor_point("win_tr", -20, 46, 0, 0, win) == (880, 96)
+    assert resolve_anchor_point("win_tl", 10, 20, 0, 0, win) == (110, 70)
+    assert resolve_anchor_point("base", 5, 6, 1000, 2000, win) == (1005, 2006)
+    assert resolve_anchor_point("absolute", 300, 400, 1000, 2000, win) == (300, 400)
+
+
+def test_window_anchor_falls_back_to_offset_when_window_unknown():
+    """读不到窗口时不能算出个「相对原点」的坐标去瞎点——这里退回纯偏移，
+    真正的保护在 MouseActionTask：拿不到窗口就跳过点击。"""
+    from tasks.builtin import resolve_anchor_point
+    assert resolve_anchor_point("win_tr", -20, 46, 0, 0, None) == (-20, 46)

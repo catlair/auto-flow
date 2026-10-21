@@ -160,14 +160,31 @@ class MouseActionTask(BaseTask):
         self.params = [
             ParamDef("action", "动作", "select", "click", ["click", "double_click", "move", "press", "release"]),
             ParamDef("button", "按键", "select", "left", ["left", "right", "middle"]),
-            ParamDef("x", "X", "int", 0, min_value=0),
-            ParamDef("y", "Y", "int", 0, min_value=0),
-            ParamDef("use_relative", "相对偏移", "bool", False, tooltip="以工作流基点为原点计算偏移"),
+            ParamDef("anchor", "坐标基准", "select", "absolute",
+                     ["absolute", "base", "win_tl", "win_tr"],
+                     tooltip="absolute: 屏幕绝对坐标 | base: 以基点为原点 | "
+                             "win_tl/win_tr: 以最前面那个窗口（游戏）的左上/右上角为原点"),
+            ParamDef("x", "X", "int", 0),
+            ParamDef("y", "Y", "int", 0),
+            ParamDef("use_relative", "相对偏移", "bool", False, tooltip="以工作流基点为原点计算偏移（旧字段，等价于坐标基准=base）"),
         ]
 
     def run(self, ctx) -> None:
         p = ctx.params
-        dx, dy = ctx.offset_for(bool(p.get("use_relative")), int(p.get("x", 0)), int(p.get("y", 0)))
+        anchor = str(p.get("anchor") or ("base" if p.get("use_relative") else "absolute"))
+        win = None
+        if anchor in ("win_tl", "win_tr"):
+            from core import selfmask
+            win = selfmask.front_window_rect()
+            if win is None:
+                from core.vision import _warn_once
+                _warn_once("no-front-window",
+                           "读不到前台窗口（游戏窗口）的位置，已跳过这次点击——"
+                           "请确认游戏窗口没被完全盖住、且屏幕录制权限正常。")
+                return
+        pt = resolve_anchor_point(anchor, int(p.get("x", 0)), int(p.get("y", 0)),
+                                  ctx.base_x, ctx.base_y, win)
+        dx, dy = pt
         m = ctx.player.mouse
         if p.get("action") == "move":
             ctx.player.glide_now((dx, dy))
@@ -367,6 +384,24 @@ class RecordReplayTask(BaseTask):
         ox = _int_or_0(seq[0]) if len(seq) > 0 else 0
         oy = _int_or_0(seq[1]) if len(seq) > 1 else 0
         return ox, oy, data["events"]
+
+
+def resolve_anchor_point(anchor: str, x: int, y: int,
+                          base_x: int = 0, base_y: int = 0,
+                          win: tuple | None = None) -> tuple:
+    """「坐标基准」+ 偏移 → 实际点击点。
+
+    `win` 是最前面那个窗口（游戏窗口）的 `(left, top, w, h)`；`win_tr` 用它的右上角。
+    为什么需要这个：游戏里有些按钮是**图标**（没有文字，OCR 读不到），背后又是随时
+    变化的游戏画面（模板匹配不稳）。这种位置只能按窗口几何算，窗口挪了也跟着走。
+    """
+    if win is not None and anchor == "win_tr":
+        return (int(win[0]) + int(win[2]) + x, int(win[1]) + y)
+    if win is not None and anchor == "win_tl":
+        return (int(win[0]) + x, int(win[1]) + y)
+    if anchor == "base":
+        return (int(base_x) + x, int(base_y) + y)
+    return (x, y)
 
 
 def _self_window_guard(x: int, y: int) -> bool:
