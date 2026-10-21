@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·觉障林 自动匹配循环 v7",
+  "name": "燕云·觉障林 自动匹配循环 v8",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +8,7 @@
     {
       "type": "note",
       "params": {
-        "text": "两级判定。第一级只看「对局内」高频状态（3 项）：确定退出吗 / 观战中 / 复活机会；第二级在「不是对局内」时才跑（6 项）：获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定。第一级判据必须只在对局 HUD 出现（用「存活」会被积分结算页的「存活分数」抢走）。观战中不能按 Esc（游戏屏蔽了），必须点右上角那个「退出」图标——它没有文字，所以用鼠标节点的「坐标基准=前台窗口右上角」，偏移 (-20, +46)；窗口挪了也跟着走。若点不中，微调 X/Y 即可（右边是负值）。"
+        "text": "两级判定 + 结算固定序列。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 8s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算流程是**固定的**：个人战况（继续）→ 加分界面（继续）→ 奖励界面（再来一局），所以一旦认出「继续」就按固定序列连点，不再逐屏判定（每屏判定要 6 次 OCR + 超时等待，慢得多）。MVP 局多一页，所以放了 3 次「继续」，多出来的那次找不到就跳过（0.8s）。观战中不能按 Esc，点右上角「退出」图标（前台窗口右上角 -20,+46）。"
       },
       "enabled": true,
       "uid": "note",
@@ -36,7 +36,7 @@
         "case3_kind": "文字存在",
         "case3_value": "复活机会",
         "confidence": 0.8,
-        "timeout_s": 15
+        "timeout_s": 8
       },
       "enabled": true,
       "uid": "judge_in",
@@ -111,12 +111,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 20000,
+        "ms": 8000,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "idle_inmatch",
-      "name": "对局中·空等 20s",
+      "name": "对局中·空等 8s",
       "x": 660,
       "y": 420
     },
@@ -150,8 +150,8 @@
       "params": {
         "text": "再来一局",
         "action": "click",
-        "timeout_s": 2,
-        "interval_ms": 300,
+        "timeout_s": 1.2,
+        "interval_ms": 250,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -170,7 +170,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 6000,
+        "ms": 5000,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -184,8 +184,8 @@
       "params": {
         "text": "继续",
         "action": "click",
-        "timeout_s": 2,
-        "interval_ms": 300,
+        "timeout_s": 0.8,
+        "interval_ms": 250,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -196,7 +196,7 @@
       },
       "enabled": true,
       "uid": "click_continue",
-      "name": "点「继续」（结算页）",
+      "name": "点「继续」①",
       "x": 660,
       "y": 640
     },
@@ -204,12 +204,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 4000,
+        "ms": 2500,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_continue",
-      "name": "等下一屏",
+      "name": "等个人战况",
       "x": 960,
       "y": 640
     },
@@ -446,6 +446,74 @@
       "name": "空转 0.2s",
       "x": 300,
       "y": 1180
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "继续",
+        "action": "click",
+        "timeout_s": 0.8,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_continue2",
+      "name": "点「继续」②",
+      "x": 660,
+      "y": 1180
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 2500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_continue2",
+      "name": "等加分界面",
+      "x": 960,
+      "y": 1180
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "继续",
+        "action": "click",
+        "timeout_s": 0.8,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_continue3",
+      "name": "点「继续」③（MVP 多一页）",
+      "x": 660,
+      "y": 1240
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 2500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_continue3",
+      "name": "等奖励界面",
+      "x": 960,
+      "y": 1240
     }
   ],
   "edges": [
@@ -476,7 +544,7 @@
     {
       "src": "judge_in",
       "port": "case:2",
-      "dst": "press_esc",
+      "dst": "click_exit",
       "dst_side": "left"
     },
     {
@@ -528,21 +596,9 @@
       "dst_side": "left"
     },
     {
-      "src": "judge_flow",
-      "port": "case:2",
-      "dst": "click_continue",
-      "dst_side": "left"
-    },
-    {
       "src": "click_continue",
       "port": "out",
       "dst": "delay_continue",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_continue",
-      "port": "out",
-      "dst": "judge_in",
       "dst_side": "left"
     },
     {
@@ -669,6 +725,42 @@
       "src": "idle",
       "port": "out",
       "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge_flow",
+      "port": "case:2",
+      "dst": "click_continue",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_continue",
+      "port": "out",
+      "dst": "click_continue2",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_continue2",
+      "port": "out",
+      "dst": "delay_continue2",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_continue2",
+      "port": "out",
+      "dst": "click_continue3",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_continue3",
+      "port": "out",
+      "dst": "delay_continue3",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_continue3",
+      "port": "out",
+      "dst": "click_again",
       "dst_side": "left"
     }
   ]
