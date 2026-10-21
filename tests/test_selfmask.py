@@ -154,6 +154,9 @@ def test_resolve_anchor_point_variants():
     assert resolve_anchor_point("win_tl", 10, 20, 0, 0, win) == (110, 70)
     assert resolve_anchor_point("base", 5, 6, 1000, 2000, win) == (1005, 2006)
     assert resolve_anchor_point("absolute", 300, 400, 1000, 2000, win) == (300, 400)
+    # 右下角：结算页的「Space 继续」就在窗口右下角往里约 (-29, -30)
+    assert resolve_anchor_point("win_br", -29, -30, 0, 0, win) == (871, 502)
+    assert resolve_anchor_point("win_bl", 29, -30, 0, 0, win) == (129, 502)
 
 
 def test_window_anchor_falls_back_to_offset_when_window_unknown():

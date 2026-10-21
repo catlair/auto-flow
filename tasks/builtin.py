@@ -161,9 +161,9 @@ class MouseActionTask(BaseTask):
             ParamDef("action", "动作", "select", "click", ["click", "double_click", "move", "press", "release"]),
             ParamDef("button", "按键", "select", "left", ["left", "right", "middle"]),
             ParamDef("anchor", "坐标基准", "select", "absolute",
-                     ["absolute", "base", "win_tl", "win_tr"],
+                     ["absolute", "base", "win_tl", "win_tr", "win_bl", "win_br"],
                      tooltip="absolute: 屏幕绝对坐标 | base: 以基点为原点 | "
-                             "win_tl/win_tr: 以最前面那个窗口（游戏）的左上/右上角为原点"),
+                             "win_tl/win_tr/win_bl/win_br: 以最前面那个窗口（游戏）的左上/右上/左下/右下角为原点"),
             ParamDef("x", "X", "int", 0),
             ParamDef("y", "Y", "int", 0),
             ParamDef("use_relative", "相对偏移", "bool", False, tooltip="以工作流基点为原点计算偏移（旧字段，等价于坐标基准=base）"),
@@ -173,7 +173,7 @@ class MouseActionTask(BaseTask):
         p = ctx.params
         anchor = str(p.get("anchor") or ("base" if p.get("use_relative") else "absolute"))
         win = None
-        if anchor in ("win_tl", "win_tr"):
+        if anchor in ("win_tl", "win_tr", "win_bl", "win_br"):
             from core import selfmask
             win = selfmask.front_window_rect()
             if win is None:
@@ -399,6 +399,11 @@ def resolve_anchor_point(anchor: str, x: int, y: int,
         return (int(win[0]) + int(win[2]) + x, int(win[1]) + y)
     if win is not None and anchor == "win_tl":
         return (int(win[0]) + x, int(win[1]) + y)
+    if win is not None and anchor == "win_br":
+        # 右下角：x/y 一般是负数（往左上偏）
+        return (int(win[0]) + int(win[2]) + x, int(win[1]) + int(win[3]) + y)
+    if win is not None and anchor == "win_bl":
+        return (int(win[0]) + x, int(win[1]) + int(win[3]) + y)
     if anchor == "base":
         return (int(base_x) + x, int(base_y) + y)
     return (x, y)
