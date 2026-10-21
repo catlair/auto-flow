@@ -146,6 +146,23 @@ def test_front_window_none_when_only_we_are_visible():
     ]) is None
 
 
+def test_front_window_ignores_tiny_overlay_windows():
+    """结算动画期间最前面会冒出一个贴在 (0,0) 的小窗口——按它算坐标会点到苹果菜单上。"""
+    win = selfmask.front_window_from_windows([
+        {"owner": "燕云十六声", "x": 0, "y": 0, "w": 12, "h": 12},     # 过渡遮罩
+        {"owner": "燕云十六声", "x": 4, "y": 98, "w": 800, "h": 482},  # 真窗口
+    ])
+    assert win == (4, 98, 800, 482)
+
+
+def test_front_window_ignores_system_panels():
+    win = selfmask.front_window_from_windows([
+        {"owner": "控制中心", "x": 0, "y": 0, "w": 400, "h": 300},
+        {"owner": "Auto Flow", "x": 0, "y": 0, "w": 1100, "h": 700},
+    ])
+    assert win is None, "系统面板/自己的窗口都不能当锚点"
+
+
 def test_resolve_anchor_point_variants():
     from tasks.builtin import resolve_anchor_point
     win = (100, 50, 800, 482)
@@ -157,6 +174,16 @@ def test_resolve_anchor_point_variants():
     # 右下角：结算页的「Space 继续」就在窗口右下角往里约 (-29, -30)
     assert resolve_anchor_point("win_br", -29, -30, 0, 0, win) == (871, 502)
     assert resolve_anchor_point("win_bl", 29, -30, 0, 0, win) == (129, 502)
+
+
+def test_anchor_point_outside_window_is_refused():
+    """算出来的点落在窗口外 → 返回 None（调用方跳过点击，绝不瞎点）。"""
+    from tasks.builtin import resolve_anchor_point
+    win = (4, 98, 800, 482)
+    assert resolve_anchor_point("win_br", -2000, -30, 0, 0, win) is None
+    assert resolve_anchor_point("win_tr", -5000, 46, 0, 0, win) is None
+    # 窗口内就正常
+    assert resolve_anchor_point("win_br", -29, -30, 0, 0, win) == (775, 550)
 
 
 def test_window_anchor_falls_back_to_offset_when_window_unknown():

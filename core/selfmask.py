@@ -167,6 +167,16 @@ def reset_cache() -> None:
     _cache.update(t=0.0, rects=[])
     _noted["done"] = False
 
+# 「这个窗口像不像游戏窗口」的最小尺寸。真机踩过：结算动画期间最前面会出现一个
+# 贴在 (0,0) 的小窗口（过渡/遮罩层），按它算「右下角」就把点击送到了屏幕左上角的
+# 苹果菜单上——把系统菜单点开了。所以太小的一律不认。
+_MIN_FRONT_W = 320
+_MIN_FRONT_H = 240
+# 系统自己的面板/悬浮层，即使层号是 0 也不该当锚点。
+_NOT_GAME_OWNERS = ("window server", "程序坞", "dock", "控制中心", "通知中心",
+                    "spotlight", "系统设置", "control center")
+
+
 def front_window_from_windows(windows: list) -> tuple | None:
     """窗口列表（前到后）→ 最前面那个**不属于我们**的窗口矩形 `(left, top, w, h)`。
 
@@ -182,8 +192,12 @@ def front_window_from_windows(windows: list) -> tuple | None:
         wd, ht = int(w.get("w", 0) or 0), int(w.get("h", 0) or 0)
         if wd <= 0 or ht <= 0:
             continue
+        if wd < _MIN_FRONT_W or ht < _MIN_FRONT_H:
+            continue
         owner = str(w.get("owner", "") or "").lower()
         if any(k in owner for k in _OWNER_KEYS):
+            continue
+        if any(k in owner for k in _NOT_GAME_OWNERS):
             continue
         return (int(w.get("x", 0) or 0), int(w.get("y", 0) or 0), wd, ht)
     return None

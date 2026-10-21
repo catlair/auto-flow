@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·觉障林 自动匹配循环 v10",
+  "name": "燕云·觉障林 自动匹配循环 v11",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +8,7 @@
     {
       "type": "note",
       "params": {
-        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算页序固定：个人战况 → 加分 → 奖励（MVP 局前面多一页）。认出「继续」后不再逐屏判定：按窗口右下角 (-29,-30) 盲点「Space 继续」，先花 0.8s 判一次是不是 MVP 页（多一页就多按一次），然后到奖励页点「再来一局」——它会**自动匹配**，不用回大厅点开始匹配。任何一步对不上就回第一级的完整界面检查兜底。复活点界面点右下角「Space 复活」（免费，和结算页「继续」同一位置），复活继续打；复活机会用完才会直接进观战。观战中不能按 Esc，只能点右上角「退出」图标（右上角 -20,+46）→「确定退出吗」弹窗 → 第一级 case1 点「确认」。"
+        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算页序固定（个人战况 → 加分 → 奖励，MVP 局多一页），认出「继续」后按窗口右下角 (-29,-30) 盲点，只用两个「条件判断」确认页数对不对；对不上就回第一级完整检查兜底。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」（-20,+46）。注意结束动画约 4s，点完「确认」要等 5s 再判定，否则会在动画中途瞎操作。"
       },
       "enabled": true,
       "uid": "note",
@@ -69,12 +69,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2500,
+        "ms": 5000,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_confirm",
-      "name": "等结算",
+      "name": "等结算页出现（结束动画约 4s）",
       "x": 960,
       "y": 180
     },
@@ -98,12 +98,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1500,
+        "ms": 2500,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_esc",
-      "name": "等弹窗出现",
+      "name": "等退出确认弹窗（有动画）",
       "x": 960,
       "y": 300
     },
@@ -215,7 +215,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2500,
+        "ms": 3000,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -425,11 +425,13 @@
       "y": 1180
     },
     {
-      "type": "branch",
+      "type": "condition",
       "params": {
-        "case_count": 1,
-        "case1_kind": "文字存在",
-        "case1_value": "全场最佳",
+        "check": "文字存在",
+        "image_path": "",
+        "text": "全场最佳",
+        "model_path": "",
+        "label": "",
         "confidence": 0.8,
         "timeout_s": 0.8
       },
@@ -498,11 +500,13 @@
       "y": 1360
     },
     {
-      "type": "branch",
+      "type": "condition",
       "params": {
-        "case_count": 1,
-        "case1_kind": "文字存在",
-        "case1_value": "再来一局",
+        "check": "文字存在",
+        "image_path": "",
+        "text": "再来一局",
+        "model_path": "",
+        "label": "",
         "confidence": 0.8,
         "timeout_s": 1.2
       },
@@ -733,7 +737,7 @@
     },
     {
       "src": "judge_mvp",
-      "port": "case:1",
+      "port": "true",
       "dst": "click_br_mvp",
       "dst_side": "left"
     },
@@ -751,7 +755,7 @@
     },
     {
       "src": "judge_mvp",
-      "port": "else",
+      "port": "false",
       "dst": "click_continue",
       "dst_side": "left"
     },
@@ -775,7 +779,7 @@
     },
     {
       "src": "judge_again",
-      "port": "case:1",
+      "port": "true",
       "dst": "click_again",
       "dst_side": "left"
     },
@@ -793,7 +797,7 @@
     },
     {
       "src": "judge_again",
-      "port": "else",
+      "port": "false",
       "dst": "judge_in",
       "dst_side": "left"
     }

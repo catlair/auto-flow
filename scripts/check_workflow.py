@@ -20,7 +20,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.events import PORT_ELSE, PORT_OUT, Workflow, case_port  # noqa: E402
+from core.events import (  # noqa: E402
+    PORT_ELSE,
+    PORT_FALSE,
+    PORT_OUT,
+    PORT_TRUE,
+    Workflow,
+    case_port,
+)
 
 
 def check(path: str) -> list[str]:
@@ -47,6 +54,8 @@ def check(path: str) -> list[str]:
         if nd.type == "branch":
             n = int(nd.params.get("case_count", 0) or 0)
             return [case_port(i) for i in range(1, n + 1)] + [PORT_ELSE]
+        if nd.type in ("condition", "condition_group"):
+            return [PORT_TRUE, PORT_FALSE]
         if nd.type == "end":
             return []
         return [PORT_OUT]

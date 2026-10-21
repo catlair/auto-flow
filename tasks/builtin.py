@@ -184,6 +184,12 @@ class MouseActionTask(BaseTask):
                 return
         pt = resolve_anchor_point(anchor, int(p.get("x", 0)), int(p.get("y", 0)),
                                   ctx.base_x, ctx.base_y, win)
+        if pt is None:
+            from core.vision import _warn_once
+            _warn_once("anchor-outside-window",
+                       "按窗口几何算出来的点击点落在窗口外面，已跳过这次点击"
+                       "（多半是前台窗口不是游戏，或窗口刚在切场景）。")
+            return
         dx, dy = pt
         m = ctx.player.mouse
         if p.get("action") == "move":
@@ -388,22 +394,33 @@ class RecordReplayTask(BaseTask):
 
 def resolve_anchor_point(anchor: str, x: int, y: int,
                           base_x: int = 0, base_y: int = 0,
-                          win: tuple | None = None) -> tuple:
-    """「坐标基准」+ 偏移 → 实际点击点。
+                          win: tuple | None = None) -> tuple | None:
+    """「坐标基准」+ 偏移 → 实际点击点；**算出来的点落在窗口外就返回 None**。
 
-    `win` 是最前面那个窗口（游戏窗口）的 `(left, top, w, h)`；`win_tr` 用它的右上角。
+    `win` 是最前面那个窗口（游戏窗口）的 `(left, top, w, h)`；`win_tl/tr/bl/br` 用它
+    对应的角当原点。
+
     为什么需要这个：游戏里有些按钮是**图标**（没有文字，OCR 读不到），背后又是随时
     变化的游戏画面（模板匹配不稳）。这种位置只能按窗口几何算，窗口挪了也跟着走。
+
+    返回 None 的那条：真机事故——结算动画期间最前面冒出一个贴在 (0,0) 的小窗口，
+    按它算「右下角」得到负坐标，点击被钳到 (0,0)，**把屏幕左上角的苹果菜单点开了**。
+    所以窗口太小不认（见 selfmask._MIN_FRONT_W），并且这里再挡一层：
+    算出来的点只要不在窗口矩形里，就不点。
     """
-    if win is not None and anchor == "win_tr":
-        return (int(win[0]) + int(win[2]) + x, int(win[1]) + y)
-    if win is not None and anchor == "win_tl":
-        return (int(win[0]) + x, int(win[1]) + y)
-    if win is not None and anchor == "win_br":
-        # 右下角：x/y 一般是负数（往左上偏）
-        return (int(win[0]) + int(win[2]) + x, int(win[1]) + int(win[3]) + y)
-    if win is not None and anchor == "win_bl":
-        return (int(win[0]) + x, int(win[1]) + int(win[3]) + y)
+    if win is not None and anchor in ("win_tl", "win_tr", "win_bl", "win_br"):
+        left, top, w, h = int(win[0]), int(win[1]), int(win[2]), int(win[3])
+        if anchor == "win_tr":
+            px, py = left + w + x, top + y
+        elif anchor == "win_bl":
+            px, py = left + x, top + h + y
+        elif anchor == "win_br":
+            px, py = left + w + x, top + h + y
+        else:
+            px, py = left + x, top + y
+        if not (left <= px <= left + w and top <= py <= top + h):
+            return None
+        return (px, py)
     if anchor == "base":
         return (int(base_x) + x, int(base_y) + y)
     return (x, y)
