@@ -107,3 +107,29 @@ export function formatDiagnostics(d: DiagnosticsData): string {
   }
   return lines.join("\n");
 }
+
+/**
+ * 「看屏幕」结果的纯文本格式：窗口矩形 + 每一段识别到的文字及其坐标。
+ *
+ * 为什么要有：判据不成立时只有两种可能——没识别到，或被搜索范围滤掉了——
+ * 而用户那边看起来都是「明明在屏幕上」。把坐标摊开，一次就能分清。
+ */
+export function formatScreenDump(r: any): string {
+  const lines: string[] = [];
+  const w = r?.window;
+  lines.push(w ? `窗口  (${w[0]},${w[1]}) ${w[2]}x${w[3]}` : "窗口  （读不到）");
+  const own = r?.ownRects ?? [];
+  if (own.length) {
+    lines.push(`自身窗口 ${own.map((x: number[]) => `(${x.join(",")})`).join(" ")}`);
+  }
+  const hits = r?.hits ?? [];
+  lines.push(`识别 ${hits.length} 段，耗时 ${r?.elapsedMs ?? "?"}ms`);
+  lines.push("");
+  for (const h of hits) {
+    const pct = w
+      ? ` ${Math.round(((h.x - w[0]) / w[2]) * 100)}%/${Math.round(((h.y - w[1]) / w[3]) * 100)}%`
+      : "";
+    lines.push(`(${h.x},${h.y}) ${h.w}x${h.h}${pct}  ${h.text}`);
+  }
+  return lines.join("\n");
+}

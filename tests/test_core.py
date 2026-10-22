@@ -2614,3 +2614,77 @@ def test_record_to_node_keeps_text_events():
     ctrl.shutdown()
 
 
+
+
+def test_find_texts_splits_a_merged_box(monkeypatch):
+    """Vision 会把同一行内容相同的几段合并成一个框，按出现次数等分拆开。
+
+    真机案例：三张悬赏卡写着同样的「解决诬陷…」，识别出来只有一个框，
+    框中心正好落在第二张卡上，于是「点第一个」永远点到第二张。
+    """
+    from core import ocr
+
+    monkeypatch.setattr(ocr, "grab_region_bgr", lambda region=None: object())
+    merged = ocr.TextHit(text="解决诬陷" * 3, x=750, y=400, confidence=0.9, w=900, h=40)
+    monkeypatch.setattr(ocr, "recognize_texts", lambda cap, languages=None: [merged])
+
+    hits = ocr.find_texts("解决诬陷")
+    assert len(hits) == 3
+    # 左边界 300，每段宽 300，中心依次是 450 / 750 / 1050
+    assert [h.x for h in hits] == [450, 750, 1050]
+    assert all(h.w == 300 for h in hits)
+    assert all(h.y == 400 for h in hits)
+
+
+def test_find_texts_keeps_single_hit_untouched(monkeypatch):
+    from core import ocr
+
+    monkeypatch.setattr(ocr, "grab_region_bgr", lambda region=None: object())
+    one = ocr.TextHit(text="解决诬陷「被诬陷偷猎动物」", x=300, y=400, confidence=0.9, w=340, h=40)
+    monkeypatch.setattr(ocr, "recognize_texts", lambda cap, languages=None: [one])
+
+    hits = ocr.find_texts("解决诬陷")
+    assert len(hits) == 1
+    assert (hits[0].x, hits[0].w) == (300, 340)
+
+
+def test_workflow_reload_reads_from_disk(tmp_path):
+    """重新加载：改完磁盘上的文件，不用另存新的一条。"""
+    import json
+
+    from rpc.controller import AppController
+
+    path = tmp_path / "wf.json"
+    ctrl = AppController()
+    ctrl.workflow.name = "旧名字"
+    ctrl.workflow_save(str(path))
+    ctrl.workflow.name = "内存里改过的"
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["name"] = "磁盘上改过的"
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    ctrl.workflow_reload()
+    assert ctrl.workflow.name == "磁盘上改过的"
+    assert ctrl.workflow_dirty() is False
+
+
+def test_workflow_reload_refuses_unsaved_changes(tmp_path):
+    from rpc.controller import AppController, ControllerError
+
+    path = tmp_path / "wf2.json"
+    ctrl = AppController()
+    ctrl.workflow_save(str(path))
+    # 走接口改才会让版本号前进（直接改属性不广播，脏标记不会亮）
+    ctrl.workflow_update({"name": "改过但没保存"})
+
+    try:
+        ctrl.workflow_reload()
+    except ControllerError as e:
+        assert e.code == -32006
+    else:
+        raise AssertionError("有未保存改动时必须拒绝")
+
+    # force 才丢弃
+    ctrl.workflow_reload(True)
+    assert ctrl.workflow_dirty() is False

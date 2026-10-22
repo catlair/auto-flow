@@ -14,7 +14,16 @@ import type { RecMeta } from "@/flow/recording";
 import { normalizeMetas, wfExportName } from "@/flow/workflow";
 import type { WorkflowMeta } from "@/flow/workflow";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
+import {
+  LOG_BACKLOG_EVENT,
+  LOG_CAP,
+  LOG_EVENT,
+  LOG_HELLO_EVENT,
+  LogRing,
+  notificationToLine,
+} from "@/logwin/format";
+import type { LogLevel, LogLine } from "@/logwin/format";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 export const PROTOCOL_VERSION = 1;
@@ -30,6 +39,15 @@ export const RECORD_BUFFER_LIMIT = 5000;
  * 这里只是兜底，防止长跑会话里无限增长。
  */
 export const BACKEND_NOTE_LIMIT = 20;
+
+/**
+ * 置顶日志窗的历史缓冲（主窗留一份，开窗时补给它）。
+ *
+ * 放在**模块级**而不是 Pinia state：界面不渲染它，进 state 只会让每条日志都触发一次
+ * 响应式更新和 `$subscribe`——而 `$subscribe` 里跑的是托盘同步，录制中每秒几十次
+ * 状态变更，白白放大成本。
+ */
+const logRing = new LogRing(LOG_CAP);
 
 /** 后端 `log.warning` 通知的一条记录。 */
 export type BackendNote = {
@@ -192,6 +210,11 @@ export const useAppStore = defineStore("app", {
      * 只有真的翻转了才推。
      */
     trayRecording: null as boolean | null,
+    /**
+     * 置顶日志窗是否显示。**真源在 Rust**（窗口由它创建/隐藏），这里只镜像：
+     * 前端自己记的话，日志窗的「×」和系统 ⌘W 这两条路会让按钮永远停在「已打开」。
+     */
+    logWinVisible: false as boolean,
   }),
   getters: {
     selectedNode(state) {
@@ -252,6 +275,37 @@ export const useAppStore = defineStore("app", {
     },
   },
   actions: {
+    /**
+     * 推一行给置顶日志窗：进历史缓冲 + 经 Tauri 事件送过去。
+     *
+     * 传 `null` 是合法的（`notificationToLine` 对不关心的通知返回 null），
+     * 这样调用点不必先判空。
+     */
+    pushLog(line: LogLine | null) {
+      if (!line) return;
+      logRing.push(line);
+      try {
+        void emit(LOG_EVENT, line).catch(() => {});
+      } catch {
+        /* 无 Tauri 环境：日志窗本来也不存在，忽略 */
+      }
+    },
+    /** 前端自己产生的一行（开始运行 / 断连 / 恢复…），与后端通知同一个缓冲。 */
+    noteLog(level: LogLevel, text: string, kind = "front") {
+      this.pushLog({ t: Date.now(), level, kind, text });
+    },
+    /**
+     * 开/关置顶日志窗。窗口是 Rust 建的，这里只拿结果镜像状态。
+     * 失败要报出来：以前这种「点了没反应」的入口只能靠猜。
+     */
+    async toggleLogWin() {
+      try {
+        this.logWinVisible = !!(await invoke("af_logwin_toggle"));
+      } catch (e) {
+        this.setBanner("打开日志窗失败：" + errMessage(e), "error");
+      }
+    },
+
     setBanner(msg: string, kind: "ok" | "warn" | "error" = "error") {
       this.banner = msg;
       this.bannerKind = kind;
@@ -291,6 +345,9 @@ export const useAppStore = defineStore("app", {
           // Rust 会在 sidecar 崩溃后重启它，而新进程的工作流是空的。
           // 不重新握手的话界面会继续显示旧数据——看起来一切正常，实际后端已换人。
           if (!wasConnected) {
+            // 判据用 `rpcDownAt` 而不是 `wasConnected`：这里**永远**处在
+            // `!wasConnected` 分支里，用它只会得到「已连接」。
+            this.noteLog("ok", this.rpcDownAt ? "后端已恢复" : "后端已连接");
             // 断线过又回来：明确告诉用户「已恢复」。此前只是把横幅清掉，
             // 用户可能根本没察觉后端崩过一次（而它其实已经重启、状态被重置）。
             if (this.rpcDownAt) {
@@ -310,6 +367,7 @@ export const useAppStore = defineStore("app", {
           // detail 可能含查找路径 + sidecar 最近 stderr：横幅只显示首行，全文留给
           // console 与诊断面板（横幅放不下，且换行会撑坏布局）。
           const first = (detail || "").split("\n")[0].trim();
+          this.noteLog("error", "后端断开：" + (first || "原因未知（正在重连）"));
           this.setBanner(
             first
               ? `后端 sidecar 断开，正在重连…（${first}）`
@@ -333,6 +391,26 @@ export const useAppStore = defineStore("app", {
         });
       } catch (e) {
         console.warn("[tray] 托盘事件监听未装定:", errMessage(e));
+      }
+      // 置顶日志窗的两条接线：
+      //   ① 它挂载时会喊一声 `af_log_hello`，我们把历史日志一次性补给它——Tauri 事件
+      //      不缓存、不重放，晚开的窗口否则只能从"下一行"开始看；
+      //   ② 开/关状态由 Rust 广播（三个入口：主窗按钮、日志窗的 ×、⌘W），
+      //      再加一次主动查询兜住"事件发在前端注册之前"的竞态。
+      try {
+        await listen(LOG_HELLO_EVENT, () => {
+          try {
+            void emit(LOG_BACKLOG_EVENT, logRing.snapshot()).catch(() => {});
+          } catch {
+            /* 无 Tauri 环境：忽略 */
+          }
+        });
+        await listen<boolean>("af_logwin_visible", (e) => {
+          this.logWinVisible = !!e.payload;
+        });
+        this.logWinVisible = !!(await invoke("af_logwin_is_visible"));
+      } catch (e) {
+        console.warn("[logwin] 置顶日志窗接线未装定:", errMessage(e));
       }
       // 录制态变化就推给托盘。用 `$subscribe` 而不是在六七个改 `recording` 的
       // 地方各调一次——漏一处就是「托盘角标不消失」，而这种漏很难被注意到。
@@ -491,6 +569,9 @@ export const useAppStore = defineStore("app", {
       }
     },
     _handleNotification(n: JsonRpcNotification) {
+      // 顺带推一行给置顶日志窗。**只在这一处**做转换（见 logwin/format.ts）：
+      // 每个 case 里各写一遍的话，漏一处就是「日志窗少一条」，而这种漏很难被注意到。
+      this.pushLog(notificationToLine(n as any));
       switch (n.method) {
         case "workflow.changed":
           // 与 workflow.current 响应不同：通知 params 直接是工作流摘要。
@@ -821,6 +902,13 @@ export const useAppStore = defineStore("app", {
       this.workflowLibDir = String(r?.dir ?? "");
       if (typeof r?.dirty === "boolean") this.workflowDirty = r.dirty;
     },
+    /** 从磁盘重新读取当前这份（改完 JSON 不用另存新的一条）。 */
+    async reloadWorkflow(force = false) {
+      const cur = await rpc.request("workflow.reload", { force });
+      this.applyCurrent(cur);
+      this.selectedIndex = -1;
+    },
+
     /** 打开库里的一条。未保存的改动会被后端拦下（-32006），`force` 才丢弃。 */
     async openWorkflowFromLib(id: string, force = false) {
       const cur = await rpc.request("workflow.lib.open", { id, force });
@@ -881,6 +969,7 @@ export const useAppStore = defineStore("app", {
     async toggleRun() {
       if (this.running) {
         // 停止是异步请求；正常等 run.finished 再退出运行态。
+        this.noteLog("warn", "■ 请求停止运行");
         const r = await rpc.request("run.stop");
         // 兜底：后端已结束（通知可能已丢）时不会有 run.finished，用响应直接收敛。
         if (r && r.running === false) this.running = false;
@@ -893,6 +982,7 @@ export const useAppStore = defineStore("app", {
         this.runNodeDetail = "";
         this.runTrace = [];
         this.runProgress = { done: 0, total: 0 };
+        this.noteLog("info", "▶ 开始运行");
         try {
           await rpc.request("run.start", { base_x: this.base.x, base_y: this.base.y });
         } catch (e) {

@@ -279,6 +279,30 @@ def _diagnose() -> dict:
     }
 
 
+def _screen_dump(_p=None) -> dict:
+    """把「现在屏幕上有什么」一次性抓出来：窗口矩形 + 全部 OCR 文本及坐标。
+
+    为什么要有它：调试工作流最费时的不是改，而是**不知道屏幕被识别成了什么**。
+    判据不成立时只有两种可能——没识别到，或者被搜索范围滤掉了——而这两种在
+    用户那边看起来都是「明明在屏幕上」。有了这份 dump，一次就能分清。
+    """
+    import time as _time
+    from core import ocr, selfmask
+    t0 = _time.monotonic()
+    win = selfmask.front_window_rect()
+    hits = ocr.find_texts("")          # target 为空串 = 全都要
+    ms = int((_time.monotonic() - t0) * 1000)
+    rows = [{"text": h.text, "x": h.x, "y": h.y, "w": h.w, "h": h.h,
+             "confidence": round(float(h.confidence), 3)} for h in hits]
+    logger.info("屏幕诊断：窗口 %s，识别 %d 段，耗时 %dms", win, len(rows), ms)
+    for r in rows:
+        logger.info("  屏幕诊断 | (%d,%d) %dx%d | %s",
+                    r["x"], r["y"], r["w"], r["h"], r["text"])
+    return {"window": list(win) if win else None,
+            "ownRects": [list(x) for x in selfmask.own_window_rects()],
+            "hits": rows, "elapsedMs": ms}
+
+
 _PANEL_HANDLERS = {
     "accessibility": permissions.open_accessibility_settings,
     "input_monitoring": permissions.open_input_monitoring_settings,
@@ -312,10 +336,14 @@ _HANDLERS = {
     "app.diagnose": lambda _p: (True, _diagnose()),
     "app.openPermissionSettings": lambda p: (True, _open_settings((p or {}).get("panel"))),
     "app.requestPermissions": lambda _p: (True, _request_permissions()),
+    # 「看屏幕」：窗口矩形 + 全屏 OCR 全部文本及坐标（排查判据用）
+    "app.screenDump": lambda p: (True, _screen_dump(p)),
     # --- 工作流真源（§9/§10，P1-1） ---
     "workflow.current": _ctl(lambda p: _CTRL.workflow_current()),
     "workflow.load": _ctl(lambda p: _CTRL.workflow_load(p.get("path", ""))),
     "workflow.save": _ctl(lambda p: _CTRL.workflow_save(p.get("path"))),
+    # 从磁盘重新读当前这份（改完 JSON 不用再发新版本）
+    "workflow.reload": _ctl(lambda p: _CTRL.workflow_reload(bool(p.get("force", False)))),
     # force 只在用户**已经确认过**「丢弃未保存的改动」时才是 true。缺省 false，
     # 于是漏传的调用方会拿到 -32006 而不是静默丢掉一张刚连好的图。
     "workflow.new": _ctl(lambda p: _CTRL.workflow_new(bool(p.get("force", False)))),

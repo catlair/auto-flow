@@ -49,6 +49,37 @@ async function onNew() {
   MessagePlugin.success("已新建工作流");
 }
 
+/**
+ * 从磁盘重新读取当前这份。
+ *
+ * 改延迟、挪坐标是编辑器的日常，但文件的真源在磁盘上、App 不会自动重读——
+ * 以前每调一个参数都得「另存为新的一条」再切过去，两天攒了二十个版本。
+ * 有未保存的改动时后端会拦（-32006），这里弹确认框再 force。
+ */
+async function onReload() {
+  if (!store.workflowPath) {
+    MessagePlugin.info("当前工作流还没保存过，没有可重新读取的文件");
+    return;
+  }
+  try {
+    await store.reloadWorkflow();
+    MessagePlugin.success("已从磁盘重新读取");
+  } catch (e) {
+    if (!isUnsaved(e)) {
+      MessagePlugin.error("重新加载失败：" + errMessage(e));
+      return;
+    }
+    const ok = await confirmDanger({
+      header: "有未保存的改动",
+      body: `「${store.workflow.name}」有未保存的改动，重新加载会丢弃它们。`,
+      confirmBtn: "丢弃并重新加载",
+    });
+    if (!ok) return;
+    await store.reloadWorkflow(true);
+    MessagePlugin.success("已从磁盘重新读取");
+  }
+}
+
 async function onSave() {
   try {
     const first = !store.workflowLibCurrent;
@@ -65,6 +96,7 @@ async function onSave() {
     <t-button size="small" variant="text" @click="onNew">新建</t-button>
     <t-button size="small" variant="text" @click="libVisible = true">工作流库</t-button>
     <t-button size="small" variant="text" @click="onSave">保存</t-button>
+    <t-button size="small" variant="text" title="改完磁盘上的 JSON 后点这里，不用另存新的一条" @click="onReload">重新加载</t-button>
     <!--
       名字 + 未保存标记。标记是名字后面的「●」而不是一个独立的小圆点：
       6 像素的点在浅色标题栏上很容易被当成渲染瑕疵，而用户读的是这行字。

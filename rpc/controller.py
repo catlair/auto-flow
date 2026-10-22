@@ -228,6 +228,20 @@ class AppController:
         self._mark_saved()      # 刚从磁盘读上来的，此刻是干净的
         return self.workflow_current()
 
+    def workflow_reload(self, force: bool = False) -> dict:
+        """从磁盘重新读取当前工作流。
+
+        为什么需要：改一个延迟、挪一个坐标本是编辑器的日常，但这份文件的真源在磁盘上、
+        App 不会自动重读，于是每次微调都要「发布成新的一条」——真机上两天就攒了二十个
+        版本号，还容易点到旧的那条跑。有未保存的改动时照样拦（-32006），force 才丢弃。
+        """
+        if not self.path:
+            raise ControllerError(-32002, "当前工作流还没有保存路径")
+        if self.workflow_dirty() and not force:
+            raise ControllerError(-32006, "unsaved_changes",
+                                  {"path": self.path, "name": self.workflow.name})
+        return self.workflow_load(self.path)
+
     def workflow_save(self, path: Optional[str] = None) -> dict:
         """保存当前工作流。
 

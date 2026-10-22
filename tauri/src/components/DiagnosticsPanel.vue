@@ -9,7 +9,8 @@
 import { computed, ref } from "vue";
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
-import { formatDiagnostics, fmtTime } from "@/utils/diagnostics";
+import { formatDiagnostics, formatScreenDump, fmtTime } from "@/utils/diagnostics";
+import { rpc, errMessage } from "@/rpc/client";
 
 const props = defineProps<{ visible: boolean }>();
 const emit = defineEmits<{ (e: "update:visible", v: boolean): void }>();
@@ -41,6 +42,37 @@ async function copyReport() {
   }
 }
 
+/**
+ * 「看屏幕」：抓一次当前屏幕的 OCR 全文 + 坐标。
+ *
+ * 这是唯一一个**必须调后端**的功能（其余诊断都取自前端已有状态），所以只在用户
+ * 主动点的时候调；后端挂了就报错，不影响面板本身打开。
+ */
+const screenText = ref("");
+const screenBusy = ref(false);
+
+async function dumpScreen() {
+  if (screenBusy.value) return;
+  screenBusy.value = true;
+  try {
+    const r = await rpc.request("app.screenDump", {});
+    screenText.value = formatScreenDump(r);
+  } catch (e) {
+    MessagePlugin.error("看屏幕失败：" + errMessage(e));
+  } finally {
+    screenBusy.value = false;
+  }
+}
+
+async function copyScreen() {
+  try {
+    await navigator.clipboard.writeText(screenText.value);
+    MessagePlugin.success("已复制屏幕识别结果");
+  } catch {
+    MessagePlugin.info("复制失败，请手动选中");
+  }
+}
+
 function close() {
   emit("update:visible", false);
 }
@@ -57,8 +89,19 @@ function close() {
     <div class="af-diag">
       <div class="af-diag-actions">
         <t-button size="small" variant="outline" @click="copyReport">复制全部</t-button>
+        <t-button size="small" variant="outline" :loading="screenBusy" @click="dumpScreen">
+          看屏幕
+        </t-button>
         <span style="flex: 1" />
         <t-button size="small" variant="text" @click="close">关闭</t-button>
+      </div>
+
+      <div v-if="screenText" class="af-block" style="margin-bottom: 10px">
+        <div class="af-block-head">
+          屏幕识别结果（判据不成立时看这里：没识别到 / 被搜索范围滤掉）
+          <button class="af-link" style="margin-left: 6px" @click="copyScreen">复制</button>
+        </div>
+        <pre style="max-height: 220px">{{ screenText }}</pre>
       </div>
 
       <div :class="['af-conn-row', d.connected ? 'ok' : 'bad']">

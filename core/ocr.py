@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,6 +16,8 @@ import numpy as np
 import Quartz
 from Foundation import NSData
 import Vision
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,6 +65,31 @@ def _box_size(box, img_w: int, img_h: int, cap) -> tuple[int, int]:
             int(round(box.size.height * img_h / s)))
 
 
+def _split_merged(hit: TextHit, target: str) -> list[TextHit]:
+    """把「一个框里出现多次 target」拆成多个命中。
+
+    Vision 会把**同一行、内容相同**的几段文字合并成一个观察结果。真机上踩过：
+    悬赏列表里三张卡写着同样的「解决诬陷「被诬陷偷猎动物」」，识别出来只有一个框，
+    框中心正好落在**第二张卡**上——于是「点第一个」点到的永远是第二张，
+    而且日志里看是「命中 1 处」，完全看不出问题。
+
+    按出现次数把框横向等分，每个等分段的中心就是一个命中的位置。等分只在
+    「同一行、等宽排列」时成立，而这正是卡片/格子列表的排法。
+    """
+    n = hit.text.count(target)
+    if n <= 1 or hit.w <= 0:
+        return [hit]
+    seg = hit.w / float(n)
+    left = hit.x - hit.w / 2.0
+    out = []
+    for i in range(n):
+        out.append(TextHit(text=target,
+                           x=int(round(left + seg * (i + 0.5))),
+                           y=hit.y, confidence=hit.confidence,
+                           w=int(round(seg)), h=hit.h))
+    return out
+
+
 def recognize_texts(cap, languages: list | None = None) -> list[TextHit]:
     """对截图做 OCR，返回所有文本及全局逻辑坐标中心点。"""
     import cv2
@@ -106,7 +134,15 @@ def find_texts(target: str, region: tuple | None = None,
     有了全部命中，调用方就能按位置筛（比如「只在左边 70% 里找」）。
     """
     cap = grab_region_bgr(region)
-    hits = [h for h in recognize_texts(cap, languages) if target in h.text]
+    hits: list[TextHit] = []
+    for h in recognize_texts(cap, languages):
+        if target not in h.text:
+            continue
+        parts = _split_merged(h, target)
+        if len(parts) > 1:
+            logger.info("「%s」在一个框里出现 %d 次，按等分拆开：%s → %s",
+                        target, len(parts), (h.x, h.w), [(p.x, p.w) for p in parts])
+        hits.extend(parts)
     hits.sort(key=lambda h: (h.y, h.x))
     return hits
 
