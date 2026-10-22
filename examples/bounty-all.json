@@ -1580,6 +1580,12 @@
       "port": "out",
       "dst": "delay_pick",
       "dst_side": "left"
+    },
+    {
+      "src": "cond_ok",
+      "port": "false",
+      "dst": "retry",
+      "dst_side": "left"
     }
   ]
 }
