@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v27",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v28",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -450,7 +450,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」。\n【抢单循环】右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区（左侧 66%、纵向 20%~80%）\n  → 出现「解决诬陷」立刻点（靠上 15%）→ 光标挪开 → 立刻 Space 接取 → 等 0.4s\n  → 出现「前往」= 抢到；否则回开头。\n【完成段】一个判定点按界面走：\n  放弃悬赏 → 点「前往」 | 话术争锋 → 点它 | 继续 → Space | 跳过 → Space\n  揭穿（对决界面）→ 连按 F | 诬陷悬赏（NPC 提示）→ F → 等 1s → Space → 等 1s → Space\n  （NPC 对话固定节奏：F 打开对话，每秒一次 Space 共两次，之后才出「话术争锋」选项）\n  都不命中 → 空转 2s；看到「悬索游天」（大世界 HUD）说明这单做完 → 回去抢下一单。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开跑先看状态】大世界和「站在 NPC 旁等做任务」长得一模一样——所以先判有没有正在做的任务\n  （诬陷悬赏 / 放弃悬赏 / 话术争锋 / 揭穿 / 继续 / 跳过，任一）：有 → 继续做；没有 → 去开菜单抢单。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区 → 点「解决诬陷」→ 立刻 Space 接取。\n【做任务】放弃悬赏→点「前往」 | 诬陷悬赏→F→等1s→Space→等1s→Space | 话术争锋→点它\n  | 揭穿→连按 F | 继续→Space | 跳过→Space。\n  按完「继续」后判大世界（悬索游天）：是 → 抢下一单；不是 → 回判定点。"
       },
       "enabled": true,
       "uid": "note",
@@ -1238,15 +1238,37 @@
       "name": "等对话选项出来",
       "x": 1800,
       "y": 760
+    },
+    {
+      "type": "condition_group",
+      "params": {
+        "cond_count": 6,
+        "combine": "任一成立(或)",
+        "cond1_kind": "文字存在",
+        "cond1_value": "诬陷悬赏",
+        "cond2_kind": "文字存在",
+        "cond2_value": "放弃悬赏",
+        "cond3_kind": "文字存在",
+        "cond3_value": "话术争锋",
+        "cond4_kind": "文字存在",
+        "cond4_value": "揭穿",
+        "cond5_kind": "文字存在",
+        "cond5_value": "继续",
+        "cond6_kind": "文字存在",
+        "cond6_value": "跳过",
+        "confidence": 0.8,
+        "timeout_s": 0.8,
+        "search_left_pct": 0,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_busy",
+      "name": "有正在做的任务吗",
+      "x": 300,
+      "y": 1800
     }
   ],
   "edges": [
-    {
-      "src": "start",
-      "port": "out",
-      "dst": "m1_hover",
-      "dst_side": "left"
-    },
     {
       "src": "m1_hover",
       "port": "out",
@@ -1740,15 +1762,9 @@
       "dst_side": "left"
     },
     {
-      "src": "do_delay_done",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
       "src": "do_idle",
       "port": "out",
-      "dst": "cond_world",
+      "dst": "do_judge",
       "dst_side": "left"
     },
     {
@@ -1791,6 +1807,30 @@
       "src": "do_delay_s2",
       "port": "out",
       "dst": "do_judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "start",
+      "port": "out",
+      "dst": "cond_busy",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_busy",
+      "port": "true",
+      "dst": "do_judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_busy",
+      "port": "false",
+      "dst": "m1_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_delay_done",
+      "port": "out",
+      "dst": "cond_world",
       "dst_side": "left"
     }
   ]
