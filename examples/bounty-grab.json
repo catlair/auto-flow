@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 抢「解决诬陷」v7",
+  "name": "燕云·江湖悬赏 抢「解决诬陷」v8",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +8,7 @@
     {
       "type": "note",
       "params": {
-        "text": "抢「解决诬陷」类悬赏（营生分类）。\n① 右上角图标 (-23,48)：移过去浮出「菜单」→ 点一下 → 面板出来（判据「武林录」）。\n② 面板要向下滚：实测**按像素、负值**（-2400）才滚得动，按行滚完全没反应。\n③ 页面判据用「玩法说明」（「江湖悬赏」是书法字，OCR 读不出来）。\n④ 点「营生」→ 循环：刷新 → 有「解决诬陷」就点它 → 接取。\n⑤ 抢失败有两种提示：「当前悬赏已被其他少侠领取」「该悬赏已失效」。\n   提示里还带「请勿频繁领取悬赏」——说明有频率限制，所以失败后**歇 3s** 再刷新。\n⑥ 两种失败提示都没有 = 抢到了，停在「抢到了」。治疗类不做，只认「解决诬陷」。"
+        "text": "抢「解决诬陷」类悬赏（营生分类）。\n① 右上角图标 (-23,48)：移过去浮出「菜单」→ 点一下 → 面板出来（判据「武林录」）。\n② 面板要向下滚：按像素、负值（-2400）才滚得动，按行滚完全没反应。\n③ 页面判据用「玩法说明」（「江湖悬赏」是书法字，OCR 读不出来）。\n④ 点「营生」→ 循环：刷新 → 有「解决诬陷」就点它 → 接取。\n⑤ 失败提示有三条（条件组「或」一次判完）：其他少侠领取 / 请勿频繁领取 / 已失效。\n   「请勿频繁领取」指的是**别反复点同一个悬赏**，不是全局频率限制——所以不加冷却，直接刷新换一批（刷新后列表变了，点的就是别的悬赏）。\n⑥ 三条提示都没出现 = 抢到了，停在「抢到了」。治疗类不做，只认「解决诬陷」。"
       },
       "enabled": true,
       "uid": "note",
@@ -612,19 +612,22 @@
       "y": 1400
     },
     {
-      "type": "condition",
+      "type": "condition_group",
       "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "其他少侠领取",
-        "model_path": "",
-        "label": "",
+        "cond_count": 3,
+        "combine": "任一成立(或)",
+        "cond1_kind": "文字存在",
+        "cond1_value": "其他少侠领取",
+        "cond2_kind": "文字存在",
+        "cond2_value": "请勿频繁领取",
+        "cond3_kind": "文字存在",
+        "cond3_value": "已失效",
         "confidence": 0.8,
         "timeout_s": 1.2
       },
       "enabled": true,
       "uid": "cond_expired",
-      "name": "被别人抢走了吗（「已被其他少侠领取」）",
+      "name": "有失败提示吗（任一出现=没抢到）",
       "x": 300,
       "y": 1520
     },
@@ -685,36 +688,6 @@
       "name": "能看到「悬赏」吗②",
       "x": 900,
       "y": 1180
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 3000,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "cooldown",
-      "name": "歇 3s（别频繁领取）",
-      "x": 300,
-      "y": 1650
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "已失效",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.2
-      },
-      "enabled": true,
-      "uid": "cond_dead",
-      "name": "是不是已失效（另一种失败）",
-      "x": 600,
-      "y": 1650
     }
   ],
   "edges": [
@@ -1003,31 +976,13 @@
     {
       "src": "cond_expired",
       "port": "true",
-      "dst": "cooldown",
+      "dst": "refresh",
       "dst_side": "left"
     },
     {
       "src": "cond_expired",
       "port": "false",
-      "dst": "cond_dead",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_dead",
-      "port": "true",
-      "dst": "cooldown",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_dead",
-      "port": "false",
       "dst": "end_ok",
-      "dst_side": "left"
-    },
-    {
-      "src": "cooldown",
-      "port": "out",
-      "dst": "refresh",
       "dst_side": "left"
     }
   ]
