@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v29",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v30",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -450,197 +450,13 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【关键认知】大世界**就是**做任务的场景，不是两个页面。区别只有一条：\n  走到 NPC 旁边才会出现「F 诬陷悬赏」的交互提示。\n  所以「要不要继续做任务」= 大世界里有没有任务相关的提示/界面。\n【开跑/每轮开头】判条件组（诬陷悬赏 / 放弃悬赏 / 话术争锋 / 揭穿 / 继续 / 跳过，任一）：\n  有 → 继续做手上这单；没有 → 去开菜单抢新悬赏。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区 → 点「解决诬陷」→ 立刻 Space 接取。\n【做任务】放弃悬赏→点「前往」（自动寻路到 NPC）| 诬陷悬赏→F→等1s→Space→等1s→Space\n  | 话术争锋→点它 | 揭穿→连按 F | 继续→Space | 跳过→Space。\n  寻路途中还没到 NPC 时判定点会空转 2s，等提示出现再按 F——这是正常的。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【为什么按顺序而不是按界面判】「F 诬陷悬赏」是**常驻提示**，接取页/大世界/任务开始页长得一模一样，\n  靠界面判断下一步必然错。所以做任务这段是死顺序：\n  ① 点「前往」→ ② 等寻路 3.5s → ③ 按 F → 等1s → ④ Space → 等1s → ⑤ Space → 等0.8s\n  → ⑥ 点「话术争锋」→ 等1.2s → ⑦ 连按 F（快速话术，每 0.4s 一次）\n  → 出现「继续」→ ⑧ Space → 等 2.5s → 回到抢单。\n  唯一用界面判断的是「继续」——它只在胜负结算页出现，不会常驻。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区 → 点「解决诬陷」→ 立刻 Space 接取。\n【起点】有「放弃悬赏」（=已接取详情页）就先做任务，否则去抢单。"
       },
       "enabled": true,
       "uid": "note",
       "name": "使用说明（不执行）",
       "x": 40,
       "y": 40
-    },
-    {
-      "type": "branch",
-      "params": {
-        "case_count": 6,
-        "case1_kind": "文字存在",
-        "case1_value": "放弃悬赏",
-        "case2_kind": "文字存在",
-        "case2_value": "话术争锋",
-        "case3_kind": "文字存在",
-        "case3_value": "继续",
-        "case4_kind": "文字存在",
-        "case4_value": "跳过",
-        "case5_kind": "文字存在",
-        "case5_value": "揭穿",
-        "case6_kind": "文字存在",
-        "case6_value": "诬陷悬赏",
-        "confidence": 0.8,
-        "timeout_s": 2
-      },
-      "enabled": true,
-      "uid": "do_judge",
-      "name": "看现在是什么界面",
-      "x": 300,
-      "y": 300
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "前往",
-        "action": "click",
-        "timeout_s": 1.2,
-        "interval_ms": 120,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0
-      },
-      "enabled": true,
-      "uid": "do_click_go",
-      "name": "点「前往」（已接取详情页）",
-      "x": 660,
-      "y": 180
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 3000,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_delay_go",
-      "name": "等寻路过去（3s）",
-      "x": 960,
-      "y": 180
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "话术争锋",
-        "action": "click",
-        "timeout_s": 1.2,
-        "interval_ms": 120,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0
-      },
-      "enabled": true,
-      "uid": "do_click_debate",
-      "name": "点「话术争锋」",
-      "x": 660,
-      "y": 280
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 2000,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_delay_debate",
-      "name": "等对决界面",
-      "x": 960,
-      "y": 280
-    },
-    {
-      "type": "keyboard",
-      "params": {
-        "mode": "key",
-        "text": "",
-        "keys": "vk:3"
-      },
-      "enabled": true,
-      "uid": "do_press_f",
-      "name": "按 F（快速话术）",
-      "x": 660,
-      "y": 480
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 350,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_delay_f",
-      "name": "等一拍再按 F",
-      "x": 960,
-      "y": 480
-    },
-    {
-      "type": "keyboard",
-      "params": {
-        "mode": "key",
-        "text": "",
-        "keys": "vk:49"
-      },
-      "enabled": true,
-      "uid": "do_press_space_done",
-      "name": "按 Space（结算继续）",
-      "x": 660,
-      "y": 580
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 2500,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_delay_done",
-      "name": "等结算结束",
-      "x": 960,
-      "y": 580
-    },
-    {
-      "type": "keyboard",
-      "params": {
-        "mode": "key",
-        "text": "",
-        "keys": "vk:3"
-      },
-      "enabled": true,
-      "uid": "do_press_f_npc",
-      "name": "按 F（诬陷悬赏，和 NPC 对话）",
-      "x": 660,
-      "y": 760
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 1000,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_delay_npc",
-      "name": "等 1s",
-      "x": 960,
-      "y": 760
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 2000,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_idle",
-      "name": "空转 2s（赶路中）",
-      "x": 300,
-      "y": 860
     },
     {
       "type": "note",
@@ -1143,43 +959,54 @@
       "y": 820
     },
     {
-      "type": "keyboard",
+      "type": "ocr_click",
       "params": {
-        "mode": "key",
-        "text": "",
-        "keys": "vk:49"
+        "text": "前往",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 120,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "pick": "第一个"
       },
       "enabled": true,
-      "uid": "do_press_skip",
-      "name": "按 Space（跳过过场）",
+      "uid": "do_go",
+      "name": "① 点「前往」（自动寻路到 NPC）",
       "x": 300,
-      "y": 900
+      "y": 600
     },
     {
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1200,
+        "ms": 3500,
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "do_delay_skip",
-      "name": "等过场结束",
+      "uid": "do_walk",
+      "name": "② 等寻路（3.5s）",
       "x": 600,
-      "y": 900
+      "y": 600
     },
     {
       "type": "keyboard",
       "params": {
         "mode": "key",
         "text": "",
-        "keys": "vk:49"
+        "keys": "vk:3"
       },
       "enabled": true,
-      "uid": "do_space1",
-      "name": "按 Space（第 1 次）",
+      "uid": "do_f1",
+      "name": "③ 按 F（和 NPC 对话）",
       "x": 900,
-      "y": 760
+      "y": 600
     },
     {
       "type": "delay",
@@ -1189,10 +1016,10 @@
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "do_delay_s1",
+      "uid": "do_d1",
       "name": "等 1s",
       "x": 1200,
-      "y": 760
+      "y": 600
     },
     {
       "type": "keyboard",
@@ -1202,51 +1029,176 @@
         "keys": "vk:49"
       },
       "enabled": true,
-      "uid": "do_space2",
-      "name": "按 Space（第 2 次）",
+      "uid": "do_s1",
+      "name": "④ 按 Space（跳过第 1 句）",
       "x": 1500,
-      "y": 760
+      "y": 600
     },
     {
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 700,
+        "ms": 1000,
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "do_delay_s2",
-      "name": "等对话选项出来",
+      "uid": "do_d2",
+      "name": "等 1s",
       "x": 1800,
-      "y": 760
+      "y": 600
     },
     {
-      "type": "condition_group",
+      "type": "keyboard",
       "params": {
-        "cond_count": 6,
-        "combine": "任一成立(或)",
-        "cond1_kind": "文字存在",
-        "cond1_value": "诬陷悬赏",
-        "cond2_kind": "文字存在",
-        "cond2_value": "放弃悬赏",
-        "cond3_kind": "文字存在",
-        "cond3_value": "话术争锋",
-        "cond4_kind": "文字存在",
-        "cond4_value": "揭穿",
-        "cond5_kind": "文字存在",
-        "cond5_value": "继续",
-        "cond6_kind": "文字存在",
-        "cond6_value": "跳过",
+        "mode": "key",
+        "text": "",
+        "keys": "vk:49"
+      },
+      "enabled": true,
+      "uid": "do_s2",
+      "name": "⑤ 按 Space（跳过第 2 句）",
+      "x": 2100,
+      "y": 600
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 800,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "do_d3",
+      "name": "等对话选项",
+      "x": 2400,
+      "y": 600
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "话术争锋",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 120,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "do_talk",
+      "name": "⑥ 点「话术争锋」",
+      "x": 2700,
+      "y": 600
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "do_d4",
+      "name": "等对决界面",
+      "x": 3000,
+      "y": 600
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:3"
+      },
+      "enabled": true,
+      "uid": "do_fight",
+      "name": "⑦ 连按 F（快速话术）",
+      "x": 300,
+      "y": 720
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "do_d5",
+      "name": "等一拍",
+      "x": 600,
+      "y": 720
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "继续",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.6,
+        "search_left_pct": 0,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "do_cont",
+      "name": "打完了吗（出现「继续」）",
+      "x": 900,
+      "y": 720
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:49"
+      },
+      "enabled": true,
+      "uid": "do_win",
+      "name": "⑧ 按 Space（结算继续）",
+      "x": 1200,
+      "y": 720
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 2500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "do_d6",
+      "name": "等回到大世界",
+      "x": 1500,
+      "y": 720
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "放弃悬赏",
+        "model_path": "",
+        "label": "",
         "confidence": 0.8,
         "timeout_s": 0.8,
         "search_left_pct": 0,
         "search_right_pct": 100
       },
       "enabled": true,
-      "uid": "cond_busy",
-      "name": "手上还有活吗（任务提示或任务界面）",
+      "uid": "cond_accepted",
+      "name": "有已接取的悬赏吗（放弃悬赏）",
       "x": 300,
-      "y": 1800
+      "y": 480
     }
   ],
   "edges": [
@@ -1419,90 +1371,6 @@
       "dst_side": "left"
     },
     {
-      "src": "do_judge",
-      "port": "case:1",
-      "dst": "do_click_go",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_click_go",
-      "port": "out",
-      "dst": "do_delay_go",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_go",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_judge",
-      "port": "case:2",
-      "dst": "do_click_debate",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_click_debate",
-      "port": "out",
-      "dst": "do_delay_debate",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_debate",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_judge",
-      "port": "case:3",
-      "dst": "do_press_space_done",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_press_f",
-      "port": "out",
-      "dst": "do_delay_f",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_f",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_judge",
-      "port": "case:5",
-      "dst": "do_press_f",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_press_space_done",
-      "port": "out",
-      "dst": "do_delay_done",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_judge",
-      "port": "case:6",
-      "dst": "do_press_f_npc",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_press_f_npc",
-      "port": "out",
-      "dst": "do_delay_npc",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_judge",
-      "port": "else",
-      "dst": "do_idle",
-      "dst_side": "left"
-    },
-    {
       "src": "m4_cond",
       "port": "false",
       "dst": "end_fail",
@@ -1560,12 +1428,6 @@
       "src": "delay_accept",
       "port": "out",
       "dst": "cond_ok",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_ok",
-      "port": "true",
-      "dst": "do_judge",
       "dst_side": "left"
     },
     {
@@ -1725,81 +1587,123 @@
       "dst_side": "left"
     },
     {
-      "src": "do_judge",
-      "port": "case:4",
-      "dst": "do_press_skip",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_press_skip",
-      "port": "out",
-      "dst": "do_delay_skip",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_skip",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_idle",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_npc",
-      "port": "out",
-      "dst": "do_space1",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_space1",
-      "port": "out",
-      "dst": "do_delay_s1",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_s1",
-      "port": "out",
-      "dst": "do_space2",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_space2",
-      "port": "out",
-      "dst": "do_delay_s2",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_s2",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
       "src": "start",
       "port": "out",
-      "dst": "cond_busy",
+      "dst": "cond_accepted",
       "dst_side": "left"
     },
     {
-      "src": "cond_busy",
+      "src": "cond_accepted",
       "port": "true",
-      "dst": "do_judge",
+      "dst": "do_go",
       "dst_side": "left"
     },
     {
-      "src": "cond_busy",
+      "src": "cond_accepted",
       "port": "false",
       "dst": "m1_hover",
       "dst_side": "left"
     },
     {
-      "src": "do_delay_done",
+      "src": "do_go",
       "port": "out",
-      "dst": "cond_busy",
+      "dst": "do_walk",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_walk",
+      "port": "out",
+      "dst": "do_f1",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_f1",
+      "port": "out",
+      "dst": "do_d1",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_d1",
+      "port": "out",
+      "dst": "do_s1",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_s1",
+      "port": "out",
+      "dst": "do_d2",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_d2",
+      "port": "out",
+      "dst": "do_s2",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_s2",
+      "port": "out",
+      "dst": "do_d3",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_d3",
+      "port": "out",
+      "dst": "do_talk",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_talk",
+      "port": "out",
+      "dst": "do_d4",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_d4",
+      "port": "out",
+      "dst": "do_fight",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_fight",
+      "port": "out",
+      "dst": "do_d5",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_d5",
+      "port": "out",
+      "dst": "do_cont",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_cont",
+      "port": "true",
+      "dst": "do_win",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_cont",
+      "port": "false",
+      "dst": "do_fight",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_win",
+      "port": "out",
+      "dst": "do_d6",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_d6",
+      "port": "out",
+      "dst": "m1_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_ok",
+      "port": "true",
+      "dst": "do_go",
       "dst_side": "left"
     }
   ]
