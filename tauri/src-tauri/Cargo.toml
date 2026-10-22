@@ -1,6 +1,6 @@
 [package]
 name = "autoflow-tauri"
-version = "0.1.0"
+version = "0.2.0"
 description = "Auto Flow Tauri 前端外壳"
 authors = ["catlair"]
 edition = "2021"
