@@ -880,6 +880,10 @@ class ConditionGroupTask(BaseTask):
             ParamDef("combine", "组合方式", "select", self.COMBINE_AND,
                      list(self.COMBINE_KINDS),
                      tooltip="「与」= 全部成立才算成立；「或」= 任一成立即算成立"),
+            ParamDef("search_left_pct", "搜索左边界(%)", "int", 0, min_value=0, max_value=100,
+                     tooltip="文字检测只在窗口横向的这个百分比之后找"),
+            ParamDef("search_right_pct", "搜索右边界(%)", "int", 100, min_value=0, max_value=100,
+                     tooltip="文字检测只在窗口横向的这个百分比之前找"),
         ]
         for i in range(1, MAX_GROUP_CONDITIONS + 1):
             show = {"key": "cond_count", "gte": i}
@@ -904,10 +908,14 @@ class ConditionGroupTask(BaseTask):
         is_and = combine != self.COMBINE_OR
         deadline = _time.monotonic() + float(p.get("timeout_s", 0.0))
 
+        left_pct = int(p.get("search_left_pct", 0) or 0)
+        right_pct = int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100)
+
         def evaluate() -> bool:
             for i in range(1, n + 1):
                 hit = _detect(str(p.get(f"cond{i}_kind", "图像存在")),
-                              str(p.get(f"cond{i}_value", "")), confidence=conf)
+                              str(p.get(f"cond{i}_value", "")), confidence=conf,
+                              left_pct=left_pct, right_pct=right_pct)
                 if is_and:
                     if not hit:
                         return False   # 与：一项不成立，整体已定，后面的不用测

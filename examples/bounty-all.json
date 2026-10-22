@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v21",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v23",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -426,13 +426,16 @@
       "y": 930
     },
     {
-      "type": "condition",
+      "type": "condition_group",
       "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
+        "cond_count": 3,
+        "combine": "任一成立(或)",
+        "cond1_kind": "文字存在",
+        "cond1_value": "悬赏",
+        "cond2_kind": "文字存在",
+        "cond2_value": "万相集",
+        "cond3_kind": "文字存在",
+        "cond3_value": "戏乐",
         "confidence": 0.8,
         "timeout_s": 1,
         "search_left_pct": 55,
@@ -447,7 +450,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖（只有拖拽有效）→ 点「悬赏」→ 点「营生」。\n【抢单循环】右键收起 → 点「刷新」→ **轮询列表**（不等固定时间）：\n  列表多久出来取决于网速/处理/渲染，可能几百毫秒也可能 2 秒；那个 2 秒倒数是限制刷新按钮的，与列表无关。\n  → 一看到「解决诬陷」就点卡片（文字框靠上 15%，避开奖励图标）→ 光标挪开 → 立刻 Space 接取（0.1s）\n  → 等 0.4s → 出现「前往」= 抢到；否则回开头。\n  → 2.2 秒内都没等到列表（或只有治疗类）→ 再刷新一次（此时按钮冷却早已过）。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖（只有拖拽有效）→ 点「悬赏」→ 点「营生」。\n  判「最底下一行出来了吗」用条件组：悬赏 / 万相集 / 戏乐 读到任一就算这行在屏幕上\n  （同一行三个格子名，OCR 读不出「悬赏」时另外两个常常还读得出），范围收到窗口右侧 55%~100%。\n  点「悬赏」失败时兜底：点「万相集」往右挪一格（同一行，间隔约 60px）。\n【抢单循环】右键收起 → 点「刷新」→ 轮询列表 → 点卡片（文字框靠上 15%）→ 光标挪开\n  → 立刻 Space 接取 → 等 0.4s → 出现「前往」= 抢到；否则回开头。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
       },
       "enabled": true,
       "uid": "note",
@@ -907,13 +910,16 @@
       "y": 1260
     },
     {
-      "type": "condition",
+      "type": "condition_group",
       "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
+        "cond_count": 3,
+        "combine": "任一成立(或)",
+        "cond1_kind": "文字存在",
+        "cond1_value": "悬赏",
+        "cond2_kind": "文字存在",
+        "cond2_value": "万相集",
+        "cond3_kind": "文字存在",
+        "cond3_value": "戏乐",
         "confidence": 0.8,
         "timeout_s": 1.2,
         "search_left_pct": 55,
@@ -976,13 +982,16 @@
       "y": 1370
     },
     {
-      "type": "condition",
+      "type": "condition_group",
       "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
+        "cond_count": 3,
+        "combine": "任一成立(或)",
+        "cond1_kind": "文字存在",
+        "cond1_value": "悬赏",
+        "cond2_kind": "文字存在",
+        "cond2_value": "万相集",
+        "cond3_kind": "文字存在",
+        "cond3_value": "戏乐",
         "confidence": 0.8,
         "timeout_s": 1.2,
         "search_left_pct": 55,
@@ -1032,13 +1041,16 @@
       "y": 1480
     },
     {
-      "type": "condition",
+      "type": "condition_group",
       "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
+        "cond_count": 3,
+        "combine": "任一成立(或)",
+        "cond1_kind": "文字存在",
+        "cond1_value": "悬赏",
+        "cond2_kind": "文字存在",
+        "cond2_value": "万相集",
+        "cond3_kind": "文字存在",
+        "cond3_value": "戏乐",
         "confidence": 0.8,
         "timeout_s": 1.2,
         "search_left_pct": 55,
@@ -1092,6 +1104,62 @@
       "name": "光标挪开（别悬停在物品上）",
       "x": 1500,
       "y": 1300
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "万相集",
+        "action": "click",
+        "timeout_s": 1.2,
+        "interval_ms": 120,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 60,
+        "offset_y": 0,
+        "search_left_pct": 55,
+        "search_right_pct": 100,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "click_bounty_b",
+      "name": "点「万相集」右侧一格（=悬赏）",
+      "x": 1500,
+      "y": 820
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_open_b",
+      "name": "等悬赏界面打开",
+      "x": 1800,
+      "y": 820
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "玩法说明",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2,
+        "search_left_pct": 0,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_page_b",
+      "name": "是悬赏界面吗（有「玩法说明」）",
+      "x": 2100,
+      "y": 820
     }
   ],
   "edges": [
@@ -1398,7 +1466,7 @@
     {
       "src": "cond_page",
       "port": "false",
-      "dst": "end_fail",
+      "dst": "click_bounty_b",
       "dst_side": "left"
     },
     {
@@ -1585,6 +1653,30 @@
       "src": "cond_ok",
       "port": "false",
       "dst": "retry",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_bounty_b",
+      "port": "out",
+      "dst": "delay_open_b",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_open_b",
+      "port": "out",
+      "dst": "cond_page_b",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_page_b",
+      "port": "true",
+      "dst": "click_yingsheng",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_page_b",
+      "port": "false",
+      "dst": "end_fail",
       "dst_side": "left"
     }
   ]
