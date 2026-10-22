@@ -766,10 +766,11 @@ def test_ocr_click_uses_the_box_point(monkeypatch):
     from core.ocr import TextHit
     from tasks.builtin import CLICK_POS_CUSTOM
 
-    monkeypatch.setattr(ocr, "find_text",
+    # 现在走 find_texts（返回全部命中，供「按范围筛」用），桩也要跟着换
+    monkeypatch.setattr(ocr, "find_texts",
                         lambda target, region=None, languages=None:
-                        TextHit(text="设置", x=600, y=300, confidence=0.9,
-                                w=400, h=40))
+                        [TextHit(text="设置", x=600, y=300, confidence=0.9,
+                                 w=400, h=40)])
 
     assert _one_click_point(monkeypatch, "ocr_click", {"text": "设置"}) == (600, 300)
     # 400 宽的文字框，点它最右端

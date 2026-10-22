@@ -472,6 +472,39 @@ def _self_window_guard(x: int, y: int) -> bool:
     return True
 
 
+# 「一句话在屏幕上出现多次」时选哪个命中。默认第一个（阅读顺序），
+# 随机用于「列表里随便挑一个」这种场景，避免每次都点同一个。
+HIT_PICK_KINDS = ("第一个", "最后一个", "随机")
+
+
+def filter_hits(hits: list, win, left_pct: int = 0, right_pct: int = 100) -> list:
+    """按「窗口宽度的百分比区间」筛命中，只保留横向落在区间内的。
+
+    真机场景：悬赏卡片在左、详情面板在右，两边写着同一句话「解决诬陷…」。
+    把搜索范围收到左边 70%，就只会命中卡片，不会点到右侧那个不可点的标签。
+    读不到前台窗口时**不过滤**（宁可点多，也不要因为拿不到窗口就完全不点）。
+    """
+    if not hits or not win:
+        return list(hits)
+    left, _top, w, _h = win
+    lo = left + w * max(0, min(100, left_pct)) / 100.0
+    hi = left + w * max(0, min(100, right_pct)) / 100.0
+    if lo > hi:
+        lo, hi = hi, lo
+    return [h for h in hits if lo <= h.x <= hi]
+
+
+def pick_hit(hits: list, mode: str = "第一个"):
+    if not hits:
+        return None
+    if mode == "最后一个":
+        return hits[-1]
+    if mode == "随机":
+        import random
+        return random.choice(hits)
+    return hits[0]
+
+
 def _click_target(p: dict, cx: int, cy: int, w: int, h: int) -> tuple:
     """节点参数 → 最终点击点：先在目标框内取点，再叠加固定偏移。
 
@@ -580,17 +613,27 @@ class OcrClickTask(BaseTask):
                      tooltip="把文字框四边各往里收这么多再取点，避免点到边缘"),
             ParamDef("offset_x", "偏移X", "int", 0, tooltip="在算出的点之上再平移"),
             ParamDef("offset_y", "偏移Y", "int", 0),
+            ParamDef("search_left_pct", "搜索左边界(%)", "int", 0, min_value=0, max_value=100,
+                     tooltip="只在窗口横向的这个百分比之后找（默认 0=最左边）"),
+            ParamDef("search_right_pct", "搜索右边界(%)", "int", 100, min_value=0, max_value=100,
+                     tooltip="只在窗口横向的这个百分比之前找。同一句话左右各有一处时，用这个把右边那个排掉"),
+            ParamDef("pick", "多个命中时", "select", "第一个", list(HIT_PICK_KINDS),
+                     tooltip="同一句话在屏幕上出现多次时选哪个"),
         ]
 
     def run(self, ctx) -> None:
         import time as _time
-        from core import ocr
+        from core import ocr, selfmask
         p = ctx.params
         deadline = _time.monotonic() + float(p.get("timeout_s", 3.0))
         while True:
             if ctx.player.stopping:
                 return
-            hit = ocr.find_text(str(p.get("text", "")))
+            hits = ocr.find_texts(str(p.get("text", "")))
+            hits = filter_hits(hits, selfmask.front_window_rect(),
+                               int(p.get("search_left_pct", 0) or 0),
+                               int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100))
+            hit = pick_hit(hits, str(p.get("pick", "第一个") or "第一个"))
             if hit:
                 x, y = _click_target(p, hit.x, hit.y, hit.w, hit.h)
                 if not _self_window_guard(x, y):

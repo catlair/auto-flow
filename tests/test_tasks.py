@@ -116,3 +116,51 @@ def test_click_is_skipped_when_no_front_window():
         assert ctx.player.mouse.clicks == []
     finally:
         selfmask.front_window_rect = orig
+
+
+class _Hit:
+    def __init__(self, x, y, text="解决诬陷"):
+        self.x, self.y, self.w, self.h, self.text = x, y, 120, 20, text
+
+
+def test_filter_hits_keeps_only_left_side():
+    """卡片在左、详情面板在右，两边写着同一句话——只留左边的。"""
+    from tasks.builtin import filter_hits
+    win = (0, 0, 1000, 600)
+    hits = [_Hit(300, 200), _Hit(800, 210)]   # 300=卡片，800=右侧面板
+    kept = filter_hits(hits, win, 0, 70)
+    assert [h.x for h in kept] == [300]
+
+
+def test_filter_hits_no_window_means_no_filter():
+    """读不到前台窗口时不过滤——宁可点多，也别因为拿不到窗口就完全不点。"""
+    from tasks.builtin import filter_hits
+    hits = [_Hit(300, 200), _Hit(800, 210)]
+    assert len(filter_hits(hits, None, 0, 70)) == 2
+
+
+def test_filter_hits_uses_window_origin():
+    """百分比是相对**窗口**算的，不是相对屏幕。窗口在屏幕中间时不能算错。"""
+    from tasks.builtin import filter_hits
+    win = (500, 100, 1000, 600)          # 窗口横向 500..1500
+    hits = [_Hit(600, 200), _Hit(1200, 210)]
+    kept = filter_hits(hits, win, 0, 70)  # 右边界 = 500 + 700 = 1200
+    assert [h.x for h in kept] == [600, 1200]
+    kept = filter_hits(hits, win, 0, 60)  # 右边界 = 1100
+    assert [h.x for h in kept] == [600]
+
+
+def test_filter_hits_swapped_bounds_are_tolerated():
+    from tasks.builtin import filter_hits
+    win = (0, 0, 1000, 600)
+    hits = [_Hit(300, 200), _Hit(800, 210)]
+    assert [h.x for h in filter_hits(hits, win, 70, 0)] == [300]
+
+
+def test_pick_hit_modes():
+    from tasks.builtin import pick_hit
+    hits = [_Hit(1, 1), _Hit(2, 2), _Hit(3, 3)]
+    assert pick_hit(hits, "第一个").x == 1
+    assert pick_hit(hits, "最后一个").x == 3
+    assert pick_hit(hits, "随机").x in (1, 2, 3)
+    assert pick_hit([], "第一个") is None

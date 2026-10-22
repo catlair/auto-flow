@@ -96,11 +96,24 @@ def recognize_texts(cap, languages: list | None = None) -> list[TextHit]:
     return hits
 
 
+def find_texts(target: str, region: tuple | None = None,
+               languages: list | None = None) -> list:
+    """找出**所有**包含 target 的文字，按阅读顺序（先上后下、同一行先左后右）返回。
+
+    为什么要有「全部」：同一句话在屏幕上常常出现多次。真机上踩过的例子——悬赏列表里
+    卡片上写着「解决诬陷…」，右侧详情面板里**也**写着同一句话。只取第一个命中时，
+    到底点的是卡片还是详情面板全看识别顺序，表现是「点了没反应」，而且完全无法排查。
+    有了全部命中，调用方就能按位置筛（比如「只在左边 70% 里找」）。
+    """
+    cap = grab_region_bgr(region)
+    hits = [h for h in recognize_texts(cap, languages) if target in h.text]
+    hits.sort(key=lambda h: (h.y, h.x))
+    return hits
+
+
 def find_text(target: str, region: tuple | None = None,
               languages: list | None = None) -> TextHit | None:
     """在屏幕（或指定全局区域）中找包含 target 的文字，返回第一个命中。"""
-    cap = grab_region_bgr(region)
-    for hit in recognize_texts(cap, languages):
-        if target in hit.text:
-            return hit
+    for hit in find_texts(target, region, languages):
+        return hit
     return None
