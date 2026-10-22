@@ -207,7 +207,9 @@ class MouseActionTask(BaseTask):
             # 滚轮事件落在**光标所在的那个窗口**上，所以先把光标挪到目标位置再滚，
             # 否则滚的是别的地方（游戏里最常见的表现就是「滚了没反应」）。
             ctx.player.glide_now((dx, dy))
-            ctx.player.scroll(int(p.get("scroll_dx", 0)), int(p.get("scroll_dy", 0)))
+            # 滚轮在 mouse 上（Player 自己没有 scroll 方法）——真机报过
+            # "'Player' object has no attribute 'scroll'"。
+            ctx.player.mouse.scroll(int(p.get("scroll_dx", 0)), int(p.get("scroll_dy", 0)))
             return
         if p.get("action") == "move":
             ctx.player.glide_now((dx, dy))
