@@ -1,0 +1,986 @@
+{
+  "version": 4,
+  "name": "燕云·江湖悬赏 抢「解决诬陷」v6",
+  "speed": 1,
+  "repeat": 1,
+  "start": "start",
+  "nodes": [
+    {
+      "type": "note",
+      "params": {
+        "text": "抢「解决诬陷」类悬赏（营生分类）。\n① 右上角图标 (-23,48)：移过去浮出「菜单」→ 点一下 → 面板出来（判据「武林录」）。\n② 面板要向下滚才看得到「悬赏」：实测**按像素、负值**（-2400）才滚得动，按行滚完全没反应。\n③ 页面判据用「玩法说明」——「江湖悬赏」四个字是书法标题，OCR 读不出来。\n④ 进江湖悬赏 → 点「营生」→ 循环：刷新 → 有「解决诬陷」就点它 → 接取 → 失效就回去刷新。\n⑤ 抢到就停。治疗类不做，只认「解决诬陷」。"
+      },
+      "enabled": true,
+      "uid": "note",
+      "name": "使用说明（不执行）",
+      "x": 40,
+      "y": 40
+    },
+    {
+      "type": "start",
+      "params": {},
+      "enabled": true,
+      "uid": "start",
+      "name": "开始",
+      "x": 40,
+      "y": 300
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "move",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 48,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m1_hover",
+      "name": "移到右上角图标 (-23,48)",
+      "x": 300,
+      "y": 300
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m1_wait",
+      "name": "等提示浮出",
+      "x": 600,
+      "y": 300
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 48,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m1_click",
+      "name": "点一下菜单图标 (-23,48)",
+      "x": 900,
+      "y": 300
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m1_delay",
+      "name": "等面板展开",
+      "x": 1200,
+      "y": 300
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "武林录",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2
+      },
+      "enabled": true,
+      "uid": "m1_cond",
+      "name": "面板出来了吗（有「武林录」）",
+      "x": 1500,
+      "y": 300
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "move",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 33,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m2_hover",
+      "name": "移到右上角图标 (-23,33)",
+      "x": 300,
+      "y": 420
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m2_wait",
+      "name": "等提示浮出",
+      "x": 600,
+      "y": 420
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 33,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m2_click",
+      "name": "点一下菜单图标 (-23,33)",
+      "x": 900,
+      "y": 420
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m2_delay",
+      "name": "等面板展开",
+      "x": 1200,
+      "y": 420
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "武林录",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2
+      },
+      "enabled": true,
+      "uid": "m2_cond",
+      "name": "面板出来了吗（有「武林录」）",
+      "x": 1500,
+      "y": 420
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "move",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 62,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m3_hover",
+      "name": "移到右上角图标 (-23,62)",
+      "x": 300,
+      "y": 540
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m3_wait",
+      "name": "等提示浮出",
+      "x": 600,
+      "y": 540
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 62,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m3_click",
+      "name": "点一下菜单图标 (-23,62)",
+      "x": 900,
+      "y": 540
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m3_delay",
+      "name": "等面板展开",
+      "x": 1200,
+      "y": 540
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "武林录",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2
+      },
+      "enabled": true,
+      "uid": "m3_cond",
+      "name": "面板出来了吗（有「武林录」）",
+      "x": 1500,
+      "y": 540
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "move",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -45,
+        "y": 48,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m4_hover",
+      "name": "移到右上角图标 (-45,48)",
+      "x": 300,
+      "y": 660
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m4_wait",
+      "name": "等提示浮出",
+      "x": 600,
+      "y": 660
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -45,
+        "y": 48,
+        "use_relative": false,
+        "scroll_dy": 0,
+        "scroll_dx": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "m4_click",
+      "name": "点一下菜单图标 (-45,48)",
+      "x": 900,
+      "y": 660
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "m4_delay",
+      "name": "等面板展开",
+      "x": 1200,
+      "y": 660
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "武林录",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2
+      },
+      "enabled": true,
+      "uid": "m4_cond",
+      "name": "面板出来了吗（有「武林录」）",
+      "x": 1500,
+      "y": 660
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "scroll",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -150,
+        "y": 320,
+        "use_relative": false,
+        "scroll_dy": -2400,
+        "scroll_dx": 0,
+        "scroll_unit": "pixel"
+      },
+      "enabled": true,
+      "uid": "s4_scroll",
+      "name": "向下滚（按像素 -2400）",
+      "x": 300,
+      "y": 1150
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "s4_delay",
+      "name": "等面板滚动",
+      "x": 600,
+      "y": 1150
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 2
+      },
+      "enabled": true,
+      "uid": "s4_cond",
+      "name": "能看到「悬赏」吗①",
+      "x": 900,
+      "y": 1150
+    },
+    {
+      "type": "end",
+      "params": {},
+      "enabled": true,
+      "uid": "end_fail",
+      "name": "结束（菜单没开或滚不到悬赏，看轨迹）",
+      "x": 300,
+      "y": 1300
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "悬赏",
+        "action": "click",
+        "timeout_s": 2,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_bounty",
+      "name": "点「悬赏」",
+      "x": 1200,
+      "y": 820
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 2000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_open",
+      "name": "等悬赏界面打开",
+      "x": 1500,
+      "y": 820
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "玩法说明",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 3
+      },
+      "enabled": true,
+      "uid": "cond_page",
+      "name": "是悬赏界面吗（有「玩法说明」）",
+      "x": 1800,
+      "y": 820
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "营生",
+        "action": "click",
+        "timeout_s": 2.5,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_yingsheng",
+      "name": "点「营生」分类",
+      "x": 1200,
+      "y": 930
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_list",
+      "name": "等列表刷出来",
+      "x": 1500,
+      "y": 930
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "刷新",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "refresh",
+      "name": "点「刷新」",
+      "x": 300,
+      "y": 1400
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_refresh",
+      "name": "等列表刷新",
+      "x": 600,
+      "y": 1400
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "解决诬陷",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 2
+      },
+      "enabled": true,
+      "uid": "cond_target",
+      "name": "列表里有「解决诬陷」吗",
+      "x": 900,
+      "y": 1400
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "解决诬陷",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_card",
+      "name": "点一张「解决诬陷」",
+      "x": 1200,
+      "y": 1400
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_pick",
+      "name": "等右侧详情出来",
+      "x": 1500,
+      "y": 1400
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "接取悬赏",
+        "action": "click",
+        "timeout_s": 1.8,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0
+      },
+      "enabled": true,
+      "uid": "click_accept",
+      "name": "点「接取悬赏」",
+      "x": 1800,
+      "y": 1400
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_accept",
+      "name": "等接取结果",
+      "x": 2100,
+      "y": 1400
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "该悬赏已失效",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.5
+      },
+      "enabled": true,
+      "uid": "cond_expired",
+      "name": "提示「该悬赏已失效」了吗",
+      "x": 300,
+      "y": 1520
+    },
+    {
+      "type": "end",
+      "params": {},
+      "enabled": true,
+      "uid": "end_ok",
+      "name": "抢到了（结束，轨迹停在这里）",
+      "x": 600,
+      "y": 1600
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "scroll",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -150,
+        "y": 320,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": -2400,
+        "scroll_unit": "pixel"
+      },
+      "enabled": true,
+      "uid": "s5_scroll",
+      "name": "再向下滚（按像素 -2400）",
+      "x": 300,
+      "y": 1180
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "s5_delay",
+      "name": "等面板滚动",
+      "x": 600,
+      "y": 1180
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 2
+      },
+      "enabled": true,
+      "uid": "s5_cond",
+      "name": "能看到「悬赏」吗②",
+      "x": 900,
+      "y": 1180
+    }
+  ],
+  "edges": [
+    {
+      "src": "start",
+      "port": "out",
+      "dst": "m1_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "m1_hover",
+      "port": "out",
+      "dst": "m1_wait",
+      "dst_side": "left"
+    },
+    {
+      "src": "m1_wait",
+      "port": "out",
+      "dst": "m1_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "m1_click",
+      "port": "out",
+      "dst": "m1_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "m1_delay",
+      "port": "out",
+      "dst": "m1_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "m1_cond",
+      "port": "false",
+      "dst": "m2_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "m2_hover",
+      "port": "out",
+      "dst": "m2_wait",
+      "dst_side": "left"
+    },
+    {
+      "src": "m2_wait",
+      "port": "out",
+      "dst": "m2_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "m2_click",
+      "port": "out",
+      "dst": "m2_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "m2_delay",
+      "port": "out",
+      "dst": "m2_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "m2_cond",
+      "port": "false",
+      "dst": "m3_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "m3_hover",
+      "port": "out",
+      "dst": "m3_wait",
+      "dst_side": "left"
+    },
+    {
+      "src": "m3_wait",
+      "port": "out",
+      "dst": "m3_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "m3_click",
+      "port": "out",
+      "dst": "m3_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "m3_delay",
+      "port": "out",
+      "dst": "m3_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "m3_cond",
+      "port": "false",
+      "dst": "m4_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "m4_hover",
+      "port": "out",
+      "dst": "m4_wait",
+      "dst_side": "left"
+    },
+    {
+      "src": "m4_wait",
+      "port": "out",
+      "dst": "m4_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "m4_click",
+      "port": "out",
+      "dst": "m4_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "m4_delay",
+      "port": "out",
+      "dst": "m4_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "m4_cond",
+      "port": "false",
+      "dst": "end_fail",
+      "dst_side": "left"
+    },
+    {
+      "src": "s4_scroll",
+      "port": "out",
+      "dst": "s4_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "s4_delay",
+      "port": "out",
+      "dst": "s4_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "s4_cond",
+      "port": "true",
+      "dst": "click_bounty",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_bounty",
+      "port": "out",
+      "dst": "delay_open",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_open",
+      "port": "out",
+      "dst": "cond_page",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_page",
+      "port": "true",
+      "dst": "click_yingsheng",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_page",
+      "port": "false",
+      "dst": "end_fail",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_yingsheng",
+      "port": "out",
+      "dst": "delay_list",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_list",
+      "port": "out",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "refresh",
+      "port": "out",
+      "dst": "delay_refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_refresh",
+      "port": "out",
+      "dst": "cond_target",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_target",
+      "port": "true",
+      "dst": "click_card",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_target",
+      "port": "false",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_card",
+      "port": "out",
+      "dst": "delay_pick",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_pick",
+      "port": "out",
+      "dst": "click_accept",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_accept",
+      "port": "out",
+      "dst": "delay_accept",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_accept",
+      "port": "out",
+      "dst": "cond_expired",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_expired",
+      "port": "true",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_expired",
+      "port": "false",
+      "dst": "end_ok",
+      "dst_side": "left"
+    },
+    {
+      "src": "s4_cond",
+      "port": "false",
+      "dst": "s5_scroll",
+      "dst_side": "left"
+    },
+    {
+      "src": "s5_scroll",
+      "port": "out",
+      "dst": "s5_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "s5_delay",
+      "port": "out",
+      "dst": "s5_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "s5_cond",
+      "port": "true",
+      "dst": "click_bounty",
+      "dst_side": "left"
+    },
+    {
+      "src": "s5_cond",
+      "port": "false",
+      "dst": "end_fail",
+      "dst_side": "left"
+    },
+    {
+      "src": "m1_cond",
+      "port": "true",
+      "dst": "s4_scroll",
+      "dst_side": "left"
+    },
+    {
+      "src": "m2_cond",
+      "port": "true",
+      "dst": "s4_scroll",
+      "dst_side": "left"
+    },
+    {
+      "src": "m3_cond",
+      "port": "true",
+      "dst": "s4_scroll",
+      "dst_side": "left"
+    },
+    {
+      "src": "m4_cond",
+      "port": "true",
+      "dst": "s4_scroll",
+      "dst_side": "left"
+    }
+  ]
+}
