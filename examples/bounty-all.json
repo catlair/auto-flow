@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v9",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v10",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -447,7 +447,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 面板（判「武林录」）。\n  ⚠ 不要在面板上点空白/格子来「给焦点」——那会直接打开某个功能（真机上点进过战令、伙伴）。\n  面板要往下滚才看得到最底下的「悬赏」，滚动阶梯：投给前台应用 4 行 ×3 → 全局 2000 像素 → 往上拖。\n  判「悬赏」时把范围收到窗口右侧 55%~100%：左侧任务栏里也有「悬赏」两个字，\n  不收范围就会「没滚就以为已经看见了」。\n【抢单】点「悬赏」→ 等面板停稳 → 判「玩法说明」进页面 → 点「营生」→ 循环：\n  刷新（2s 冷却，等 2.3s）→ 点「解决诬陷」卡片（只搜左侧 66%）→ Space 接取\n  → 「前往」= 抢到；「已失效」= 点面板右上角箭头收起再刷新；其它 = 歇 4s 再刷新。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 面板（判「武林录」）。\n  面板往下滚只有**拖拽**有效：滚轮两种投递方式（全局、直接投给前台应用）实测都被游戏丢掉了。\n  所以这里是「往上拖 -260」×3 档，每档拖完判一次「悬赏」。\n  判「悬赏」范围收到窗口右侧 55%~100%：左侧任务栏里也有「悬赏」两个字，不收范围会「没滚就以为看见了」。\n  ⚠ 别在面板上点格子「给焦点」——那会直接打开那个功能（点进过战令、伙伴）。\n【抢单】点「悬赏」→ 等 1.3s 停稳 → 判「玩法说明」进页面 → 点「营生」→ 循环：\n  刷新（2s 冷却，等 2.3s）→ 点「解决诬陷」卡片（只搜左侧 66%）→ Space 接取\n  → 「前往」= 抢到；「已失效」= 点面板右上角箭头收起再刷新；其它 = 歇 4s 再刷新。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
       },
       "enabled": true,
       "uid": "note",
@@ -891,230 +891,6 @@
         "y": 430,
         "use_relative": false,
         "scroll_dx": 0,
-        "scroll_dy": 4,
-        "scroll_unit": "line",
-        "scroll_target": "前台应用",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "w_pid1",
-      "name": "滚轮·投给前台应用（4 行）",
-      "x": 300,
-      "y": 820
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 500,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "w_pid1_delay",
-      "name": "等面板滚动",
-      "x": 600,
-      "y": 820
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.5,
-        "search_left_pct": 55,
-        "search_right_pct": 100
-      },
-      "enabled": true,
-      "uid": "w_pid1_cond",
-      "name": "能看到「悬赏」吗（1）",
-      "x": 900,
-      "y": 820
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "scroll",
-        "button": "left",
-        "anchor": "win_tr",
-        "x": -150,
-        "y": 430,
-        "use_relative": false,
-        "scroll_dx": 0,
-        "scroll_dy": 4,
-        "scroll_unit": "line",
-        "scroll_target": "前台应用",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "w_pid2",
-      "name": "滚轮·投给前台应用（再 4 行）",
-      "x": 300,
-      "y": 930
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 500,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "w_pid2_delay",
-      "name": "等面板滚动",
-      "x": 600,
-      "y": 930
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.5,
-        "search_left_pct": 55,
-        "search_right_pct": 100
-      },
-      "enabled": true,
-      "uid": "w_pid2_cond",
-      "name": "能看到「悬赏」吗（2）",
-      "x": 900,
-      "y": 930
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "scroll",
-        "button": "left",
-        "anchor": "win_tr",
-        "x": -150,
-        "y": 430,
-        "use_relative": false,
-        "scroll_dx": 0,
-        "scroll_dy": 4,
-        "scroll_unit": "line",
-        "scroll_target": "前台应用",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "w_pid3",
-      "name": "滚轮·投给前台应用（再 4 行）",
-      "x": 300,
-      "y": 1040
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 500,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "w_pid3_delay",
-      "name": "等面板滚动",
-      "x": 600,
-      "y": 1040
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.5,
-        "search_left_pct": 55,
-        "search_right_pct": 100
-      },
-      "enabled": true,
-      "uid": "w_pid3_cond",
-      "name": "能看到「悬赏」吗（3）",
-      "x": 900,
-      "y": 1040
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "scroll",
-        "button": "left",
-        "anchor": "win_tr",
-        "x": -150,
-        "y": 430,
-        "use_relative": false,
-        "scroll_dx": 0,
-        "scroll_dy": 2000,
-        "scroll_unit": "pixel",
-        "scroll_target": "全局",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "w_glob",
-      "name": "滚轮·全局投递（2000 像素）",
-      "x": 300,
-      "y": 1150
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 900,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "w_glob_delay",
-      "name": "等面板滚动",
-      "x": 600,
-      "y": 1150
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "悬赏",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.5,
-        "search_left_pct": 55,
-        "search_right_pct": 100
-      },
-      "enabled": true,
-      "uid": "w_glob_cond",
-      "name": "能看到「悬赏」吗（4）",
-      "x": 900,
-      "y": 1150
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "scroll",
-        "button": "left",
-        "anchor": "win_tr",
-        "x": -150,
-        "y": 430,
-        "use_relative": false,
-        "scroll_dx": 0,
         "scroll_dy": 0,
         "scroll_unit": "line",
         "scroll_target": "全局",
@@ -1157,7 +933,7 @@
       },
       "enabled": true,
       "uid": "w_drag_cond",
-      "name": "能看到「悬赏」吗（拖拽）",
+      "name": "能看到「悬赏」吗（拖拽①）",
       "x": 900,
       "y": 1260
     },
@@ -1173,6 +949,118 @@
       "name": "等面板停稳（滚动有惯性）",
       "x": 1200,
       "y": 700
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "drag",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -150,
+        "y": 430,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "drag_b",
+      "name": "再往上拖一次（-260）",
+      "x": 300,
+      "y": 1370
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "drag_b_delay",
+      "name": "等面板滚动",
+      "x": 600,
+      "y": 1370
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.5,
+        "search_left_pct": 55,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "drag_b_cond",
+      "name": "能看到「悬赏」吗（拖拽②）",
+      "x": 900,
+      "y": 1370
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "drag",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -150,
+        "y": 430,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "drag_c",
+      "name": "第三次往上拖（-260）",
+      "x": 300,
+      "y": 1480
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "drag_c_delay",
+      "name": "等面板滚动",
+      "x": 600,
+      "y": 1480
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.5,
+        "search_left_pct": 55,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "drag_c_cond",
+      "name": "能看到「悬赏」吗（拖拽③）",
+      "x": 900,
+      "y": 1480
     }
   ],
   "edges": [
@@ -1579,102 +1467,6 @@
       "dst_side": "left"
     },
     {
-      "src": "w_pid1",
-      "port": "out",
-      "dst": "w_pid1_delay",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid1_delay",
-      "port": "out",
-      "dst": "w_pid1_cond",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid1_cond",
-      "port": "true",
-      "dst": "settle",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid1_cond",
-      "port": "false",
-      "dst": "w_pid2",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid2",
-      "port": "out",
-      "dst": "w_pid2_delay",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid2_delay",
-      "port": "out",
-      "dst": "w_pid2_cond",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid2_cond",
-      "port": "true",
-      "dst": "settle",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid2_cond",
-      "port": "false",
-      "dst": "w_pid3",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid3",
-      "port": "out",
-      "dst": "w_pid3_delay",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid3_delay",
-      "port": "out",
-      "dst": "w_pid3_cond",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid3_cond",
-      "port": "true",
-      "dst": "settle",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_pid3_cond",
-      "port": "false",
-      "dst": "w_glob",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_glob",
-      "port": "out",
-      "dst": "w_glob_delay",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_glob_delay",
-      "port": "out",
-      "dst": "w_glob_cond",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_glob_cond",
-      "port": "true",
-      "dst": "settle",
-      "dst_side": "left"
-    },
-    {
-      "src": "w_glob_cond",
-      "port": "false",
-      "dst": "w_drag",
-      "dst_side": "left"
-    },
-    {
       "src": "w_drag",
       "port": "out",
       "dst": "w_drag_delay",
@@ -1695,7 +1487,7 @@
     {
       "src": "w_drag_cond",
       "port": "false",
-      "dst": "end_fail",
+      "dst": "drag_b",
       "dst_side": "left"
     },
     {
@@ -1705,9 +1497,57 @@
       "dst_side": "left"
     },
     {
+      "src": "drag_b",
+      "port": "out",
+      "dst": "drag_b_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_b_delay",
+      "port": "out",
+      "dst": "drag_b_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_b_cond",
+      "port": "true",
+      "dst": "settle",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_b_cond",
+      "port": "false",
+      "dst": "drag_c",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_c",
+      "port": "out",
+      "dst": "drag_c_delay",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_c_delay",
+      "port": "out",
+      "dst": "drag_c_cond",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_c_cond",
+      "port": "true",
+      "dst": "settle",
+      "dst_side": "left"
+    },
+    {
+      "src": "drag_c_cond",
+      "port": "false",
+      "dst": "end_fail",
+      "dst_side": "left"
+    },
+    {
       "src": "pre_visible",
       "port": "false",
-      "dst": "w_pid1",
+      "dst": "w_drag",
       "dst_side": "left"
     }
   ]
