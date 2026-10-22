@@ -16,8 +16,8 @@ class _Mouse:
         self.releases = []
         self.scrolls = []
 
-    def scroll(self, dx, dy, unit="line"):
-        self.scrolls.append((dx, dy, unit))
+    def scroll(self, dx, dy, unit="line", pid=0):
+        self.scrolls.append((dx, dy, unit, pid))
 
     def click(self, b, n=1):
         self.clicks.append((b, n))
@@ -57,14 +57,14 @@ def test_scroll_moves_cursor_to_target_first():
     MouseActionTask().run(ctx)
     assert ctx.player.calls == [("glide", (100, 200))], \
         "必须先把光标挪过去——滚轮事件只作用于光标下的窗口"
-    assert ctx.player.mouse.scrolls == [(0, 5, "line")], "滚轮要发在 player.mouse 上（Player 没有 scroll）"
+    assert ctx.player.mouse.scrolls == [(0, 5, "line", 0)], "滚轮要发在 player.mouse 上（Player 没有 scroll）"
     assert ctx.player.mouse.clicks == [], "滚动不该产生点击"
 
 
 def test_scroll_up_is_negative():
     ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 1, "y": 2, "scroll_dy": -4})
     MouseActionTask().run(ctx)
-    assert ctx.player.mouse.scrolls == [(0, -4, "line")]
+    assert ctx.player.mouse.scrolls == [(0, -4, "line", 0)]
 
 
 def test_scroll_unit_is_passed_through():
@@ -72,7 +72,7 @@ def test_scroll_unit_is_passed_through():
     ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 5, "y": 6,
                 "scroll_dy": 1200, "scroll_unit": "pixel"})
     MouseActionTask().run(ctx)
-    assert ctx.player.mouse.scrolls == [(0, 1200, "pixel")]
+    assert ctx.player.mouse.scrolls == [(0, 1200, "pixel", 0)]
 
 
 def test_click_with_window_anchor_uses_resolved_point():
@@ -218,3 +218,25 @@ def test_drag_releases_even_if_stopped():
     ctx.player.stopping = True   # 一开始就停
     MouseActionTask().run(ctx)
     assert ctx.player.mouse.releases == ["left"]
+
+
+def test_scroll_can_target_the_front_app_pid():
+    """游戏把合成滚轮过滤掉时，改成「直接投递给前台应用」——要带上 pid。"""
+    from core import selfmask
+    from tasks.builtin import MouseActionTask
+    orig = selfmask.front_window_pid
+    selfmask.front_window_pid = lambda: 4321
+    try:
+        ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 1, "y": 2,
+                    "scroll_dy": 3, "scroll_target": "前台应用"})
+        MouseActionTask().run(ctx)
+        assert ctx.player.mouse.scrolls == [(0, 3, "line", 4321)]
+    finally:
+        selfmask.front_window_pid = orig
+
+
+def test_scroll_global_by_default():
+    from tasks.builtin import MouseActionTask
+    ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 1, "y": 2, "scroll_dy": 3})
+    MouseActionTask().run(ctx)
+    assert ctx.player.mouse.scrolls == [(0, 3, "line", 0)]

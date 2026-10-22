@@ -80,6 +80,7 @@ def own_window_rects(force: bool = False) -> list:
                 "layer": w.get("kCGWindowLayer", 0),
                 "alpha": w.get("kCGWindowAlpha", 1.0),
                 "owner": w.get("kCGWindowOwnerName", ""),
+                "pid": int(w.get("kCGWindowOwnerPID", 0) or 0),
                 "x": b.get("X", 0), "y": b.get("Y", 0),
                 "w": b.get("Width", 0), "h": b.get("Height", 0),
             })
@@ -200,6 +201,28 @@ def front_window_from_windows(windows: list) -> tuple | None:
         if any(k in owner for k in _NOT_GAME_OWNERS):
             continue
         return (int(w.get("x", 0) or 0), int(w.get("y", 0) or 0), wd, ht)
+    return None
+
+
+def front_window_pid() -> int | None:
+    """前台窗口所属进程的 pid（给「直接投递给前台应用」的输入用）。
+
+    为什么需要它：全局投递的合成事件会被部分游戏的输入层过滤掉（真机上合成滚轮
+    在菜单面板里完全没反应，而手动滚轮正常）。直接把事件投递给目标进程的队列，
+    走的是另一条路径，这类过滤就绕开了。
+    """
+    for w in _window_list():
+        if int(w.get("layer", 0) or 0) != 0:
+            continue
+        if float(w.get("alpha", 1.0) or 0.0) <= 0.01:
+            continue
+        if int(w.get("w", 0) or 0) < _MIN_FRONT_W or int(w.get("h", 0) or 0) < _MIN_FRONT_H:
+            continue
+        owner = str(w.get("owner", "") or "").lower()
+        if any(k in owner for k in _OWNER_KEYS) or any(k in owner for k in _NOT_GAME_OWNERS):
+            continue
+        pid = int(w.get("pid", 0) or 0)
+        return pid or None
     return None
 
 

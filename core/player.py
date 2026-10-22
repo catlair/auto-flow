@@ -119,10 +119,19 @@ class QuartzMouse:
             self.press(button, i)
             self.release(button, i)
 
-    def scroll(self, dx: int, dy: int, unit: str = "line") -> None:
+    def scroll(self, dx: int, dy: int, unit: str = "line", pid: int = 0) -> None:
+        """发滚轮事件。pid 非 0 时**直接投递给该进程**。
+
+        为什么要有这条：全局投递的合成滚轮会被部分游戏的输入层丢掉——真机上
+        《燕云十六声》的菜单面板用全局滚轮完全没反应（按行/按像素、正反方向都试过），
+        但手动滚轮正常。投递到进程队列走的是另一条路径，这类过滤就绕开了。
+        """
         # 两个轴一起创建：只创建 1 个轴再回填第 2 轴字段会被系统忽略（横向滚轮丢失）
         ev = _Q.CGEventCreateScrollWheelEvent(
             None, SCROLL_UNIT.get(unit, _Q.kCGScrollEventUnitLine), 2, int(dy), int(dx))
+        if pid:
+            _Q.CGEventPostToPid(int(pid), ev)
+            return
         _Q.CGEventPost(_POST_TAP, ev)
 
 

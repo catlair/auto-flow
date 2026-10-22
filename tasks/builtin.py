@@ -176,6 +176,9 @@ class MouseActionTask(BaseTask):
             ParamDef("scroll_dx", "滚动格数(X)", "int", 0, tooltip="动作=scroll 时使用：横向滚动，一般留 0"),
             ParamDef("scroll_unit", "滚动单位", "select", "line", ["line", "pixel"],
                      tooltip="line=按行（一格≈1 行，力度小）| pixel=按像素（游戏里往往只认这个）"),
+            ParamDef("scroll_target", "滚轮投递", "select", "全局", ["全局", "前台应用"],
+                     tooltip="全局=系统级投递；前台应用=直接投递给游戏进程。"
+                             "游戏把合成滚轮过滤掉时（滚了没反应），换成「前台应用」"),
             ParamDef("drag_dx", "拖拽位移 X", "int", 0,
                      tooltip="动作=drag 时使用：从 (X,Y) 按住往这边拖。负数=往左拖"),
             ParamDef("drag_dy", "拖拽位移 Y", "int", -250,
@@ -241,8 +244,12 @@ class MouseActionTask(BaseTask):
             ctx.player.glide_now((dx, dy))
             # 滚轮在 mouse 上（Player 自己没有 scroll 方法）——真机报过
             # "'Player' object has no attribute 'scroll'"。
+            pid = 0
+            if str(p.get("scroll_target", "全局") or "全局") == "前台应用":
+                from core import selfmask as _sm
+                pid = _sm.front_window_pid() or 0
             ctx.player.mouse.scroll(int(p.get("scroll_dx", 0)), int(p.get("scroll_dy", 0)),
-                                    str(p.get("scroll_unit", "line") or "line"))
+                                    str(p.get("scroll_unit", "line") or "line"), pid)
             return
         if p.get("action") == "move":
             ctx.player.glide_now((dx, dy))
