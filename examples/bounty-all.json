@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v3",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v4",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -590,281 +590,13 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) 悬停+点击 → 面板（判「武林录」）→ 向下滚（像素 +2000，负值是往上）\n  → 点「悬赏」→ 判「玩法说明」进页面 → 点「营生」→ A/B 两路交替抢单。\n  A 点「解决诬陷」第一张、B 点最后一张；接取**按 Space**（界面右下角写着 Space 接取悬赏）。\n  成功判据是**出现「前往」**（已接取的详情页才有）。\n  为什么不用「没有失败提示」当成功：日志里点空过一次——没弹提示 → 被当成抢到 →\n  进完成段后六个判据全不中 → 空转到死，看着就是「卡住」。现在点空 = 没抢到，歇 2.5s 换一批重抢。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。\n键位用虚拟键码：Space=vk:49、F=vk:3。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) 悬停+点击 → 面板（判「武林录」）→ 向下滚（像素 +2000，负值是往上）\n  → 点「悬赏」→ 判「玩法说明」进页面 → 点「营生」→ 循环：\n  刷新 → 点「解决诬陷」卡片（只搜窗口左侧 66%，避开右侧详情里同样的一行字）→ 按 Space 接取\n  → 出现「前往」= 抢到，进完成段；出现「该悬赏已失效」= 先点面板右上角箭头收起（清掉选中）再刷新；\n  其它情况（被抢走 / 点空）→ 歇 4s 再刷新。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。\n键位用虚拟键码：Space=vk:49、F=vk:3。"
       },
       "enabled": true,
       "uid": "note",
       "name": "使用说明（不执行）",
       "x": 40,
       "y": 40
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "刷新",
-        "action": "click",
-        "timeout_s": 1.5,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0,
-        "search_left_pct": 0,
-        "search_right_pct": 100,
-        "pick": "第一个"
-      },
-      "enabled": true,
-      "uid": "refresh_a",
-      "name": "点「刷新」(A)",
-      "x": 300,
-      "y": 1300
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 1200,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "delay_a",
-      "name": "等列表刷新",
-      "x": 600,
-      "y": 1300
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "解决诬陷",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 2
-      },
-      "enabled": true,
-      "uid": "cond_target_a",
-      "name": "有「解决诬陷」吗(A)",
-      "x": 900,
-      "y": 1300
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "解决诬陷",
-        "action": "click",
-        "timeout_s": 1.5,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0,
-        "search_left_pct": 0,
-        "search_right_pct": 66,
-        "pick": "第一个"
-      },
-      "enabled": true,
-      "uid": "click_card_a",
-      "name": "点「解决诬陷」第一张",
-      "x": 1200,
-      "y": 1300
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 900,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "pick_a",
-      "name": "等右侧详情出来",
-      "x": 300,
-      "y": 1420
-    },
-    {
-      "type": "keyboard",
-      "params": {
-        "mode": "key",
-        "text": "",
-        "keys": "vk:49"
-      },
-      "enabled": true,
-      "uid": "accept_a",
-      "name": "按 Space 接取悬赏 (A)",
-      "x": 600,
-      "y": 1420
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 1200,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "wait_a",
-      "name": "等接取结果",
-      "x": 900,
-      "y": 1420
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "前往",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.5
-      },
-      "enabled": true,
-      "uid": "fail_a",
-      "name": "抢到了吗(A)：出现「前往」",
-      "x": 1200,
-      "y": 1420
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "刷新",
-        "action": "click",
-        "timeout_s": 1.5,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0,
-        "search_left_pct": 0,
-        "search_right_pct": 100,
-        "pick": "第一个"
-      },
-      "enabled": true,
-      "uid": "refresh_b",
-      "name": "点「刷新」(B)",
-      "x": 300,
-      "y": 1540
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 1200,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "delay_b",
-      "name": "等列表刷新",
-      "x": 600,
-      "y": 1540
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "解决诬陷",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 2
-      },
-      "enabled": true,
-      "uid": "cond_target_b",
-      "name": "有「解决诬陷」吗(B)",
-      "x": 900,
-      "y": 1540
-    },
-    {
-      "type": "ocr_click",
-      "params": {
-        "text": "解决诬陷",
-        "action": "click",
-        "timeout_s": 1.5,
-        "interval_ms": 250,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0,
-        "search_left_pct": 0,
-        "search_right_pct": 66,
-        "pick": "最后一个"
-      },
-      "enabled": true,
-      "uid": "click_card_b",
-      "name": "点「解决诬陷」最后一张",
-      "x": 1200,
-      "y": 1540
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 900,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "pick_b",
-      "name": "等右侧详情出来",
-      "x": 300,
-      "y": 1660
-    },
-    {
-      "type": "keyboard",
-      "params": {
-        "mode": "key",
-        "text": "",
-        "keys": "vk:49"
-      },
-      "enabled": true,
-      "uid": "accept_b",
-      "name": "按 Space 接取悬赏 (B)",
-      "x": 600,
-      "y": 1660
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 1200,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "wait_b",
-      "name": "等接取结果",
-      "x": 900,
-      "y": 1660
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "前往",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.5
-      },
-      "enabled": true,
-      "uid": "fail_b",
-      "name": "抢到了吗(B)：出现「前往」",
-      "x": 1200,
-      "y": 1660
     },
     {
       "type": "branch",
@@ -1097,17 +829,187 @@
       "y": 1150
     },
     {
+      "type": "ocr_click",
+      "params": {
+        "text": "刷新",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "refresh",
+      "name": "点「刷新」",
+      "x": 300,
+      "y": 1300
+    },
+    {
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 4000,
+        "ms": 1200,
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "retry_a",
-      "name": "歇 4s 等新悬赏（别连着领同一个）",
+      "uid": "delay_refresh",
+      "name": "等列表刷新",
+      "x": 600,
+      "y": 1300
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "解决诬陷",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 2
+      },
+      "enabled": true,
+      "uid": "cond_target",
+      "name": "有「解决诬陷」吗",
+      "x": 900,
+      "y": 1300
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "解决诬陷",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 250,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 66,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "click_card",
+      "name": "点「解决诬陷」卡片",
+      "x": 1200,
+      "y": 1300
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_pick",
+      "name": "等右侧详情出来",
+      "x": 1500,
+      "y": 1300
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:49"
+      },
+      "enabled": true,
+      "uid": "accept",
+      "name": "按 Space 接取悬赏",
+      "x": 1800,
+      "y": 1300
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_accept",
+      "name": "等接取结果",
+      "x": 2100,
+      "y": 1300
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "前往",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.5
+      },
+      "enabled": true,
+      "uid": "cond_ok",
+      "name": "抢到了吗（出现「前往」）",
       "x": 300,
-      "y": 1540
+      "y": 1420
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "该悬赏已失效",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2
+      },
+      "enabled": true,
+      "uid": "cond_dead",
+      "name": "是不是「该悬赏已失效」",
+      "x": 600,
+      "y": 1420
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -30,
+        "y": 44,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line"
+      },
+      "enabled": true,
+      "uid": "click_arrow",
+      "name": "点面板右上角收起箭头",
+      "x": 900,
+      "y": 1420
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_arrow",
+      "name": "等面板收起",
+      "x": 1200,
+      "y": 1420
     },
     {
       "type": "delay",
@@ -1117,10 +1019,10 @@
         "at": "09:00:00"
       },
       "enabled": true,
-      "uid": "retry_b",
-      "name": "歇 4s 等新悬赏（别连着领同一个）",
-      "x": 900,
-      "y": 1540
+      "uid": "retry",
+      "name": "歇 4s 等新悬赏",
+      "x": 300,
+      "y": 1520
     }
   ],
   "edges": [
@@ -1485,108 +1387,6 @@
       "dst_side": "left"
     },
     {
-      "src": "delay_list",
-      "port": "out",
-      "dst": "refresh_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "refresh_a",
-      "port": "out",
-      "dst": "delay_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_a",
-      "port": "out",
-      "dst": "cond_target_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_target_a",
-      "port": "true",
-      "dst": "click_card_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_target_a",
-      "port": "false",
-      "dst": "refresh_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "click_card_a",
-      "port": "out",
-      "dst": "pick_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "pick_a",
-      "port": "out",
-      "dst": "accept_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "accept_a",
-      "port": "out",
-      "dst": "wait_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "wait_a",
-      "port": "out",
-      "dst": "fail_a",
-      "dst_side": "left"
-    },
-    {
-      "src": "refresh_b",
-      "port": "out",
-      "dst": "delay_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_b",
-      "port": "out",
-      "dst": "cond_target_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_target_b",
-      "port": "true",
-      "dst": "click_card_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_target_b",
-      "port": "false",
-      "dst": "refresh_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "click_card_b",
-      "port": "out",
-      "dst": "pick_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "pick_b",
-      "port": "out",
-      "dst": "accept_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "accept_b",
-      "port": "out",
-      "dst": "wait_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "wait_b",
-      "port": "out",
-      "dst": "fail_b",
-      "dst_side": "left"
-    },
-    {
       "src": "do_delay_done",
       "port": "out",
       "dst": "m1_hover",
@@ -1611,39 +1411,99 @@
       "dst_side": "left"
     },
     {
-      "src": "fail_a",
+      "src": "delay_list",
+      "port": "out",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "refresh",
+      "port": "out",
+      "dst": "delay_refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_refresh",
+      "port": "out",
+      "dst": "cond_target",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_target",
+      "port": "true",
+      "dst": "click_card",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_target",
+      "port": "false",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_card",
+      "port": "out",
+      "dst": "delay_pick",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_pick",
+      "port": "out",
+      "dst": "accept",
+      "dst_side": "left"
+    },
+    {
+      "src": "accept",
+      "port": "out",
+      "dst": "delay_accept",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_accept",
+      "port": "out",
+      "dst": "cond_ok",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_ok",
       "port": "true",
       "dst": "do_judge",
       "dst_side": "left"
     },
     {
-      "src": "fail_a",
+      "src": "cond_ok",
       "port": "false",
-      "dst": "retry_a",
+      "dst": "cond_dead",
       "dst_side": "left"
     },
     {
-      "src": "retry_a",
-      "port": "out",
-      "dst": "refresh_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "fail_b",
+      "src": "cond_dead",
       "port": "true",
-      "dst": "do_judge",
+      "dst": "click_arrow",
       "dst_side": "left"
     },
     {
-      "src": "fail_b",
+      "src": "cond_dead",
       "port": "false",
-      "dst": "retry_b",
+      "dst": "retry",
       "dst_side": "left"
     },
     {
-      "src": "retry_b",
+      "src": "click_arrow",
       "port": "out",
-      "dst": "refresh_a",
+      "dst": "delay_arrow",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_arrow",
+      "port": "out",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "retry",
+      "port": "out",
+      "dst": "refresh",
       "dst_side": "left"
     }
   ]
