@@ -17,7 +17,7 @@ class _Mouse:
         self.scrolls = []
 
     def scroll(self, dx, dy, unit="line"):
-        self.scrolls.append((dx, dy))
+        self.scrolls.append((dx, dy, unit))
 
     def click(self, b, n=1):
         self.clicks.append((b, n))
@@ -57,14 +57,22 @@ def test_scroll_moves_cursor_to_target_first():
     MouseActionTask().run(ctx)
     assert ctx.player.calls == [("glide", (100, 200))], \
         "必须先把光标挪过去——滚轮事件只作用于光标下的窗口"
-    assert ctx.player.mouse.scrolls == [(0, 5)], "滚轮要发在 player.mouse 上（Player 没有 scroll）"
+    assert ctx.player.mouse.scrolls == [(0, 5, "line")], "滚轮要发在 player.mouse 上（Player 没有 scroll）"
     assert ctx.player.mouse.clicks == [], "滚动不该产生点击"
 
 
 def test_scroll_up_is_negative():
     ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 1, "y": 2, "scroll_dy": -4})
     MouseActionTask().run(ctx)
-    assert ctx.player.mouse.scrolls == [(0, -4)]
+    assert ctx.player.mouse.scrolls == [(0, -4, "line")]
+
+
+def test_scroll_unit_is_passed_through():
+    """游戏里常常只认像素单位；单位要能透传到 player.mouse.scroll。"""
+    ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 5, "y": 6,
+                "scroll_dy": 1200, "scroll_unit": "pixel"})
+    MouseActionTask().run(ctx)
+    assert ctx.player.mouse.scrolls == [(0, 1200, "pixel")]
 
 
 def test_click_with_window_anchor_uses_resolved_point():

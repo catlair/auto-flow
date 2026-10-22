@@ -174,6 +174,8 @@ class MouseActionTask(BaseTask):
             ParamDef("scroll_dy", "滚动格数(Y)", "int", 0,
                      tooltip="动作=scroll 时使用：正数向下滚，负数向上滚（一格 ≈ 3 行）"),
             ParamDef("scroll_dx", "滚动格数(X)", "int", 0, tooltip="动作=scroll 时使用：横向滚动，一般留 0"),
+            ParamDef("scroll_unit", "滚动单位", "select", "line", ["line", "pixel"],
+                     tooltip="line=按行（一格≈1 行，力度小）| pixel=按像素（游戏里往往只认这个）"),
         ]
 
     def run(self, ctx) -> None:
@@ -209,7 +211,8 @@ class MouseActionTask(BaseTask):
             ctx.player.glide_now((dx, dy))
             # 滚轮在 mouse 上（Player 自己没有 scroll 方法）——真机报过
             # "'Player' object has no attribute 'scroll'"。
-            ctx.player.mouse.scroll(int(p.get("scroll_dx", 0)), int(p.get("scroll_dy", 0)))
+            ctx.player.mouse.scroll(int(p.get("scroll_dx", 0)), int(p.get("scroll_dy", 0)),
+                                    str(p.get("scroll_unit", "line") or "line"))
             return
         if p.get("action") == "move":
             ctx.player.glide_now((dx, dy))
