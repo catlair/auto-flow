@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v35",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v36",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -353,11 +353,15 @@
         "offset_x": 0,
         "offset_y": 0,
         "search_left_pct": 55,
-        "search_right_pct": 100
+        "search_right_pct": 100,
+        "verify_text": "玩法说明",
+        "verify_timeout_s": 1.2,
+        "verify_retries": 1,
+        "verify_fail": "继续走下一步"
       },
       "enabled": true,
       "uid": "click_bounty",
-      "name": "点「悬赏」",
+      "name": "点「悬赏」（点完校验：有「玩法说明」）",
       "x": 1200,
       "y": 820
     },
@@ -404,11 +408,15 @@
         "rel_y": 50,
         "inset": 0,
         "offset_x": 0,
-        "offset_y": 0
+        "offset_y": 0,
+        "verify_text": "玩法说明",
+        "verify_timeout_s": 1.2,
+        "verify_retries": 1,
+        "verify_fail": "继续走下一步"
       },
       "enabled": true,
       "uid": "click_yingsheng",
-      "name": "点「营生」分类",
+      "name": "点「营生」（点完校验：有「玩法说明」）",
       "x": 1200,
       "y": 930
     },
@@ -450,7 +458,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → 判「玩法说明」确认在页面 → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区\n  → 点「解决诬陷」→ 立刻 Space 接取。\n【点卡片的讲究】三张卡写着同样的字，Vision 会把它们合并成一个文本框，\n  框中心正好是第二张卡——所以取**框内靠左 8%**，合并框就落在第一张卡上。\n  万一还是点到了治疗卡：接取后判出「进入世界」会自动放弃，不会卡住。\n【接取后分流】「前往」= 诬陷类 → 做任务；「进入世界」= 治疗类 → X 放弃 → Space 确认 → 回页面重抢。\n【做任务】前往 → 寻路3.5s → F → Space×3 → 话术争锋 → 连按F → 「继续」→ Space → 2.5s → 下一轮。\n【搜索范围】卡片 6%~68% × 18%~82%（裁剪时外扩 3%，避免把目标文字切掉）。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」（点完校验「玩法说明」）\n  → 点「营生」（同样校验）→ 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区\n  → 点「解决诬陷」（取框内靠左 8%，因为三张卡的字会被 OCR 合并成一个框）→ 立刻 Space 接取。\n【接取后分流】「前往」= 诬陷类 → 做任务；「进入世界」= 治疗类 → X 放弃 → Space 确认 → 回页面重抢。\n【做任务】前往 → 寻路3.5s → F → Space×3 → 话术争锋 → 连按F → 「继续」→ Space → 2.5s → 下一轮。\n【排查】卡住时看诊断面板「看屏幕」，能直接看到 OCR 把屏幕读成了什么。"
       },
       "enabled": true,
       "uid": "note",
@@ -555,7 +563,11 @@
         "search_right_pct": 68,
         "pick": "第一个",
         "search_top_pct": 18,
-        "search_bottom_pct": 82
+        "search_bottom_pct": 82,
+        "verify_text": "",
+        "verify_timeout_s": 1,
+        "verify_retries": 0,
+        "verify_fail": "继续走下一步"
       },
       "enabled": true,
       "uid": "click_card",

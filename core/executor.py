@@ -11,12 +11,15 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from core.player import Player
 from core.events import Workflow, Node, PORT_OUT
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,6 +125,13 @@ class Executor:
 
         cur = self.entry_uid(wf)
         steps = 0
+        # 每个节点本轮跑了几次。图里有环是正常的（抢单循环就是环），所以不能一见到
+        # 重复就报警；但**同一个节点转了几十次**基本就是卡住了——判据永远成立、
+        # 或者点下去根本没反应，界面没变，下一轮又走同一条路。
+        # 真机上「点前往 → 寻路 → 再点前往」这样空转了十几分钟才被发现，
+        # 用户只能看着它转。这里主动喊一声。
+        visits: dict[str, int] = {}
+        warned: set[tuple[str, int]] = set()
         while cur and not self._stop.is_set():
             steps += 1
             if steps > self.MAX_STEPS:
@@ -135,6 +145,14 @@ class Executor:
                         f"流程图执行步数超过上限 {self.MAX_STEPS}（节点 {node_type}），"
                         f"多半是连成了环。请检查回边。"))
                 return
+
+            visits[cur] = visits.get(cur, 0) + 1
+            if visits[cur] % 20 == 0 and (cur, visits[cur]) not in warned:
+                warned.add((cur, visits[cur]))
+                nm = by_uid[cur].name if cur in by_uid else cur
+                logger.warning("疑似卡住：节点「%s」本轮已执行 %d 次。"
+                               "多半是判据一直成立或点击没生效，画面没变化就一直在绕。",
+                               nm, visits[cur])
 
             node = by_uid.get(cur)
             if node is None:

@@ -2688,3 +2688,21 @@ def test_workflow_reload_refuses_unsaved_changes(tmp_path):
     # force 才丢弃
     ctrl.workflow_reload(True)
     assert ctrl.workflow_dirty() is False
+
+def test_executor_warns_when_a_node_keeps_running(monkeypatch, caplog):
+    """同一个节点转太多次要主动喊一声，而不是等撞步数上限。
+
+    真机上「点前往 → 寻路 → 再点前往」空转了十几分钟才被发现，用户只能看着它转。
+    判据永远成立、点击没生效，都会表现成「同一个节点反复执行」。
+    """
+    import logging as _logging
+
+    ex = Executor()
+    seen: list = []
+    _patch_wait(monkeypatch, ex, seen)
+    monkeypatch.setattr(Executor, "MAX_STEPS", 60)
+    wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 1}),
+                edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)])
+    with caplog.at_level(_logging.WARNING):
+        ex.run_workflow(wf)
+    assert "疑似卡住" in caplog.text

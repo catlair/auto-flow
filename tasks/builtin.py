@@ -705,13 +705,43 @@ class OcrClickTask(BaseTask):
                      tooltip="只在窗口纵向的这个百分比之后找。配合上下边界把识别区域裁小，识别更快"),
             ParamDef("search_bottom_pct", "搜索下边界(%)", "int", 100, min_value=0, max_value=100,
                      tooltip="只在窗口纵向的这个百分比之前找"),
+            # --- 点完校验 ---
+            # 为什么要内置：点击「没生效」是这类脚本最常见的静默失败——点歪了、
+            # 点到别的格子上、或者界面还没渲染完。以前每处都要手接一个条件节点去查，
+            # 忘了接就会带着错误状态往下走，最后表现为「流程跑完了但什么都没做」。
+            ParamDef("verify_text", "点完校验文字", "text", "",
+                     tooltip="点完之后等这段文字出现；留空=不校验"),
+            ParamDef("verify_timeout_s", "校验超时(秒)", "float", 1.5, min_value=0.0),
+            ParamDef("verify_retries", "校验失败重试次数", "int", 1, min_value=0,
+                     tooltip="没等到就重新找目标再点一次（0=不重试）"),
+            ParamDef("verify_fail", "重试也没成功", "select", "继续走下一步",
+                     ["继续走下一步", "停止工作流"]),
         ]
+
+    @staticmethod
+    def _wait_verify(ctx, text: str, timeout_s: float) -> bool:
+        """等校验文字出现（不看搜索范围：校验的是「点了有没有反应」）。"""
+        import time as _time
+        from core import ocr
+        if not text:
+            return True
+        deadline = _time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if ctx.player.stopping:
+                return True
+            if ocr.find_text(text):
+                return True
+            if _time.monotonic() >= deadline:
+                return False
+            ctx.player.wait(0.15)
 
     def run(self, ctx) -> None:
         import time as _time
         from core import ocr, selfmask
         p = ctx.params
         deadline = _time.monotonic() + float(p.get("timeout_s", 3.0))
+        verify = str(p.get("verify_text", "") or "")
+        retries_left = max(0, int(p.get("verify_retries", 1) or 0))
         while True:
             if ctx.player.stopping:
                 return
@@ -741,6 +771,19 @@ class OcrClickTask(BaseTask):
                 if action == "move":
                     return
                 ctx.player.mouse.click("left", 2 if action == "double_click" else 1)
+                if not verify:
+                    return
+                if self._wait_verify(ctx, verify, float(p.get("verify_timeout_s", 1.5))):
+                    return
+                if retries_left > 0:
+                    retries_left -= 1
+                    logger.warning("点完没等到「%s」，重新找目标再点一次（还剩 %d 次）",
+                                   verify, retries_left)
+                    continue
+                logger.warning("点「%s」后始终没等到「%s」，判定这次点击没生效",
+                               p.get("text", ""), verify)
+                if p.get("verify_fail", "继续走下一步") == "停止工作流":
+                    ctx.stop_workflow()
                 return
             if _time.monotonic() >= deadline:
                 if p.get("not_found", "跳过") == "停止工作流":

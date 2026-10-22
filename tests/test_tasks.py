@@ -303,3 +303,50 @@ def test_expand_pct_widens_crop_but_keeps_filter():
     hits = [H(50, 300), H(120, 300), H(700, 300), H(300, 100), H(300, 500)]
     kept = filter_hits(hits, win, 6, 68, 18, 82)
     assert [(h.x, h.y) for h in kept] == [(120, 300)]
+
+
+def test_ocr_click_verify_retries_then_warns(monkeypatch):
+    """点完校验：没等到校验文字就重新找目标再点，次数用完再报警。"""
+    from tasks.builtin import OcrClickTask
+    from core.ocr import TextHit
+
+    task = OcrClickTask()
+    clicks = []
+    warns = []
+
+    class Player:
+        stopping = False
+        def glide_now(self, xy):
+            pass
+        def wait(self, s):
+            pass
+        class mouse:
+            @staticmethod
+            def click(button, count=1):
+                clicks.append(count)
+
+    class Ctx:
+        player = Player()
+        params = {"text": "刷新", "action": "click", "timeout_s": 1.0, "interval_ms": 50,
+                  "not_found": "跳过", "verify_text": "玩法说明", "verify_timeout_s": 0.0,
+                  "verify_retries": 2, "verify_fail": "继续走下一步"}
+        stopped = False
+        def set_port(self, p):
+            pass
+        def stop_workflow(self):
+            Ctx.stopped = True
+
+    monkeypatch.setattr("core.ocr.find_texts", lambda target, region=None, languages=None: [
+        TextHit(text="刷新", x=900, y=300, confidence=0.9, w=40, h=20)])
+    monkeypatch.setattr("core.ocr.find_text", lambda target, region=None, languages=None: None)
+    monkeypatch.setattr("core.selfmask.front_window_rect", lambda: (0, 0, 1000, 600))
+    monkeypatch.setattr("tasks.builtin.logger", type("L", (), {
+        "info": staticmethod(lambda *a, **k: None),
+        "warning": staticmethod(lambda *a, **k: warns.append(a[0] % a[1:])),
+    })())
+
+    task.run(Ctx())
+    # 1 次 + 2 次重试 = 3 次点击，最后一次之后报警
+    assert len(clicks) == 3
+    assert any("始终没等到" in w for w in warns)
+    assert Ctx.stopped is False
