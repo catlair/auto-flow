@@ -761,7 +761,17 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
         # 也在左侧任务栏里，结果面板还没滚到底就判成「已经能看见悬赏」，随后点到了别的格子）
         from core import selfmask as _sm
         hits = ocr.find_texts(str(value))
-        return bool(filter_hits(hits, _sm.front_window_rect(), int(left_pct), int(right_pct)))
+        win = _sm.front_window_rect()
+        kept = filter_hits(hits, win, int(left_pct), int(right_pct))
+        # 判据不成立时最容易「看着明明在屏幕上」——把命中位置和窗口都打出来，
+        # 下次直接看是没识别到、还是被搜索范围滤掉了。
+        if hits and not kept:
+            logger.info("文字检测：「%s」命中 %d 处但都被范围(%d%%~%d%%)滤掉：%s | 窗口 %s",
+                        value, len(hits), int(left_pct), int(right_pct),
+                        [(h.x, h.y) for h in hits], win)
+        elif not hits:
+            logger.info("文字检测：「%s」整屏没找到 | 窗口 %s", value, win)
+        return bool(kept)
     if kind == "目标存在(YOLO)":
         from core.paths import default_model
         model = str(model_path or "") or default_model()

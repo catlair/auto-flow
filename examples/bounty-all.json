@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v20",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v21",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -872,7 +872,7 @@
     {
       "type": "mouse",
       "params": {
-        "action": "scroll",
+        "action": "drag",
         "button": "left",
         "anchor": "win_tr",
         "x": -150,
