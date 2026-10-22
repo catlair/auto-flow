@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v13",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v15",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -69,7 +69,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1300,
+        "ms": 900,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -150,7 +150,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1300,
+        "ms": 900,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -231,7 +231,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1300,
+        "ms": 900,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -312,7 +312,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1300,
+        "ms": 900,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -343,8 +343,8 @@
       "params": {
         "text": "悬赏",
         "action": "click",
-        "timeout_s": 2,
-        "interval_ms": 250,
+        "timeout_s": 1.2,
+        "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -365,7 +365,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2000,
+        "ms": 900,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -383,7 +383,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 3
+        "timeout_s": 1.2
       },
       "enabled": true,
       "uid": "cond_page",
@@ -396,8 +396,8 @@
       "params": {
         "text": "营生",
         "action": "click",
-        "timeout_s": 2.5,
-        "interval_ms": 250,
+        "timeout_s": 1.2,
+        "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -416,7 +416,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1500,
+        "ms": 500,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -434,7 +434,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 1.2,
+        "timeout_s": 1,
         "search_left_pct": 55,
         "search_right_pct": 100
       },
@@ -447,7 +447,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖（只有拖拽有效，滚轮两种投递都被游戏丢掉）\n  → 等 1.3s 停稳 → 点「悬赏」→ 判「玩法说明」→ 点「营生」。\n  判「悬赏」范围收到窗口右侧 55%~100%（左侧任务栏也有这两个字）。别在面板上点格子给焦点。\n【抢单循环】每轮开头：判「接取悬赏」在不在 → 开着就**鼠标右键返回**收起（面板开着时没有刷新按钮）\n  → 点「刷新」（2s 冷却，等 2.3s）→ 有「解决诬陷」就点卡片\n  ⚠ 点卡片时取文字框**靠上**（纵向 15%）的位置，点完立刻把光标挪到左下角空白——\n    奖励图标那一排**悬停就会弹出物品说明**，挡住界面。\n  → Space 接取 → 出现「前往」= 抢到，进完成段；否则回循环开头。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。节奏按「抢」来调。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖（只有拖拽有效）→ 点「悬赏」→ 点「营生」。\n  判「悬赏」范围收到右侧 55%~100%（左侧任务栏也有这两个字）。\n【抢单循环】右键收起面板（开着时没有刷新按钮）→ 点「刷新」→ 等 0.6s → 点卡片（文字框靠上 15%，\n  避开奖励图标）→ 光标挪开 → Space 接取 → 出现「前往」= 抢到；否则歇 0.7s 回开头。\n  没抢到不再细分原因（被抢/失效/点空都一样处理），每轮省掉一次全屏识别。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
       },
       "enabled": true,
       "uid": "note",
@@ -485,8 +485,8 @@
       "params": {
         "text": "前往",
         "action": "click",
-        "timeout_s": 2,
-        "interval_ms": 250,
+        "timeout_s": 1.2,
+        "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -519,8 +519,8 @@
       "params": {
         "text": "话术争锋",
         "action": "click",
-        "timeout_s": 2,
-        "interval_ms": 250,
+        "timeout_s": 1.2,
+        "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -690,8 +690,8 @@
       "params": {
         "text": "刷新",
         "action": "click",
-        "timeout_s": 1.5,
-        "interval_ms": 250,
+        "timeout_s": 1.2,
+        "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "目标中心",
         "rel_x": 50,
@@ -713,12 +713,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 2300,
+        "ms": 600,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_refresh",
-      "name": "等列表刷新（刷新有 2s 冷却）",
+      "name": "等列表刷新",
       "x": 600,
       "y": 1300
     },
@@ -731,7 +731,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 2
+        "timeout_s": 0.8
       },
       "enabled": true,
       "uid": "cond_target",
@@ -744,8 +744,8 @@
       "params": {
         "text": "解决诬陷",
         "action": "click",
-        "timeout_s": 1.5,
-        "interval_ms": 250,
+        "timeout_s": 1.2,
+        "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "框内自定义",
         "rel_x": 50,
@@ -767,7 +767,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 900,
+        "ms": 350,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -793,7 +793,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1200,
+        "ms": 600,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -811,29 +811,12 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 1.5
+        "timeout_s": 0.8
       },
       "enabled": true,
       "uid": "cond_ok",
       "name": "抢到了吗（出现「前往」）",
       "x": 300,
-      "y": 1420
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "该悬赏已失效",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 1.2
-      },
-      "enabled": true,
-      "uid": "cond_dead",
-      "name": "是不是「该悬赏已失效」",
-      "x": 600,
       "y": 1420
     },
     {
@@ -864,7 +847,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 900,
+        "ms": 400,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -877,12 +860,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 4000,
+        "ms": 700,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "retry",
-      "name": "歇 4s 等新悬赏",
+      "name": "歇 0.7s 再刷新",
       "x": 300,
       "y": 1520
     },
@@ -914,7 +897,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 900,
+        "ms": 600,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -932,7 +915,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 1.5,
+        "timeout_s": 1.2,
         "search_left_pct": 55,
         "search_right_pct": 100
       },
@@ -946,12 +929,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 1300,
+        "ms": 500,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "settle",
-      "name": "等面板停稳（滚动有惯性）",
+      "name": "等面板停稳",
       "x": 1200,
       "y": 700
     },
@@ -983,7 +966,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 900,
+        "ms": 600,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -1001,7 +984,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 1.5,
+        "timeout_s": 1.2,
         "search_left_pct": 55,
         "search_right_pct": 100
       },
@@ -1039,7 +1022,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 900,
+        "ms": 600,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -1057,7 +1040,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 1.5,
+        "timeout_s": 1.2,
         "search_left_pct": 55,
         "search_right_pct": 100
       },
@@ -1076,7 +1059,7 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 1,
+        "timeout_s": 0.6,
         "search_left_pct": 55,
         "search_right_pct": 100
       },
@@ -1470,24 +1453,6 @@
       "src": "cond_ok",
       "port": "true",
       "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_ok",
-      "port": "false",
-      "dst": "cond_dead",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_dead",
-      "port": "true",
-      "dst": "cond_panel_open",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_dead",
-      "port": "false",
-      "dst": "retry",
       "dst_side": "left"
     },
     {
