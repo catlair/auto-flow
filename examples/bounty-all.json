@@ -556,32 +556,6 @@
       "params": {
         "mode": "key",
         "text": "",
-        "keys": "vk:49"
-      },
-      "enabled": true,
-      "uid": "do_press_space_start",
-      "name": "按 Space（开始话术）",
-      "x": 660,
-      "y": 380
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 1500,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "do_delay_start",
-      "name": "等对决开始",
-      "x": 960,
-      "y": 380
-    },
-    {
-      "type": "keyboard",
-      "params": {
-        "mode": "key",
-        "text": "",
         "keys": "vk:3"
       },
       "enabled": true,
@@ -1428,19 +1402,7 @@
     {
       "src": "do_judge",
       "port": "case:3",
-      "dst": "do_press_space_start",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_press_space_start",
-      "port": "out",
-      "dst": "do_delay_start",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_start",
-      "port": "out",
-      "dst": "do_judge",
+      "dst": "do_press_space_done",
       "dst_side": "left"
     },
     {
@@ -1458,7 +1420,7 @@
     {
       "src": "do_judge",
       "port": "case:5",
-      "dst": "do_press_space_done",
+      "dst": "do_press_f",
       "dst_side": "left"
     },
     {
