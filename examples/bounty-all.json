@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v25",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v26",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -450,7 +450,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」。\n【抢单循环】右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区（只识别左侧 66%、纵向 20%~80%）\n  → 一出现「解决诬陷」立刻点（靠上 15%）→ 光标挪开 → 立刻 Space 接取 → 等 0.4s\n  → 出现「前往」= 抢到；否则回开头。\n【完成】一个判定点按界面走：\n  放弃悬赏（=已接取详情页）→ 点「前往」；话术争锋 → 点它；开始话术 → Space；\n  快速话术 → F；继续 → Space 结算；诬陷悬赏（NPC 交互）→ F。\n  ⚠ 判「已接取详情页」用的是「放弃悬赏」而不是「前往」：大世界任务栏里也有「前往」两个字，\n    用它会每轮都命中，一直在点前往、寻路、再点前往（真机上死循环过）。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」。\n【抢单循环】右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区（左侧 66%、纵向 20%~80%）\n  → 出现「解决诬陷」立刻点（靠上 15%）→ 光标挪开 → 立刻 Space 接取 → 等 0.4s\n  → 出现「前往」= 抢到；否则回开头。\n【完成段】一个判定点按界面走（6 条，全是各界面独有的字）：\n  放弃悬赏（已接取详情页）→ 点「前往」\n  话术争锋（对话选项）→ 点它\n  继续（胜负结算）→ Space\n  跳过（过场动画）→ Space\n  揭穿（对决中，中间那句「揭穿XX的谎言还雇主清白」）→ 连按 F 快速话术\n  诬陷悬赏（站在 NPC 旁的交互提示）→ F\n  都不命中 → 空转 2s；空转时若看到「悬索游天」（大世界 HUD）说明这单做完了 → 回去抢下一单。"
       },
       "enabled": true,
       "uid": "note",
@@ -467,11 +467,11 @@
         "case2_kind": "文字存在",
         "case2_value": "话术争锋",
         "case3_kind": "文字存在",
-        "case3_value": "开始话术",
+        "case3_value": "继续",
         "case4_kind": "文字存在",
-        "case4_value": "快速话术",
+        "case4_value": "跳过",
         "case5_kind": "文字存在",
-        "case5_value": "继续",
+        "case5_value": "揭穿",
         "case6_kind": "文字存在",
         "case6_value": "诬陷悬赏",
         "confidence": 0.8,
@@ -594,12 +594,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 700,
+        "ms": 350,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "do_delay_f",
-      "name": "等一拍",
+      "name": "等一拍再按 F",
       "x": 960,
       "y": 480
     },
@@ -1167,6 +1167,51 @@
       "name": "是悬赏界面吗（有「玩法说明」）",
       "x": 2100,
       "y": 820
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:49"
+      },
+      "enabled": true,
+      "uid": "do_press_skip",
+      "name": "按 Space（跳过过场）",
+      "x": 300,
+      "y": 900
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "do_delay_skip",
+      "name": "等过场结束",
+      "x": 600,
+      "y": 900
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "悬索游天",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.6,
+        "search_left_pct": 0,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_world",
+      "name": "回到大世界了吗（有「悬索游天」）",
+      "x": 300,
+      "y": 1700
     }
   ],
   "edges": [
@@ -1399,12 +1444,6 @@
       "dst_side": "left"
     },
     {
-      "src": "do_judge",
-      "port": "case:4",
-      "dst": "do_press_f",
-      "dst_side": "left"
-    },
-    {
       "src": "do_press_f",
       "port": "out",
       "dst": "do_delay_f",
@@ -1450,18 +1489,6 @@
       "src": "do_judge",
       "port": "else",
       "dst": "do_idle",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_idle",
-      "port": "out",
-      "dst": "do_judge",
-      "dst_side": "left"
-    },
-    {
-      "src": "do_delay_done",
-      "port": "out",
-      "dst": "m1_hover",
       "dst_side": "left"
     },
     {
@@ -1684,6 +1711,48 @@
       "src": "cond_page_b",
       "port": "false",
       "dst": "end_fail",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_judge",
+      "port": "case:4",
+      "dst": "do_press_skip",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_press_skip",
+      "port": "out",
+      "dst": "do_delay_skip",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_delay_skip",
+      "port": "out",
+      "dst": "do_judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_delay_done",
+      "port": "out",
+      "dst": "do_judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "do_idle",
+      "port": "out",
+      "dst": "cond_world",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_world",
+      "port": "true",
+      "dst": "m1_hover",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_world",
+      "port": "false",
+      "dst": "do_judge",
       "dst_side": "left"
     }
   ]
