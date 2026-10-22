@@ -673,6 +673,10 @@ class OcrClickTask(BaseTask):
             hit = pick_hit(hits, str(p.get("pick", "第一个") or "第一个"))
             if hit:
                 x, y = _click_target(p, hit.x, hit.y, hit.w, hit.h)
+                # 点偏过一次（想点「悬赏」结果点进「伙伴」），所以把命中数和落点都记下来：
+                # 面板滚动有惯性，读到的位置和真正点下去的时刻可能差了几百毫秒。
+                logger.info("找文字点击：「%s」命中 %d 处，选 (%d,%d) 框 %dx%d → 点 (%d,%d)",
+                            p.get("text", ""), len(hits), hit.x, hit.y, hit.w, hit.h, x, y)
                 if not _self_window_guard(x, y):
                     return
                 ctx.player.glide_now((x, y))
