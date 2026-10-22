@@ -162,7 +162,7 @@ class MouseActionTask(BaseTask):
         super().__init__()
         self.params = [
             ParamDef("action", "动作", "select", "click",
-                     ["click", "double_click", "move", "press", "release", "scroll"]),
+                     ["click", "double_click", "move", "press", "release", "scroll", "drag"]),
             ParamDef("button", "按键", "select", "left", ["left", "right", "middle"]),
             ParamDef("anchor", "坐标基准", "select", "absolute",
                      ["absolute", "base", "win_tl", "win_tr", "win_bl", "win_br"],
@@ -176,6 +176,14 @@ class MouseActionTask(BaseTask):
             ParamDef("scroll_dx", "滚动格数(X)", "int", 0, tooltip="动作=scroll 时使用：横向滚动，一般留 0"),
             ParamDef("scroll_unit", "滚动单位", "select", "line", ["line", "pixel"],
                      tooltip="line=按行（一格≈1 行，力度小）| pixel=按像素（游戏里往往只认这个）"),
+            ParamDef("drag_dx", "拖拽位移 X", "int", 0,
+                     tooltip="动作=drag 时使用：从 (X,Y) 按住往这边拖。负数=往左拖"),
+            ParamDef("drag_dy", "拖拽位移 Y", "int", -250,
+                     tooltip="动作=drag 时使用：负数=往上拖（内容向下滚，看下面的东西）"),
+            ParamDef("drag_steps", "拖拽步数", "int", 12, min_value=2, max_value=120,
+                     tooltip="分成几步移动。必须分步——一步跳到终点，游戏只看到光标瞬移，不认拖拽"),
+            ParamDef("drag_ms", "拖拽耗时(ms)", "int", 400, min_value=50, max_value=5000,
+                     tooltip="整段拖拽的时长，太快游戏可能不认"),
         ]
 
     def run(self, ctx) -> None:
@@ -205,6 +213,28 @@ class MouseActionTask(BaseTask):
                         anchor, int(p.get("x", 0)), int(p.get("y", 0)), dx, dy,
                         ("（前台窗口 %s）" % (win,)) if win else "")
         m = ctx.player.mouse
+        if p.get("action") == "drag":
+            # 滚轮在不少游戏里被直接忽略（真机上试过 4 档力度/方向都没反应），
+            # 拖拽列表才是通用解法：按住 → 分步移动 → 松开。
+            # **必须分步**：一步跳到终点，游戏只看到光标瞬移，不认这是一次拖拽。
+            import time as _time
+            steps = max(2, int(p.get("drag_steps", 12) or 12))
+            total_ms = max(50, int(p.get("drag_ms", 400) or 400))
+            ddx = int(p.get("drag_dx", 0) or 0)
+            ddy = int(p.get("drag_dy", 0) or 0)
+            ctx.player.glide_now((dx, dy))
+            ctx.player.mouse.press("left")
+            try:
+                for i in range(1, steps + 1):
+                    if ctx.player.stopping:
+                        break
+                    ratio = i / float(steps)
+                    ctx.player.mouse.move_to(
+                        (dx + int(round(ddx * ratio)), dy + int(round(ddy * ratio))), "left")
+                    _time.sleep(total_ms / 1000.0 / steps)
+            finally:
+                ctx.player.mouse.release("left")
+            return
         if p.get("action") == "scroll":
             # 滚轮事件落在**光标所在的那个窗口**上，所以先把光标挪到目标位置再滚，
             # 否则滚的是别的地方（游戏里最常见的表现就是「滚了没反应」）。

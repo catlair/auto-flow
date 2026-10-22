@@ -164,3 +164,57 @@ def test_pick_hit_modes():
     assert pick_hit(hits, "最后一个").x == 3
     assert pick_hit(hits, "随机").x in (1, 2, 3)
     assert pick_hit([], "第一个") is None
+
+
+def test_drag_moves_in_steps_while_pressed():
+    """拖拽必须分步移动：一步跳到终点的话，游戏只看到光标瞬移，不认拖拽。"""
+    from tasks.builtin import MouseActionTask
+
+    class M(_Mouse):
+        def __init__(self):
+            super().__init__()
+            self.moves = []
+
+        def move_to(self, pt, button=None):
+            self.moves.append((tuple(pt), button))
+
+    class P(_Player):
+        def __init__(self):
+            super().__init__()
+            self.mouse = M()
+
+    ctx = _Ctx({"action": "drag", "anchor": "absolute", "x": 100, "y": 400,
+                "drag_dx": 0, "drag_dy": -200, "drag_steps": 4, "drag_ms": 40})
+    ctx.player = P()
+    MouseActionTask().run(ctx)
+    assert ctx.player.calls == [("glide", (100, 400))]
+    assert ctx.player.mouse.presses == ["left"] and ctx.player.mouse.releases == ["left"]
+    assert len(ctx.player.mouse.moves) == 4, "要分 4 步移动"
+    # 按键保持期间必须发 Dragged 类型，否则应用只看到光标在动
+    assert all(btn == "left" for _pt, btn in ctx.player.mouse.moves)
+    assert ctx.player.mouse.moves[-1][0] == (100, 200), "终点 = 起点 + 位移"
+
+
+def test_drag_releases_even_if_stopped():
+    """中途停止也要松开按键，否则鼠标会一直处于按下状态。"""
+    from tasks.builtin import MouseActionTask
+
+    class M(_Mouse):
+        def __init__(self):
+            super().__init__()
+            self.moves = []
+
+        def move_to(self, pt, button=None):
+            self.moves.append((tuple(pt), button))
+
+    class P(_Player):
+        def __init__(self):
+            super().__init__()
+            self.mouse = M()
+
+    ctx = _Ctx({"action": "drag", "anchor": "absolute", "x": 10, "y": 20,
+                "drag_dy": -50, "drag_steps": 4, "drag_ms": 40})
+    ctx.player = P()
+    ctx.player.stopping = True   # 一开始就停
+    MouseActionTask().run(ctx)
+    assert ctx.player.mouse.releases == ["left"]
