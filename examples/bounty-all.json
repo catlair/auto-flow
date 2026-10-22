@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v32",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v33",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -450,7 +450,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【做任务：死顺序】前往 → 寻路3.5s → F → 1s → Space → 1s → Space → 1s → Space（共 3 次）\n  → 0.8s → 点「话术争锋」→ 1.2s → 连按 F（0.4s 一次）→ 出现「继续」→ Space → 2.5s → 下一轮。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → **先确认在悬赏页面（有「玩法说明」），不在就回去重开菜单**\n  → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区 → 点「解决诬陷」→ 立刻 Space 接取。\n【搜索范围】左侧任务栏里也写着「解决诬陷…」和「前往」，所以：\n  卡片只在 窗口 8%~66% 横向、18%~82% 纵向 里找；「前往」「放弃悬赏」只在右侧 40% 以后找。\n  （真机上就是因为任务栏的文字，脚本在大世界里空转了十几轮：点刷新没用，判据却一直是 true）"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → 判「玩法说明」确认在页面 → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区\n  → 点「解决诬陷」→ 立刻 Space 接取。\n【接取之后：先看是什么类型】详情页右下角按钮不一样：\n  解决诬陷 → 「Space 前往」→ 做任务（死顺序：前往→寻路3.5s→F→Space×3→话术争锋→连按F→继续→Space）\n  治疗     → 「Space 进入世界」→ **做不了，要放弃**：按 X 放弃悬赏 → 弹窗「是否放弃悬赏」→ Space 确认\n             → 回到悬赏页面重新抢。\n【搜索范围】左侧任务栏里也有「解决诬陷…」「前往」，所以卡片只在 8%~66% × 18%~82% 找，\n  右侧按钮类判据（前往/进入世界）只在窗口右侧 40% 以后找。"
       },
       "enabled": true,
       "uid": "note",
@@ -611,13 +611,13 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 0.8,
+        "timeout_s": 1,
         "search_left_pct": 40,
         "search_right_pct": 100
       },
       "enabled": true,
       "uid": "cond_ok",
-      "name": "抢到了吗（面板右侧出现「前往」）",
+      "name": "是诬陷类吗（面板右侧出现「前往」）",
       "x": 300,
       "y": 1420
     },
@@ -1248,6 +1248,100 @@
       "name": "在悬赏页面吗（有「玩法说明」）",
       "x": 300,
       "y": 1900
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "进入世界",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1,
+        "search_left_pct": 40,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_heal",
+      "name": "是治疗类吗（「进入世界」）",
+      "x": 600,
+      "y": 2000
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:7"
+      },
+      "enabled": true,
+      "uid": "press_x",
+      "name": "按 X（放弃悬赏）",
+      "x": 900,
+      "y": 2000
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 700,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_x",
+      "name": "等确认弹窗",
+      "x": 1200,
+      "y": 2000
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "是否放弃悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_confirm",
+      "name": "弹窗出来了吗（是否放弃悬赏）",
+      "x": 1500,
+      "y": 2000
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:49"
+      },
+      "enabled": true,
+      "uid": "press_confirm",
+      "name": "按 Space（确认放弃）",
+      "x": 1800,
+      "y": 2000
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1200,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "delay_confirm",
+      "name": "等回到悬赏页面",
+      "x": 2100,
+      "y": 2000
     }
   ],
   "edges": [
@@ -1600,12 +1694,6 @@
       "dst_side": "left"
     },
     {
-      "src": "cond_ok",
-      "port": "false",
-      "dst": "retry",
-      "dst_side": "left"
-    },
-    {
       "src": "click_bounty_b",
       "port": "out",
       "dst": "delay_open_b",
@@ -1777,6 +1865,60 @@
       "src": "delay_list",
       "port": "out",
       "dst": "cond_onpage",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_ok",
+      "port": "false",
+      "dst": "cond_heal",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_heal",
+      "port": "true",
+      "dst": "press_x",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_heal",
+      "port": "false",
+      "dst": "retry",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_x",
+      "port": "out",
+      "dst": "delay_x",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_x",
+      "port": "out",
+      "dst": "cond_confirm",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_confirm",
+      "port": "true",
+      "dst": "press_confirm",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_confirm",
+      "port": "false",
+      "dst": "cond_page",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_confirm",
+      "port": "out",
+      "dst": "delay_confirm",
+      "dst_side": "left"
+    },
+    {
+      "src": "delay_confirm",
+      "port": "out",
+      "dst": "cond_page",
       "dst_side": "left"
     }
   ]
