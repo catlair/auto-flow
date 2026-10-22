@@ -260,8 +260,17 @@ def test_condition_text_can_be_limited_to_a_region():
             Ctx.port = p
 
     orig_find, orig_win = ocr.find_texts, selfmask.front_window_rect
-    ocr.find_texts = lambda target, region=None, languages=None: [
-        TextHit(text="悬赏", x=100, y=300, confidence=0.9, w=40, h=20)]   # 只有左侧任务栏那处
+
+    def fake_find(target, region=None, languages=None):
+        # 模拟「裁图识别」：给了区域就只返回落在区域内的命中
+        hit = TextHit(text="悬赏", x=100, y=300, confidence=0.9, w=40, h=20)  # 只在左侧任务栏
+        if region:
+            rx, ry, rw, rh = region
+            if not (rx <= hit.x <= rx + rw and ry <= hit.y <= ry + rh):
+                return []
+        return [hit]
+
+    ocr.find_texts = fake_find
     selfmask.front_window_rect = lambda: (0, 0, 1000, 600)
     try:
         ctx = Ctx()

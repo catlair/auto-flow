@@ -514,6 +514,34 @@ def _self_window_guard(x: int, y: int) -> bool:
 HIT_PICK_KINDS = ("第一个", "最后一个", "随机")
 
 
+def region_from_window(win, left_pct: int = 0, right_pct: int = 100,
+                       top_pct: int = 0, bottom_pct: int = 100):
+    """窗口矩形 + 四个百分比 → 屏幕矩形 (x, y, w, h)，给 OCR 只识别这一块用。
+
+    为什么要裁：全屏识别一次约 0.4 秒，而抢悬赏这种场景「列表出现到点下去」总共只有
+    一两秒的窗口期。裁到卡片区域（约占屏幕 1/3）能把单次识别压到一百多毫秒。
+    读不到窗口时返回 None（不裁）。
+    """
+    if not win:
+        return None
+    left, top, w, h = win
+    l = max(0, min(100, int(left_pct)))
+    r = max(0, min(100, int(right_pct)))
+    t = max(0, min(100, int(top_pct)))
+    bt = max(0, min(100, int(bottom_pct)))
+    if l > r:
+        l, r = r, l
+    if t > bt:
+        t, bt = bt, t
+    x1 = left + int(w * l / 100.0)
+    x2 = left + int(w * r / 100.0)
+    y1 = top + int(h * t / 100.0)
+    y2 = top + int(h * bt / 100.0)
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    return (x1, y1, x2 - x1, y2 - y1)
+
+
 def filter_hits(hits: list, win, left_pct: int = 0, right_pct: int = 100) -> list:
     """按「窗口宽度的百分比区间」筛命中，只保留横向落在区间内的。
 
@@ -656,6 +684,10 @@ class OcrClickTask(BaseTask):
                      tooltip="只在窗口横向的这个百分比之前找。同一句话左右各有一处时，用这个把右边那个排掉"),
             ParamDef("pick", "多个命中时", "select", "第一个", list(HIT_PICK_KINDS),
                      tooltip="同一句话在屏幕上出现多次时选哪个"),
+            ParamDef("search_top_pct", "搜索上边界(%)", "int", 0, min_value=0, max_value=100,
+                     tooltip="只在窗口纵向的这个百分比之后找。配合上下边界把识别区域裁小，识别更快"),
+            ParamDef("search_bottom_pct", "搜索下边界(%)", "int", 100, min_value=0, max_value=100,
+                     tooltip="只在窗口纵向的这个百分比之前找"),
         ]
 
     def run(self, ctx) -> None:
@@ -666,10 +698,15 @@ class OcrClickTask(BaseTask):
         while True:
             if ctx.player.stopping:
                 return
-            hits = ocr.find_texts(str(p.get("text", "")))
-            hits = filter_hits(hits, selfmask.front_window_rect(),
-                               int(p.get("search_left_pct", 0) or 0),
-                               int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100))
+            _win = selfmask.front_window_rect()
+            _l = int(p.get("search_left_pct", 0) or 0)
+            _r = int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100)
+            _t = int(p.get("search_top_pct", 0) or 0)
+            _bt = int(p.get("search_bottom_pct", 100) if p.get("search_bottom_pct") is not None else 100)
+            _region = region_from_window(_win, _l, _r, _t, _bt)
+            hits = ocr.find_texts(str(p.get("text", "")), region=_region)
+            if not _region:
+                hits = filter_hits(hits, _win, _l, _r)
             hit = pick_hit(hits, str(p.get("pick", "第一个") or "第一个"))
             if hit:
                 x, y = _click_target(p, hit.x, hit.y, hit.w, hit.h)
@@ -747,7 +784,8 @@ class YoloClickTask(BaseTask):
 
 
 def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
-            model_path: str = "", left_pct: int = 0, right_pct: int = 100) -> bool:
+            model_path: str = "", left_pct: int = 0, right_pct: int = 100,
+            top_pct: int = 0, bottom_pct: int = 100) -> bool:
     """执行一次「图像存在 / 文字存在 / 目标存在(YOLO)」检测。
 
     `condition`、`condition_group` 与 `branch` **共用这一份实现**——三者对同一种
@@ -760,9 +798,11 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
         # 带范围：同一句话在屏幕上可能出现在多处（真机上「悬赏」在菜单面板里，
         # 也在左侧任务栏里，结果面板还没滚到底就判成「已经能看见悬赏」，随后点到了别的格子）
         from core import selfmask as _sm
-        hits = ocr.find_texts(str(value))
         win = _sm.front_window_rect()
-        kept = filter_hits(hits, win, int(left_pct), int(right_pct))
+        region = region_from_window(win, int(left_pct), int(right_pct),
+                                    int(top_pct), int(bottom_pct))
+        hits = ocr.find_texts(str(value), region=region)
+        kept = hits if region else filter_hits(hits, win, int(left_pct), int(right_pct))
         # 判据不成立时最容易「看着明明在屏幕上」——把命中位置和窗口都打出来，
         # 下次直接看是没识别到、还是被搜索范围滤掉了。
         if hits and not kept:

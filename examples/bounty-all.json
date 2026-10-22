@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v23",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v24",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -450,7 +450,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖（只有拖拽有效）→ 点「悬赏」→ 点「营生」。\n  判「最底下一行出来了吗」用条件组：悬赏 / 万相集 / 戏乐 读到任一就算这行在屏幕上\n  （同一行三个格子名，OCR 读不出「悬赏」时另外两个常常还读得出），范围收到窗口右侧 55%~100%。\n  点「悬赏」失败时兜底：点「万相集」往右挪一格（同一行，间隔约 60px）。\n【抢单循环】右键收起 → 点「刷新」→ 轮询列表 → 点卡片（文字框靠上 15%）→ 光标挪开\n  → 立刻 Space 接取 → 等 0.4s → 出现「前往」= 抢到；否则回开头。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。速度优先。\n【开面板】右上角图标 (-23,48) 悬停+点击 → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」。\n  判最底下一行用条件组（悬赏/万相集/戏乐 任一），点「悬赏」失败兜底点「万相集」右移一格。\n【抢单循环】右键收起 → 点「刷新」（**右下角盲点**，不再用 OCR 找按钮）→ 缓 0.06s\n  → 轮询卡片区（**只识别窗口左侧 66%、纵向 20%~80%**，单次识别快一倍以上）\n  → 一出现「解决诬陷」立刻点（文字框靠上 15%）→ 光标挪开 → 立刻 Space 接取 → 等 0.4s\n  → 出现「前往」= 抢到；否则回开头。\n【完成】前往 → 诬陷悬赏(F) → 话术争锋 → 开始话术(Space) → 快速话术(F 连按) → 继续(Space) → 回大世界抢下一单。"
       },
       "enabled": true,
       "uid": "note",
@@ -689,26 +689,26 @@
       "y": 1150
     },
     {
-      "type": "ocr_click",
+      "type": "mouse",
       "params": {
-        "text": "刷新",
         "action": "click",
-        "timeout_s": 1.2,
-        "interval_ms": 120,
-        "not_found": "跳过",
-        "click_pos": "目标中心",
-        "rel_x": 50,
-        "rel_y": 50,
-        "inset": 0,
-        "offset_x": 0,
-        "offset_y": 0,
-        "search_left_pct": 0,
-        "search_right_pct": 100,
-        "pick": "第一个"
+        "button": "left",
+        "anchor": "win_br",
+        "x": -45,
+        "y": -30,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
       },
       "enabled": true,
       "uid": "refresh",
-      "name": "点「刷新」",
+      "name": "点「刷新」（右下角，盲点）",
       "x": 300,
       "y": 1300
     },
@@ -716,12 +716,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 150,
+        "ms": 60,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_refresh",
-      "name": "点完刷新，缓一拍",
+      "name": "缓 0.06s 就开始轮询",
       "x": 600,
       "y": 1300
     },
@@ -734,7 +734,12 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 2.2
+        "timeout_s": 2.2,
+        "search_left_pct": 0,
+        "search_right_pct": 66,
+        "search_top_pct": 20,
+        "search_bottom_pct": 80,
+        "interval_ms": 100
       },
       "enabled": true,
       "uid": "cond_target",
@@ -747,7 +752,7 @@
       "params": {
         "text": "解决诬陷",
         "action": "click",
-        "timeout_s": 1.2,
+        "timeout_s": 1,
         "interval_ms": 120,
         "not_found": "跳过",
         "click_pos": "框内自定义",
@@ -758,7 +763,9 @@
         "offset_y": 0,
         "search_left_pct": 0,
         "search_right_pct": 66,
-        "pick": "第一个"
+        "pick": "第一个",
+        "search_top_pct": 20,
+        "search_bottom_pct": 80
       },
       "enabled": true,
       "uid": "click_card",
@@ -770,12 +777,12 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 100,
+        "ms": 60,
         "at": "09:00:00"
       },
       "enabled": true,
       "uid": "delay_pick",
-      "name": "点完立刻接取（不等渲染）",
+      "name": "点完立刻接取",
       "x": 1500,
       "y": 1300
     },
