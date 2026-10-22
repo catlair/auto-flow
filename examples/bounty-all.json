@@ -1772,6 +1772,12 @@
       "port": "false",
       "dst": "m1_hover",
       "dst_side": "left"
+    },
+    {
+      "src": "delay_list",
+      "port": "out",
+      "dst": "cond_onpage",
+      "dst_side": "left"
     }
   ]
 }
