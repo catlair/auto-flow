@@ -283,3 +283,23 @@ def test_condition_text_can_be_limited_to_a_region():
         assert ctx.port == "true", "不填范围时保持原行为"
     finally:
         ocr.find_texts, selfmask.front_window_rect = orig_find, orig_win
+
+
+def test_expand_pct_widens_crop_but_keeps_filter():
+    """裁剪范围要比判断范围宽：边界贴着目标会把目标文字切掉（真机踩过）。"""
+    from tasks.builtin import expand_pct, filter_hits
+
+    el, er, et, eb = expand_pct(6, 68, 18, 82)
+    assert (el, er, et, eb) == (3, 71, 15, 85)
+    # 贴边的值不会越界
+    assert expand_pct(0, 100, 0, 100) == (0, 100, 0, 100)
+
+    class H:
+        def __init__(self, x, y):
+            self.x, self.y, self.w, self.h = x, y, 10, 10
+
+    win = (0, 0, 1000, 600)
+    # 横向 6%~68% = 60~680；纵向 18%~82% = 108~492
+    hits = [H(50, 300), H(120, 300), H(700, 300), H(300, 100), H(300, 500)]
+    kept = filter_hits(hits, win, 6, 68, 18, 82)
+    assert [(h.x, h.y) for h in kept] == [(120, 300)]

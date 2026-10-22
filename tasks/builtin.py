@@ -542,7 +542,20 @@ def region_from_window(win, left_pct: int = 0, right_pct: int = 100,
     return (x1, y1, x2 - x1, y2 - y1)
 
 
-def filter_hits(hits: list, win, left_pct: int = 0, right_pct: int = 100) -> list:
+def expand_pct(l: int, r: int, t: int, bt: int, margin: int = 3):
+    """把裁剪范围往外扩几格。
+
+    裁剪是为了提速和排干扰，但**边界贴着目标会把目标文字切掉**——真机上第一张卡片的字从
+    窗口 7.3% 开始，裁到 8% 就把首字「解」切了，识别结果不再包含「解决诬陷」，
+    表现是「列表里只有一张卡时永远抢不到」，而且不报任何错。
+    所以：**裁剪范围 = 判断范围 ± margin**，切图时宽松一点，命中后再按精确范围过滤。
+    """
+    return (max(0, l - margin), min(100, r + margin),
+            max(0, t - margin), min(100, bt + margin))
+
+
+def filter_hits(hits: list, win, left_pct: int = 0, right_pct: int = 100,
+                top_pct: int = 0, bottom_pct: int = 100) -> list:
     """按「窗口宽度的百分比区间」筛命中，只保留横向落在区间内的。
 
     真机场景：悬赏卡片在左、详情面板在右，两边写着同一句话「解决诬陷…」。
@@ -551,12 +564,16 @@ def filter_hits(hits: list, win, left_pct: int = 0, right_pct: int = 100) -> lis
     """
     if not hits or not win:
         return list(hits)
-    left, _top, w, _h = win
+    left, top, w, h_ = win
     lo = left + w * max(0, min(100, left_pct)) / 100.0
     hi = left + w * max(0, min(100, right_pct)) / 100.0
     if lo > hi:
         lo, hi = hi, lo
-    return [h for h in hits if lo <= h.x <= hi]
+    tlo = top + h_ * max(0, min(100, top_pct)) / 100.0
+    thi = top + h_ * max(0, min(100, bottom_pct)) / 100.0
+    if tlo > thi:
+        tlo, thi = thi, tlo
+    return [h for h in hits if lo <= h.x <= hi and tlo <= h.y <= thi]
 
 
 def pick_hit(hits: list, mode: str = "第一个"):
@@ -703,10 +720,13 @@ class OcrClickTask(BaseTask):
             _r = int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100)
             _t = int(p.get("search_top_pct", 0) or 0)
             _bt = int(p.get("search_bottom_pct", 100) if p.get("search_bottom_pct") is not None else 100)
-            _region = region_from_window(_win, _l, _r, _t, _bt)
+            _el, _er, _et, _eb = expand_pct(_l, _r, _t, _bt)
+            _region = region_from_window(_win, _el, _er, _et, _eb)
             hits = ocr.find_texts(str(p.get("text", "")), region=_region)
-            if not _region:
-                hits = filter_hits(hits, _win, _l, _r)
+            if hits:
+                logger.info("找文字点击：「%s」范围内命中 %d 处 → %s", p.get("text", ""), len(hits),
+                            [(h.x, h.y, h.text[:10]) for h in hits])
+            hits = filter_hits(hits, _win, _l, _r, _t, _bt)
             hit = pick_hit(hits, str(p.get("pick", "第一个") or "第一个"))
             if hit:
                 x, y = _click_target(p, hit.x, hit.y, hit.w, hit.h)
@@ -799,10 +819,10 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
         # 也在左侧任务栏里，结果面板还没滚到底就判成「已经能看见悬赏」，随后点到了别的格子）
         from core import selfmask as _sm
         win = _sm.front_window_rect()
-        region = region_from_window(win, int(left_pct), int(right_pct),
-                                    int(top_pct), int(bottom_pct))
+        el, er, et, eb = expand_pct(int(left_pct), int(right_pct), int(top_pct), int(bottom_pct))
+        region = region_from_window(win, el, er, et, eb)
         hits = ocr.find_texts(str(value), region=region)
-        kept = hits if region else filter_hits(hits, win, int(left_pct), int(right_pct))
+        kept = filter_hits(hits, win, int(left_pct), int(right_pct), int(top_pct), int(bottom_pct))
         # 判据不成立时最容易「看着明明在屏幕上」——把命中位置和窗口都打出来，
         # 下次直接看是没识别到、还是被搜索范围滤掉了。
         if hits and not kept:
