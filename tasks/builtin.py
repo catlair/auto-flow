@@ -747,7 +747,7 @@ class YoloClickTask(BaseTask):
 
 
 def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
-            model_path: str = "") -> bool:
+            model_path: str = "", left_pct: int = 0, right_pct: int = 100) -> bool:
     """执行一次「图像存在 / 文字存在 / 目标存在(YOLO)」检测。
 
     `condition`、`condition_group` 与 `branch` **共用这一份实现**——三者对同一种
@@ -757,7 +757,11 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
     """
     from core import vision, ocr, yolo
     if kind == "文字存在":
-        return ocr.find_text(str(value)) is not None
+        # 带范围：同一句话在屏幕上可能出现在多处（真机上「悬赏」在菜单面板里，
+        # 也在左侧任务栏里，结果面板还没滚到底就判成「已经能看见悬赏」，随后点到了别的格子）
+        from core import selfmask as _sm
+        hits = ocr.find_texts(str(value))
+        return bool(filter_hits(hits, _sm.front_window_rect(), int(left_pct), int(right_pct)))
     if kind == "目标存在(YOLO)":
         from core.paths import default_model
         model = str(model_path or "") or default_model()
@@ -788,6 +792,11 @@ class ConditionTask(BaseTask):
             ParamDef("confidence", "置信度", "float", 0.8, min_value=0.05),
             ParamDef("timeout_s", "等待超时(秒)", "float", 0.0, min_value=0.0,
                      tooltip=">0 时在超时时间内反复检测，出现即算成立"),
+            ParamDef("search_left_pct", "搜索左边界(%)", "int", 0, min_value=0, max_value=100,
+                     tooltip="文字检测只在窗口横向的这个百分比之后找。"
+                             "同一句话屏幕上有多处时（比如任务栏里也有），用它把范围收到面板那一侧"),
+            ParamDef("search_right_pct", "搜索右边界(%)", "int", 100, min_value=0, max_value=100,
+                     tooltip="文字检测只在窗口横向的这个百分比之前找"),
         ]
 
     def run(self, ctx) -> None:
@@ -806,7 +815,9 @@ class ConditionTask(BaseTask):
         def check() -> bool:
             return _detect(method, value_for(),
                            confidence=float(p.get("confidence", 0.8)),
-                           model_path=str(p.get("model_path") or ""))
+                           model_path=str(p.get("model_path") or ""),
+                           left_pct=int(p.get("search_left_pct", 0) or 0),
+                           right_pct=int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100))
 
         while True:
             if ctx.player.stopping:

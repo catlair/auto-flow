@@ -240,3 +240,37 @@ def test_scroll_global_by_default():
     ctx = _Ctx({"action": "scroll", "anchor": "absolute", "x": 1, "y": 2, "scroll_dy": 3})
     MouseActionTask().run(ctx)
     assert ctx.player.mouse.scrolls == [(0, 3, "line", 0)]
+
+
+def test_condition_text_can_be_limited_to_a_region():
+    """「悬赏」在菜单面板里、也在左侧任务栏里——不加范围就会提前判成「已能看见」。"""
+    from core import ocr, selfmask
+    from tasks.builtin import ConditionTask
+    from core.ocr import TextHit
+
+    class Ctx:
+        params = {}
+        port = None
+        class player:
+            stopping = False
+            @staticmethod
+            def wait(_s):
+                pass
+        def set_port(self, p):
+            Ctx.port = p
+
+    orig_find, orig_win = ocr.find_texts, selfmask.front_window_rect
+    ocr.find_texts = lambda target, region=None, languages=None: [
+        TextHit(text="悬赏", x=100, y=300, confidence=0.9, w=40, h=20)]   # 只有左侧任务栏那处
+    selfmask.front_window_rect = lambda: (0, 0, 1000, 600)
+    try:
+        ctx = Ctx()
+        ctx.params = {"check": "文字存在", "text": "悬赏", "timeout_s": 0,
+                      "search_left_pct": 55, "search_right_pct": 100}
+        ConditionTask().run(ctx)
+        assert ctx.port == "false", "左侧那处不算数"
+        ctx.params = {"check": "文字存在", "text": "悬赏", "timeout_s": 0}
+        ConditionTask().run(ctx)
+        assert ctx.port == "true", "不填范围时保持原行为"
+    finally:
+        ocr.find_texts, selfmask.front_window_rect = orig_find, orig_win
