@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v31",
+  "name": "燕云·江湖悬赏 全流程（抢单→做完→下一单）v32",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -450,7 +450,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【为什么按顺序而不是按界面判】「F 诬陷悬赏」是常驻提示，接取页/大世界/任务开始页一模一样，\n  靠界面判断下一步必然错（真机上做完任务回到大世界又按了一次 F，进了空对话）。\n【做任务：死顺序】\n  ① 点「前往」→ ② 等寻路 3.5s → ③ F → 1s → Space → 1s → Space → 1s → **Space（共 3 次）**\n  → 0.8s → ⑥ 点「话术争锋」→ 1.2s → ⑦ 连按 F（0.4s 一次）\n  → 出现「继续」→ ⑧ Space → 2.5s → 直接开始下一轮抢单（**不再按 F**）。\n  唯一用界面判断的是「继续」，它只在胜负结算页出现，不会常驻。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区 → 点「解决诬陷」→ 立刻 Space 接取。\n【起点】有「放弃悬赏」（=已接取详情页）就先做任务，否则去抢单。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【做任务：死顺序】前往 → 寻路3.5s → F → 1s → Space → 1s → Space → 1s → Space（共 3 次）\n  → 0.8s → 点「话术争锋」→ 1.2s → 连按 F（0.4s 一次）→ 出现「继续」→ Space → 2.5s → 下一轮。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」→ 点「营生」\n  → **先确认在悬赏页面（有「玩法说明」），不在就回去重开菜单**\n  → 右键收起 → 点「刷新」（右下角盲点）→ 轮询卡片区 → 点「解决诬陷」→ 立刻 Space 接取。\n【搜索范围】左侧任务栏里也写着「解决诬陷…」和「前往」，所以：\n  卡片只在 窗口 8%~66% 横向、18%~82% 纵向 里找；「前往」「放弃悬赏」只在右侧 40% 以后找。\n  （真机上就是因为任务栏的文字，脚本在大世界里空转了十几轮：点刷新没用，判据却一直是 true）"
       },
       "enabled": true,
       "uid": "note",
@@ -525,10 +525,10 @@
         "label": "",
         "confidence": 0.8,
         "timeout_s": 2.2,
-        "search_left_pct": 0,
+        "search_left_pct": 8,
         "search_right_pct": 66,
-        "search_top_pct": 20,
-        "search_bottom_pct": 80,
+        "search_top_pct": 18,
+        "search_bottom_pct": 82,
         "interval_ms": 100
       },
       "enabled": true,
@@ -551,11 +551,11 @@
         "inset": 0,
         "offset_x": 0,
         "offset_y": 0,
-        "search_left_pct": 0,
+        "search_left_pct": 8,
         "search_right_pct": 66,
         "pick": "第一个",
-        "search_top_pct": 20,
-        "search_bottom_pct": 80
+        "search_top_pct": 18,
+        "search_bottom_pct": 82
       },
       "enabled": true,
       "uid": "click_card",
@@ -611,11 +611,13 @@
         "model_path": "",
         "label": "",
         "confidence": 0.8,
-        "timeout_s": 0.8
+        "timeout_s": 0.8,
+        "search_left_pct": 40,
+        "search_right_pct": 100
       },
       "enabled": true,
       "uid": "cond_ok",
-      "name": "抢到了吗（出现「前往」）",
+      "name": "抢到了吗（面板右侧出现「前往」）",
       "x": 300,
       "y": 1420
     },
@@ -1191,7 +1193,7 @@
         "label": "",
         "confidence": 0.8,
         "timeout_s": 0.8,
-        "search_left_pct": 0,
+        "search_left_pct": 40,
         "search_right_pct": 100
       },
       "enabled": true,
@@ -1225,6 +1227,27 @@
       "name": "等对话选项出来",
       "x": 2700,
       "y": 480
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "玩法说明",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.6,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_onpage",
+      "name": "在悬赏页面吗（有「玩法说明」）",
+      "x": 300,
+      "y": 1900
     }
   ],
   "edges": [
@@ -1406,12 +1429,6 @@
       "src": "cond_page",
       "port": "false",
       "dst": "click_bounty_b",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_list",
-      "port": "out",
-      "dst": "cond_panel_open",
       "dst_side": "left"
     },
     {
@@ -1742,6 +1759,18 @@
       "src": "do_d3b",
       "port": "out",
       "dst": "do_talk",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_onpage",
+      "port": "true",
+      "dst": "cond_panel_open",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_onpage",
+      "port": "false",
+      "dst": "m1_hover",
       "dst_side": "left"
     }
   ]
