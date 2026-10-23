@@ -135,6 +135,39 @@ async function onBindWindow(v: any) {
   }
 }
 
+/**
+ * 「更多」菜单：一天点不到几次的操作都收在这里。
+ *
+ * 平铺在标题栏的代价是真金白银的：主操作（保存、绑定窗口）被挤到换行，
+ * 而换行后标题栏高度翻倍、下面的画布就少一截。
+ */
+const moreOptions = computed(() => [
+  { content: "隐藏到托盘", value: "tray" },
+  { content: store.logWinVisible ? "关闭日志窗" : "打开日志窗", value: "logwin" },
+  { content: "诊断", value: "diag" },
+  { content: "定时运行", value: "schedule" },
+  { content: "F9 录制 · F10 运行 · F11 取点", value: "hotkeys", disabled: true },
+]);
+
+function onMore(d: any) {
+  switch (String(d?.value ?? "")) {
+    case "tray":
+      store.hideToTray();
+      break;
+    case "logwin":
+      store.toggleLogWin();
+      break;
+    case "diag":
+      diagOpen.value = true;
+      break;
+    case "schedule":
+      scheduleOpen.value = true;
+      break;
+    default:
+      break;
+  }
+}
+
 onMounted(() => {
   store.init();
   loadWindows();
@@ -145,11 +178,8 @@ onMounted(() => {
   <header class="af-header">
     <span class="af-brand">Auto Flow</span>
     <WorkflowMenu />
-    <span :class="['af-conn', store.connected ? 'ok' : 'bad']">
-      {{ store.connected ? "● 已连接" : "○ 未连接" }}
-    </span>
-    <span v-if="store.appVersion" class="af-ver">v{{ store.appVersion }}</span>
-    <!-- 锚点算在哪个窗口上：点歪时先看这里 -->
+    <span style="flex: 1" />
+    <!-- 锚点算在哪个窗口上：点歪时先看这里。宽度固定，长名字省略 -->
     <t-select
       size="small"
       class="af-winbind"
@@ -160,27 +190,22 @@ onMounted(() => {
       @change="onBindWindow"
       @visible-change="(v: boolean) => v && loadWindows()"
     />
-    <span style="flex: 1" />
-    <span class="af-hk">F9 录制 · F10 运行 · F11 取点</span>
-    <t-button
-      size="small"
-      variant="outline"
-      title="收进菜单栏继续在后台跑（点 × 也是这个效果）"
-      @click="store.hideToTray()"
-      >隐藏到托盘</t-button
+    <span
+      :class="['af-conn', store.connected ? 'ok' : 'bad']"
+      :title="store.connected ? '后端已连接' : '后端未连接'"
+    >{{ store.connected ? "●" : "○" }}</span>
+    <span v-if="store.appVersion" class="af-ver">v{{ store.appVersion }}</span>
+    <!--
+      次要操作收进「更多」：隐藏到托盘 / 日志窗 / 诊断 / 定时运行，以及快捷键提示。
+      这些都是一天点不到几次的，平铺在标题栏里会把主操作（保存、绑定窗口）挤到换行。
+    -->
+    <t-dropdown
+      trigger="click"
+      :options="moreOptions"
+      @click="(d: any) => onMore(d)"
     >
-    <!-- 置顶日志窗：运行/录制时把它拖到不碍事的地方，主窗可以收进托盘，
-         日志照样在走。开/关状态的真源在 Rust（窗口是它建的），这里只镜像。 -->
-    <t-button
-      size="small"
-      variant="outline"
-      :theme="store.logWinVisible ? 'primary' : 'default'"
-      title="置顶小窗显示运行日志（拖动标题栏移动；运行中不挡鼠标、不进截图）"
-      @click="store.toggleLogWin()"
-      >日志窗</t-button
-    >
-    <t-button size="small" variant="outline" @click="diagOpen = true">诊断</t-button>
-    <t-button size="small" variant="outline" @click="scheduleOpen = true">定时运行</t-button>
+      <t-button size="small" variant="outline">更多</t-button>
+    </t-dropdown>
   </header>
 
   <PermissionBanner />
@@ -300,7 +325,10 @@ onMounted(() => {
 .af-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  /* 绝不换行：换行会让标题栏高度翻倍，下面的画布少一截 */
+  flex-wrap: nowrap;
+  white-space: nowrap;
   padding: 8px 12px;
   border-bottom: 1px solid #e7e7e7;
   background: #fff;
@@ -462,8 +490,8 @@ onMounted(() => {
   font-size: 13px;
 }
 .af-winbind {
-  width: 200px;
-  margin-left: 6px;
+  width: 170px;
+  flex: 0 0 auto;
 }
 .af-ver {
   color: #888;
