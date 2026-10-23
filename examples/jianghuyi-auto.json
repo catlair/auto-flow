@@ -1,0 +1,863 @@
+{
+  "name": "燕云·江湖弈 单人AI 自动对局 v1",
+  "speed": 1,
+  "repeat": 1,
+  "start": "start",
+  "nodes": [
+    {
+      "type": "start",
+      "params": {},
+      "enabled": true,
+      "uid": "start",
+      "name": "开始",
+      "x": 60,
+      "y": 60
+    },
+    {
+      "type": "note",
+      "params": {
+        "text": "燕云·江湖弈（自走棋）单人 AI 自动对局。一条主循环按界面状态分派，全部判据都取「那一屏独有」的字。\n\n【主循环】每秒判一次现在是哪一屏（6 路）：\n  开始匹配 → 点「单人AI」+ 点「开始匹配」\n  弈子概率 → 商店阶段（见下）\n  棋局变数 → 点最左那张卡（卡名每局都变，所以用固定坐标 266,232）\n  额外花费 → 装备选择，干等（别人会先挑走，抢容易点空）\n  继续观战 → 半步登天结算页，按 F 退出\n  继续     → 名次结算页（我的阵容 / 奖励），按 Space\n  都不命中 → 空转 1s（加载中、过场）\n\n【商店阶段】顺序做一遍，然后等「弈子概率」消失才回主循环：\n  盲点「快捷操作」(85,111) → 点「一键穿戴」→ 再盲点「快捷操作」→ 点「一键提升」\n  弹出「合成预览」→ 点勾选框 (268,111)（成功会自动关，没成功留着不管）\n  出现菱形图标（模板图）→ 点它 (627,490)\n  回合数 ≥ 3 且还有「购买经验」→ 按 F 一次（满级后按钮变「满级」，就不按了）\n\n【为什么快捷操作要盲点】那个入口是个图标，没文字，OCR 找不到。\n【为什么等「弈子概率」消失】不然主循环每秒都会重做一遍商店动作，把菜单点成开关。"
+      },
+      "enabled": true,
+      "uid": "note",
+      "name": "说明",
+      "x": 60,
+      "y": 180
+    },
+    {
+      "type": "branch",
+      "params": {
+        "case_count": 6,
+        "timeout_s": 1.2,
+        "case1_kind": "文字存在",
+        "case1_value": "开始匹配",
+        "case2_kind": "文字存在",
+        "case2_value": "弈子概率",
+        "case3_kind": "文字存在",
+        "case3_value": "棋局变数",
+        "case4_kind": "文字存在",
+        "case4_value": "额外花费",
+        "case5_kind": "文字存在",
+        "case5_value": "继续观战",
+        "case6_kind": "文字存在",
+        "case6_value": "继续"
+      },
+      "enabled": true,
+      "uid": "judge",
+      "name": "现在在哪一屏",
+      "x": 320,
+      "y": 60
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "单人AI",
+        "action": "click",
+        "timeout_s": 1,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "click_ai",
+      "name": "点「单人AI」",
+      "x": 640,
+      "y": 60
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 250,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_ai",
+      "name": "等选中",
+      "x": 820,
+      "y": 60
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "开始匹配",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个",
+        "verify_text": "",
+        "verify_timeout_s": 1,
+        "verify_retries": 0,
+        "verify_fail": "继续走下一步"
+      },
+      "enabled": true,
+      "uid": "click_start",
+      "name": "点「开始匹配」",
+      "x": 1000,
+      "y": 60
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_start",
+      "name": "等加载",
+      "x": 1180,
+      "y": 60
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tl",
+        "x": 85,
+        "y": 111,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "q1",
+      "name": "点「快捷操作」打开菜单",
+      "x": 640,
+      "y": 200
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_q1",
+      "name": "等菜单展开",
+      "x": 820,
+      "y": 200
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "一键穿戴",
+        "action": "click",
+        "timeout_s": 1.2,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "q2",
+      "name": "点「一键穿戴」",
+      "x": 1000,
+      "y": 200
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 350,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_q2",
+      "name": "等装备生效",
+      "x": 1180,
+      "y": 200
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tl",
+        "x": 85,
+        "y": 111,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "q3",
+      "name": "再点「快捷操作」",
+      "x": 640,
+      "y": 280
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_q3",
+      "name": "等菜单展开",
+      "x": 820,
+      "y": 280
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "一键提升",
+        "action": "click",
+        "timeout_s": 1.2,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个"
+      },
+      "enabled": true,
+      "uid": "q4",
+      "name": "点「一键提升」",
+      "x": 1000,
+      "y": 280
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_q4",
+      "name": "等合成预览",
+      "x": 1180,
+      "y": 280
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "合成预览",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.6,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "c_synth",
+      "name": "弹出「合成预览」了吗",
+      "x": 640,
+      "y": 360
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tl",
+        "x": 268,
+        "y": 111,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "s_click",
+      "name": "点合成勾选框",
+      "x": 820,
+      "y": 360
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 450,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_synth",
+      "name": "等合成",
+      "x": 1000,
+      "y": 360
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "图像存在",
+        "image_path": "/Users/catlair/mobile/workspace/auto-flow/assets/templates/jianghuyi-diamond.png",
+        "text": "",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.75,
+        "timeout_s": 0.6,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "c_diamond",
+      "name": "出现菱形图标了吗",
+      "x": 640,
+      "y": 440
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tl",
+        "x": 627,
+        "y": 490,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "dia_click",
+      "name": "点菱形图标",
+      "x": 820,
+      "y": 440
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_dia",
+      "name": "等一拍",
+      "x": 1000,
+      "y": 440
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字匹配",
+        "image_path": "",
+        "text": "^[3-9]-\\d",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.5,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "c_round",
+      "name": "回合数 ≥ 3 吗",
+      "x": 640,
+      "y": 520
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "购买经验",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.5,
+        "search_left_pct": 0,
+        "search_right_pct": 40,
+        "search_top_pct": 75,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "c_xp",
+      "name": "还有「购买经验」吗（没满级）",
+      "x": 820,
+      "y": 520
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:3"
+      },
+      "enabled": true,
+      "uid": "f_xp",
+      "name": "按 F（买一次经验）",
+      "x": 1000,
+      "y": 520
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_xp",
+      "name": "等一拍",
+      "x": 1180,
+      "y": 520
+    },
+    {
+      "type": "text_absent",
+      "params": {
+        "text": "弈子概率",
+        "timeout_s": 90,
+        "interval_ms": 500,
+        "on_timeout": "继续走下一步",
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "wait_shop",
+      "name": "等「弈子概率」消失（进战斗）",
+      "x": 640,
+      "y": 620
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tl",
+        "x": 266,
+        "y": 232,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "click_var",
+      "name": "点最左那张棋局变数卡",
+      "x": 640,
+      "y": 720
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 800,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_var",
+      "name": "等选完",
+      "x": 820,
+      "y": 720
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_eq",
+      "name": "装备选择：干等",
+      "x": 640,
+      "y": 800
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:3"
+      },
+      "enabled": true,
+      "uid": "press_f",
+      "name": "按 F（退出结算）",
+      "x": 640,
+      "y": 880
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1800,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_exit",
+      "name": "等回到大厅",
+      "x": 820,
+      "y": 880
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:49"
+      },
+      "enabled": true,
+      "uid": "press_space",
+      "name": "按 Space（继续）",
+      "x": 640,
+      "y": 960
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_cont",
+      "name": "等下一屏",
+      "x": 820,
+      "y": 960
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_idle",
+      "name": "空转（加载/过场）",
+      "x": 640,
+      "y": 1040
+    }
+  ],
+  "edges": [
+    {
+      "src": "start",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:1",
+      "dst": "click_ai",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_ai",
+      "port": "out",
+      "dst": "d_ai",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_ai",
+      "port": "out",
+      "dst": "click_start",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_start",
+      "port": "out",
+      "dst": "d_start",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_start",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:2",
+      "dst": "q1",
+      "dst_side": "left"
+    },
+    {
+      "src": "q1",
+      "port": "out",
+      "dst": "d_q1",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_q1",
+      "port": "out",
+      "dst": "q2",
+      "dst_side": "left"
+    },
+    {
+      "src": "q2",
+      "port": "out",
+      "dst": "d_q2",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_q2",
+      "port": "out",
+      "dst": "q3",
+      "dst_side": "left"
+    },
+    {
+      "src": "q3",
+      "port": "out",
+      "dst": "d_q3",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_q3",
+      "port": "out",
+      "dst": "q4",
+      "dst_side": "left"
+    },
+    {
+      "src": "q4",
+      "port": "out",
+      "dst": "d_q4",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_q4",
+      "port": "out",
+      "dst": "c_synth",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_synth",
+      "port": "true",
+      "dst": "s_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "s_click",
+      "port": "out",
+      "dst": "d_synth",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_synth",
+      "port": "out",
+      "dst": "c_diamond",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_synth",
+      "port": "false",
+      "dst": "c_diamond",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_diamond",
+      "port": "true",
+      "dst": "dia_click",
+      "dst_side": "left"
+    },
+    {
+      "src": "dia_click",
+      "port": "out",
+      "dst": "d_dia",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_dia",
+      "port": "out",
+      "dst": "c_round",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_diamond",
+      "port": "false",
+      "dst": "c_round",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_round",
+      "port": "true",
+      "dst": "c_xp",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_round",
+      "port": "false",
+      "dst": "wait_shop",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_xp",
+      "port": "true",
+      "dst": "f_xp",
+      "dst_side": "left"
+    },
+    {
+      "src": "f_xp",
+      "port": "out",
+      "dst": "d_xp",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_xp",
+      "port": "out",
+      "dst": "wait_shop",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_xp",
+      "port": "false",
+      "dst": "wait_shop",
+      "dst_side": "left"
+    },
+    {
+      "src": "wait_shop",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:3",
+      "dst": "click_var",
+      "dst_side": "left"
+    },
+    {
+      "src": "click_var",
+      "port": "out",
+      "dst": "d_var",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_var",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:4",
+      "dst": "d_eq",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_eq",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:5",
+      "dst": "press_f",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_f",
+      "port": "out",
+      "dst": "d_exit",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_exit",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:6",
+      "dst": "press_space",
+      "dst_side": "left"
+    },
+    {
+      "src": "press_space",
+      "port": "out",
+      "dst": "d_cont",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_cont",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "else",
+      "dst": "d_idle",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_idle",
+      "port": "out",
+      "dst": "judge",
+      "dst_side": "left"
+    }
+  ]
+}

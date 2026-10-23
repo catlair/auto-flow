@@ -911,6 +911,58 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
 
 
 @register
+class TextAbsentTask(BaseTask):
+    type = "text_absent"
+    name = "等待文字消失"
+    order = 75
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.params = [
+            ParamDef("text", "文字", "text", "",
+                     tooltip="等这段文字从屏幕上消失（例如「弈子概率」消失=离开商店阶段）"),
+            ParamDef("timeout_s", "超时(秒)", "float", 60.0, min_value=0.0,
+                     tooltip="等这么久还没消失就按下面的「超时后」处理"),
+            ParamDef("interval_ms", "检查间隔(ms)", "int", 500, min_value=100),
+            ParamDef("on_timeout", "超时后", "select", "继续走下一步",
+                     ["继续走下一步", "停止工作流"]),
+            ParamDef("search_left_pct", "搜索左边界(%)", "int", 0, min_value=0, max_value=100),
+            ParamDef("search_right_pct", "搜索右边界(%)", "int", 100, min_value=0, max_value=100),
+            ParamDef("search_top_pct", "搜索上边界(%)", "int", 0, min_value=0, max_value=100),
+            ParamDef("search_bottom_pct", "搜索下边界(%)", "int", 100, min_value=0, max_value=100),
+        ]
+
+    def run(self, ctx) -> None:
+        import time as _time
+        from core import ocr, selfmask
+        p = ctx.params
+        text = str(p.get("text", "") or "")
+        if not text:
+            return
+        deadline = _time.monotonic() + float(p.get("timeout_s", 60.0))
+        l = int(p.get("search_left_pct", 0) or 0)
+        r = int(p.get("search_right_pct", 100) if p.get("search_right_pct") is not None else 100)
+        t = int(p.get("search_top_pct", 0) or 0)
+        bt = int(p.get("search_bottom_pct", 100) if p.get("search_bottom_pct") is not None else 100)
+        el, er, et, eb = expand_pct(l, r, t, bt)
+        while True:
+            if ctx.player.stopping:
+                return
+            win = selfmask.front_window_rect()
+            region = region_from_window(win, el, er, et, eb)
+            hits = ocr.find_texts(text, region=region)
+            if not filter_hits(hits, win, l, r, t, bt):
+                return
+            if _time.monotonic() >= deadline:
+                logger.warning("等「%s」消失超时（%ss），它还在屏幕上", text,
+                               p.get("timeout_s", 60.0))
+                if p.get("on_timeout", "继续走下一步") == "停止工作流":
+                    ctx.stop_workflow()
+                return
+            ctx.player.wait(float(p.get("interval_ms", 500)) / 1000.0)
+
+
+@register
 class ConditionTask(BaseTask):
     """条件判断：两个出口——成立走 `true`，不成立走 `false`。"""
     type = "condition"

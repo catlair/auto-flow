@@ -1232,7 +1232,7 @@ def test_node_defaults_applied():
 #         → 条件 → 条件组 → 多路分支 → 注释 → 结束
 BUILTIN_MENU_ORDER = [
     "start", "mouse", "keyboard", "delay", "record_replay",
-    "image_click", "ocr_click", "yolo_click", "condition", "condition_group",
+    "image_click", "ocr_click", "yolo_click", "text_absent", "condition", "condition_group",
     "branch", "note", "end",
 ]
 
