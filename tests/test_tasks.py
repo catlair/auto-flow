@@ -350,3 +350,21 @@ def test_ocr_click_verify_retries_then_warns(monkeypatch):
     assert len(clicks) == 3
     assert any("始终没等到" in w for w in warns)
     assert Ctx.stopped is False
+
+
+def test_detect_text_regex(monkeypatch):
+    """文字匹配：按正则判断，用来表达「回合数 3 以上」这类判据。"""
+    from tasks.builtin import _detect
+    from core.ocr import TextHit
+
+    def fake(target, region=None, languages=None):
+        return [TextHit(text="3-4", x=300, y=100, confidence=0.9, w=40, h=20),
+                TextHit(text="84", x=500, y=900, confidence=0.9, w=30, h=20)]
+
+    monkeypatch.setattr("core.ocr.find_texts", fake)
+    monkeypatch.setattr("core.selfmask.front_window_rect", lambda: (0, 0, 1000, 600))
+
+    assert _detect("文字匹配", r"^[3-9]-\d") is True
+    assert _detect("文字匹配", r"^[4-9]-\d") is False
+    # 写错的正则不能把流程带崩
+    assert _detect("文字匹配", r"^[3-9") is False

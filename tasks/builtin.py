@@ -31,9 +31,10 @@ logger = logging.getLogger("tasks.builtin")
 HOTKEY_NAMES = {"F9", "F10", "F11"}
 
 # 「检测方式」三个选项被 condition、condition_group 与 branch 共用，抽出来避免两处漂移
-CHECK_KINDS = ["图像存在", "文字存在", "目标存在(YOLO)"]
+CHECK_KINDS = ["图像存在", "文字存在", "文字匹配", "目标存在(YOLO)"]
 CASE_VALUE_TOOLTIP = ("图像存在 = 模板图路径（可点「选择」挑文件）；"
-                      "文字存在 = 要找的文字；目标存在(YOLO) = 目标类别，留空=任意")
+                      "文字存在 = 要找的文字（包含即可）；文字匹配 = 正则，"
+                      "例如 ^[3-9]-\\d 表示「回合数 3 以上」；目标存在(YOLO) = 目标类别，留空=任意")
 
 # 「点击点落在目标框内」的三种模式。被 image_click 与 ocr_click 共用，抽成常量
 # 是因为参数定义、run() 里的判断、用例三处都要引用同一批字面量——各写一遍，
@@ -875,6 +876,28 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
         elif not hits:
             logger.info("文字检测：「%s」整屏没找到 | 窗口 %s", value, win)
         return bool(kept)
+    if kind == "文字匹配":
+        # 正则匹配整段文字。为什么需要：有些判据不是「有没有这段字」，而是
+        # 「这段字长什么样」——比如顶部回合数 3-4 / 2-5，要表达「3 回合以后」，
+        # 用包含关系写不出来（"3-" 也会命中 "13-"），只能上正则。
+        import re as _re
+        from core import selfmask as _sm
+        win = _sm.front_window_rect()
+        el, er, et, eb = expand_pct(int(left_pct), int(right_pct), int(top_pct), int(bottom_pct))
+        region = region_from_window(win, el, er, et, eb)
+        try:
+            rx = _re.compile(str(value))
+        except _re.error as e:
+            logger.warning("文字匹配的正则写错了：「%s」（%s）", value, e)
+            return False
+        hits = ocr.find_texts("", region=region)
+        kept = filter_hits(hits, win, int(left_pct), int(right_pct), int(top_pct), int(bottom_pct))
+        for h in kept:
+            if rx.search(h.text):
+                logger.info("文字匹配：/%s/ 命中「%s」(%d,%d)", value, h.text[:20], h.x, h.y)
+                return True
+        logger.info("文字匹配：/%s/ 没命中（范围内 %d 段文字）", value, len(kept))
+        return False
     if kind == "目标存在(YOLO)":
         from core.paths import default_model
         model = str(model_path or "") or default_model()
