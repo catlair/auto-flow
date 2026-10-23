@@ -985,7 +985,7 @@
     {
       "src": "d_exit",
       "port": "out",
-      "dst": "judge",
+      "dst": "c_exit",
       "dst_side": "left"
     },
     {
