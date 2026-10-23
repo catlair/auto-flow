@@ -80,6 +80,8 @@ def own_window_rects(force: bool = False) -> list:
                 "layer": w.get("kCGWindowLayer", 0),
                 "alpha": w.get("kCGWindowAlpha", 1.0),
                 "owner": w.get("kCGWindowOwnerName", ""),
+                # 窗口标题。有的应用不提供（返回空串），所以绑定支持「按属主名」兜底。
+                "name": w.get("kCGWindowName", "") or "",
                 "pid": int(w.get("kCGWindowOwnerPID", 0) or 0),
                 "x": b.get("X", 0), "y": b.get("Y", 0),
                 "w": b.get("Width", 0), "h": b.get("Height", 0),
@@ -205,6 +207,9 @@ def front_window_from_windows(windows: list) -> tuple | None:
 
 
 def front_window_pid() -> int | None:
+    _bw = bound_window()
+    if _bw is not None:
+        return int(_bw.get("pid", 0) or 0) or None
     """前台窗口所属进程的 pid（给「直接投递给前台应用」的输入用）。
 
     为什么需要它：全局投递的合成事件会被部分游戏的输入层过滤掉（真机上合成滚轮
@@ -239,6 +244,9 @@ def _window_list() -> list:
                 "layer": w.get("kCGWindowLayer", 0),
                 "alpha": w.get("kCGWindowAlpha", 1.0),
                 "owner": w.get("kCGWindowOwnerName", ""),
+                # 标题与 pid 给「绑定窗口」用：属主名可能重名（多开），标题更精确。
+                "name": w.get("kCGWindowName", "") or "",
+                "pid": int(w.get("kCGWindowOwnerPID", 0) or 0),
                 "x": b.get("X", 0), "y": b.get("Y", 0),
                 "w": b.get("Width", 0), "h": b.get("Height", 0),
             })
@@ -247,6 +255,92 @@ def _window_list() -> list:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 窗口绑定
+#
+# 默认行为是「取最前面那个不属于我们的窗口」。这在只有一个游戏窗口时够用，
+# 但一旦有别的东西抢到前台（浏览器、访达、弹窗、或者 Auto Flow 自己的子窗口），
+# 锚点就会整体算到另一个窗口上——**点击全歪，而且不报错**，只表现为「点了没反应」。
+# 绑定之后只认那一个窗口：它不在前台也照样按它的几何算，找不到就返回 None
+# （宁可不点，也不要点到别的窗口里去）。
+# ---------------------------------------------------------------------------
+_BINDING: dict = {"spec": ""}
+
+
+def bind_window(spec: str) -> str:
+    """绑定窗口。spec 形如 `owner:燕云十六声` / `pid:1234` / `title:xxx`；空串=取消绑定。
+
+    返回生效的 spec（原样回传，方便调用方回显）。
+    """
+    _BINDING["spec"] = str(spec or "").strip()
+    reset_cache()
+    return _BINDING["spec"]
+
+
+def binding() -> str:
+    return _BINDING["spec"]
+
+
+def _match(w: dict, kind: str, val: str) -> bool:
+    if kind == "pid":
+        try:
+            return int(w.get("pid", 0) or 0) == int(val)
+        except (TypeError, ValueError):
+            return False
+    if kind == "title":
+        return val.lower() in str(w.get("name", "") or "").lower()
+    # 默认按属主名（应用名）匹配，子串、忽略大小写
+    return val.lower() in str(w.get("owner", "") or "").lower()
+
+
+def bound_window() -> dict | None:
+    """按绑定规则找窗口；没绑定返回 None。"""
+    spec = _BINDING["spec"]
+    if not spec or ":" not in spec:
+        return None
+    kind, val = spec.split(":", 1)
+    kind = kind.strip().lower()
+    val = val.strip()
+    if not val:
+        return None
+    for w in _window_list():
+        if int(w.get("layer", 0) or 0) != 0:
+            continue
+        if int(w.get("w", 0) or 0) <= 0 or int(w.get("h", 0) or 0) <= 0:
+            continue
+        if _match(w, kind, val):
+            return w
+    return None
+
+
+def list_windows() -> list:
+    """给界面「绑定窗口」下拉用：当前屏上像窗口的条目（层 0、有尺寸）。"""
+    out = []
+    for w in _window_list():
+        if int(w.get("layer", 0) or 0) != 0:
+            continue
+        if int(w.get("w", 0) or 0) < _MIN_FRONT_W or int(w.get("h", 0) or 0) < _MIN_FRONT_H:
+            continue
+        owner = str(w.get("owner", "") or "")
+        if any(k in owner.lower() for k in _OWNER_KEYS):
+            continue
+        out.append({"owner": owner, "name": str(w.get("name", "") or ""),
+                    "pid": int(w.get("pid", 0) or 0),
+                    "x": int(w.get("x", 0) or 0), "y": int(w.get("y", 0) or 0),
+                    "w": int(w.get("w", 0) or 0), "h": int(w.get("h", 0) or 0)})
+    return out
+
+
 def front_window_rect() -> tuple | None:
-    """最前面那个不属于我们的窗口矩形（游戏窗口）；读不到返回 None。"""
+    """窗口矩形（游戏窗口）；读不到返回 None。
+
+    绑定了窗口就只认绑定的那个（即使它在后面），没绑定才取最前面的非自身窗口。
+    """
+    bw = bound_window()
+    if bw is not None:
+        return (int(bw.get("x", 0) or 0), int(bw.get("y", 0) or 0),
+                int(bw.get("w", 0) or 0), int(bw.get("h", 0) or 0))
+    if _BINDING["spec"]:
+        # 绑了但没找到：宁可让调用方跳过这次点击，也不要算到别的窗口上
+        return None
     return front_window_from_windows(_window_list())

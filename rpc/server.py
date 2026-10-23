@@ -279,6 +279,22 @@ def _diagnose() -> dict:
     }
 
 
+def _window_list_payload(_p=None) -> dict:
+    """给界面「绑定窗口」下拉：当前屏上的窗口 + 当前绑定。"""
+    from core import selfmask
+    return {"windows": selfmask.list_windows(), "binding": selfmask.binding()}
+
+
+def _window_bind(p) -> dict:
+    """绑定/解绑窗口。spec: owner:名字 / pid:1234 / title:关键字；空串=自动。"""
+    from core import selfmask
+    spec = str((p or {}).get("spec", "") or "")
+    applied = selfmask.bind_window(spec)
+    rect = selfmask.front_window_rect()
+    logger.info("窗口绑定 → %s（当前矩形 %s）", applied or "自动（最前面的非自身窗口）", rect)
+    return {"binding": applied, "window": list(rect) if rect else None}
+
+
 def _screen_dump(_p=None) -> dict:
     """把「现在屏幕上有什么」一次性抓出来：窗口矩形 + 全部 OCR 文本及坐标。
 
@@ -338,6 +354,9 @@ _HANDLERS = {
     "app.requestPermissions": lambda _p: (True, _request_permissions()),
     # 「看屏幕」：窗口矩形 + 全屏 OCR 全部文本及坐标（排查判据用）
     "app.screenDump": lambda p: (True, _screen_dump(p)),
+    # --- 窗口绑定（锚点算在哪个窗口上） ---
+    "window.list": lambda p: (True, _window_list_payload(p)),
+    "window.bind": lambda p: (True, _window_bind(p)),
     # --- 工作流真源（§9/§10，P1-1） ---
     "workflow.current": _ctl(lambda p: _CTRL.workflow_current()),
     "workflow.load": _ctl(lambda p: _CTRL.workflow_load(p.get("path", ""))),

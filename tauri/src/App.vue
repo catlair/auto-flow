@@ -9,6 +9,7 @@ import RunPanel from "@/components/RunPanel.vue";
 import RecordPanel from "@/components/RecordPanel.vue";
 import ScheduleDialog from "@/components/ScheduleDialog.vue";
 import DiagnosticsPanel from "@/components/DiagnosticsPanel.vue";
+import { rpc } from "@/rpc/client";
 
 import { computed } from "vue";
 import {
@@ -90,7 +91,54 @@ const selectedTitle = computed(() => {
 const runBadge = computed(() => (store.running ? "▶" : ""));
 const recBadge = computed(() => (store.recording ? "●" : ""));
 
-onMounted(() => store.init());
+/**
+ * 窗口绑定：锚点算在哪个窗口上。
+ *
+ * 默认是「最前面那个不属于自己的窗口」。只要浏览器、访达、或任何弹窗抢到前台，
+ * 锚点就整体算到另一个窗口上——**点击全歪而且不报错**，表现只是「点了没反应」。
+ * 绑到游戏窗口之后只认它：不在前台也照它的几何算，找不到就拒绝点击。
+ */
+const winOptions = ref<{ label: string; value: string }[]>([]);
+const winBinding = ref("");
+
+async function loadWindows() {
+  try {
+    const r: any = await rpc.request("window.list", {});
+    const list: any[] = r?.windows ?? [];
+    winOptions.value = [
+      { label: "自动（最前面的非自身窗口）", value: "" },
+      ...list.map((w) => ({
+        label: `${w.owner}${w.name ? " · " + w.name : ""}（${w.w}×${w.h}）`,
+        value: `owner:${w.owner}`,
+      })),
+    ];
+    winBinding.value = String(r?.binding ?? "");
+  } catch {
+    /* 后端没起来时保持空列表，不弹错 */
+  }
+}
+
+async function onBindWindow(v: any) {
+  const spec = String(v ?? "");
+  try {
+    const r: any = await rpc.request("window.bind", { spec });
+    winBinding.value = String(r?.binding ?? "");
+    const rect = r?.window;
+    store.setBanner(
+      spec
+        ? `已绑定窗口：${spec}（${rect ? rect.join(",") : "当前未找到"}）`
+        : "已改回自动选择窗口",
+      "ok"
+    );
+  } catch (e) {
+    store.setBanner("绑定窗口失败", "error");
+  }
+}
+
+onMounted(() => {
+  store.init();
+  loadWindows();
+});
 </script>
 
 <template>
@@ -101,6 +149,17 @@ onMounted(() => store.init());
       {{ store.connected ? "● 已连接" : "○ 未连接" }}
     </span>
     <span v-if="store.appVersion" class="af-ver">v{{ store.appVersion }}</span>
+    <!-- 锚点算在哪个窗口上：点歪时先看这里 -->
+    <t-select
+      size="small"
+      class="af-winbind"
+      :value="winBinding"
+      :options="winOptions"
+      placeholder="绑定窗口"
+      title="按窗口定位的点击、搜索范围都按这个窗口算。绑到游戏窗口后，别的窗口抢到前台也不会点歪"
+      @change="onBindWindow"
+      @visible-change="(v: boolean) => v && loadWindows()"
+    />
     <span style="flex: 1" />
     <span class="af-hk">F9 录制 · F10 运行 · F11 取点</span>
     <t-button
@@ -109,6 +168,16 @@ onMounted(() => store.init());
       title="收进菜单栏继续在后台跑（点 × 也是这个效果）"
       @click="store.hideToTray()"
       >隐藏到托盘</t-button
+    >
+    <!-- 置顶日志窗：运行/录制时把它拖到不碍事的地方，主窗可以收进托盘，
+         日志照样在走。开/关状态的真源在 Rust（窗口是它建的），这里只镜像。 -->
+    <t-button
+      size="small"
+      variant="outline"
+      :theme="store.logWinVisible ? 'primary' : 'default'"
+      title="置顶小窗显示运行日志（拖动标题栏移动；运行中不挡鼠标、不进截图）"
+      @click="store.toggleLogWin()"
+      >日志窗</t-button
     >
     <t-button size="small" variant="outline" @click="diagOpen = true">诊断</t-button>
     <t-button size="small" variant="outline" @click="scheduleOpen = true">定时运行</t-button>
@@ -391,6 +460,10 @@ onMounted(() => store.init());
 .af-conn.bad {
   color: #e34d59;
   font-size: 13px;
+}
+.af-winbind {
+  width: 200px;
+  margin-left: 6px;
 }
 .af-ver {
   color: #888;
