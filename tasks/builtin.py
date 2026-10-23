@@ -907,7 +907,17 @@ def _detect(kind: str, value: str = "", *, confidence: float = 0.8,
         want = str(value).strip()
         dets = detect_on_all_screens(engine, min(float(confidence), 0.99))
         return any(not want or d.label == want for d in dets)
-    return vision.find_template(float(confidence), template_path=str(value)).found
+    r = vision.find_template(float(confidence), template_path=str(value))
+    # 模板没命中时，界面上「没反应」和「匹配分数差一点点」长得一模一样。
+    # 把分数和阈值一起打出来，才能判断是该降阈值、还是模板图本身不对。
+    # 用 getattr 取：测试里的替身对象只实现 found，硬取 score 会让整条链路炸掉。
+    _score = getattr(r, "score", 0.0)
+    _adj = getattr(r, "adjusted", None)
+    logger.info("图像检测：模板 %s 分数 %.3f（阈值 %.2f）→ %s%s",
+                str(value).rsplit("/", 1)[-1], _score, float(confidence),
+                "命中" if r.found else "未命中",
+                f"，已按密度缩放 {_adj}" if _adj else "")
+    return r.found
 
 
 @register
