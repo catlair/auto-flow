@@ -1,5 +1,5 @@
 {
-  "name": "燕云·江湖弈 单人AI 自动对局 v3",
+  "name": "燕云·江湖弈 单人AI 自动对局 v4",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -16,7 +16,7 @@
     {
       "type": "note",
       "params": {
-        "text": "燕云·江湖弈（自走棋）单人 AI 自动对局。主循环每秒判一次现在是哪一屏。\n\n【6 路分支，顺序有讲究】\n  开始匹配   → 点「单人AI」+ 点「开始匹配」\n  弈子概率   → 商店阶段（见下）\n  棋局变数   → 点最左那张卡（三张卡位置固定，已确认 2-1 与 4-2 一致）\n  继续观战   → 「半步登天」页 → 按 F 退出（这一页也有「继续」二字，必须先判）\n  再来一局   → 结算最后一页 → 按 F 再来一局（同样是按键，且这页也有「继续」，必须先判）\n  继续       → 名次结算页（我的阵容 / 奖励）→ 按 Space\n  都不命中   → 空转 1s（加载、装备选择页都是干等，走这条）\n\n【商店阶段】\n  盲点「快捷操作」(85,111) → 点「一键穿戴」→ 再盲点「快捷操作」→ 点「一键提升」\n  弹出「合成预览」→ 点勾选框 (268,111)\n  出现菱形图标（模板图匹配，位置无关）→ 点它\n  回合数 ≥ 3 且还有「购买经验」→ 按 F 一次\n  最后等「弈子概率」消失才回主循环（否则主循环每秒重做一遍商店动作）"
+        "text": "燕云·江湖弈（自走棋）单人 AI 自动对局。主循环每秒判一次现在是哪一屏。\n\n【6 路分支，顺序有讲究】\n  开始匹配        → 点「单人AI」+ 点「开始匹配」\n  弈子概率        → 商店阶段（见下）\n  请选择一个棋局变数 → 点最左那张卡（不能用「棋局变数」四个字：结算页有同名的表头）\n  继续观战        → 「半步登天」页 → F 退出（这页也有「继续」，必须先判）\n  再来一局        → 结算末页 → F（同样是按键，且这页也有「继续」，必须先判）\n  继续            → 名次页 → Space\n  都不命中        → 空转 1s（加载、装备选择页都是干等）\n\n【商店阶段】\n  菜单开着吗（有「一键穿戴」）→ 没开才点「快捷操作」（点文字，不盲点：位置会变）\n  → 点「一键穿戴」→ 菜单还开着吗（有「一键提升」）→ 没开再点「快捷操作」→ 点「一键提升」\n  → 有「合成预览」就点勾选框 → 有菱形图标（模板图）就点它\n  → 回合≥3 且还有「购买经验」→ 按 F 两次\n  → 等「弈子概率」消失才回主循环"
       },
       "enabled": true,
       "uid": "note",
@@ -34,7 +34,7 @@
         "case2_kind": "文字存在",
         "case2_value": "弈子概率",
         "case3_kind": "文字存在",
-        "case3_value": "棋局变数",
+        "case3_value": "请选择一个棋局变数",
         "case4_kind": "文字存在",
         "case4_value": "继续观战",
         "case5_kind": "文字存在",
@@ -131,43 +131,6 @@
       "y": 60
     },
     {
-      "type": "mouse",
-      "params": {
-        "action": "click",
-        "button": "left",
-        "anchor": "win_tl",
-        "x": 85,
-        "y": 111,
-        "use_relative": false,
-        "scroll_dx": 0,
-        "scroll_dy": 0,
-        "scroll_unit": "line",
-        "scroll_target": "全局",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "q1",
-      "name": "点「快捷操作」打开菜单",
-      "x": 640,
-      "y": 200
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 300,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "d_q1",
-      "name": "等菜单展开",
-      "x": 820,
-      "y": 200
-    },
-    {
       "type": "ocr_click",
       "params": {
         "text": "一键穿戴",
@@ -205,43 +168,6 @@
       "name": "等装备生效",
       "x": 1180,
       "y": 200
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "click",
-        "button": "left",
-        "anchor": "win_tl",
-        "x": 85,
-        "y": 111,
-        "use_relative": false,
-        "scroll_dx": 0,
-        "scroll_dy": 0,
-        "scroll_unit": "line",
-        "scroll_target": "全局",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "q3",
-      "name": "再点「快捷操作」",
-      "x": 640,
-      "y": 280
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 300,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "d_q3",
-      "name": "等菜单展开",
-      "x": 820,
-      "y": 280
     },
     {
       "type": "ocr_click",
@@ -624,6 +550,160 @@
       "name": "等下一局开始",
       "x": 820,
       "y": 1120
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "一键穿戴",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.5,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "c_menu1",
+      "name": "菜单开着吗（有「一键穿戴」）",
+      "x": 500,
+      "y": 160
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "快捷操作",
+        "action": "click",
+        "timeout_s": 1.2,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个",
+        "verify_text": "",
+        "verify_timeout_s": 1,
+        "verify_retries": 0,
+        "verify_fail": "继续走下一步"
+      },
+      "enabled": true,
+      "uid": "open1",
+      "name": "点「快捷操作」展开菜单",
+      "x": 500,
+      "y": 240
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 350,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_open1",
+      "name": "等菜单展开",
+      "x": 700,
+      "y": 240
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "一键提升",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.5,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "c_menu2",
+      "name": "菜单还开着吗（有「一键提升」）",
+      "x": 500,
+      "y": 320
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "快捷操作",
+        "action": "click",
+        "timeout_s": 1.2,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个",
+        "verify_text": "",
+        "verify_timeout_s": 1,
+        "verify_retries": 0,
+        "verify_fail": "继续走下一步"
+      },
+      "enabled": true,
+      "uid": "open2",
+      "name": "再点「快捷操作」",
+      "x": 500,
+      "y": 400
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 350,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_open2",
+      "name": "等菜单展开",
+      "x": 700,
+      "y": 400
+    },
+    {
+      "type": "keyboard",
+      "params": {
+        "mode": "key",
+        "text": "",
+        "keys": "vk:3"
+      },
+      "enabled": true,
+      "uid": "f_xp2",
+      "name": "再按一次 F（买经验）",
+      "x": 1300,
+      "y": 560
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 400,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_xp2",
+      "name": "等一拍",
+      "x": 1480,
+      "y": 560
     }
   ],
   "edges": [
@@ -664,45 +744,9 @@
       "dst_side": "left"
     },
     {
-      "src": "judge",
-      "port": "case:2",
-      "dst": "q1",
-      "dst_side": "left"
-    },
-    {
-      "src": "q1",
-      "port": "out",
-      "dst": "d_q1",
-      "dst_side": "left"
-    },
-    {
-      "src": "d_q1",
-      "port": "out",
-      "dst": "q2",
-      "dst_side": "left"
-    },
-    {
       "src": "q2",
       "port": "out",
       "dst": "d_q2",
-      "dst_side": "left"
-    },
-    {
-      "src": "d_q2",
-      "port": "out",
-      "dst": "q3",
-      "dst_side": "left"
-    },
-    {
-      "src": "q3",
-      "port": "out",
-      "dst": "d_q3",
-      "dst_side": "left"
-    },
-    {
-      "src": "d_q3",
-      "port": "out",
-      "dst": "q4",
       "dst_side": "left"
     },
     {
@@ -787,12 +831,6 @@
       "src": "f_xp",
       "port": "out",
       "dst": "d_xp",
-      "dst_side": "left"
-    },
-    {
-      "src": "d_xp",
-      "port": "out",
-      "dst": "wait_shop",
       "dst_side": "left"
     },
     {
@@ -889,6 +927,84 @@
       "src": "judge",
       "port": "case:6",
       "dst": "press_space",
+      "dst_side": "left"
+    },
+    {
+      "src": "judge",
+      "port": "case:2",
+      "dst": "c_menu1",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_menu1",
+      "port": "true",
+      "dst": "q2",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_menu1",
+      "port": "false",
+      "dst": "open1",
+      "dst_side": "left"
+    },
+    {
+      "src": "open1",
+      "port": "out",
+      "dst": "d_open1",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_open1",
+      "port": "out",
+      "dst": "q2",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_q2",
+      "port": "out",
+      "dst": "c_menu2",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_menu2",
+      "port": "true",
+      "dst": "q4",
+      "dst_side": "left"
+    },
+    {
+      "src": "c_menu2",
+      "port": "false",
+      "dst": "open2",
+      "dst_side": "left"
+    },
+    {
+      "src": "open2",
+      "port": "out",
+      "dst": "d_open2",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_open2",
+      "port": "out",
+      "dst": "q4",
+      "dst_side": "left"
+    },
+    {
+      "src": "f_xp2",
+      "port": "out",
+      "dst": "d_xp2",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_xp2",
+      "port": "out",
+      "dst": "wait_shop",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_xp",
+      "port": "out",
+      "dst": "f_xp2",
       "dst_side": "left"
     }
   ]
