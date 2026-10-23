@@ -28,3 +28,7 @@
    虽然 `core/selfmask` 已经把自身窗口涂黑，但**物理遮挡**仍会让你点不到被盖住的目标。
 
 > 两个脚本的完整流程与踩坑总结见 `skills/game-automation/SKILL.md`。
+
+- [`jianghuyi-auto.json`](jianghuyi-auto.json) —— 燕云·江湖弈（自走棋）单人 AI 自动对局。
+  状态分派主循环（每秒判一次在哪一屏），商店阶段做快捷操作/合成/买经验，结算三页自动往下走。
+  说明见 [`skills/game-automation/SKILL.md`](../skills/game-automation/SKILL.md) 第三节。
