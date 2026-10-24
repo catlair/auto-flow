@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程 v37",
+  "name": "燕云·江湖悬赏 全流程 v38",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -458,7 +458,7 @@
     {
       "type": "note",
       "params": {
-        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」（点完校验「玩法说明」）\n  → 点「营生」（同样校验）→ 右键收起 → 直接轮询卡片区（进营生时列表已经是新的，不必先点刷新；\n  轮询不到「解决诬陷」才点「刷新」）\n  → 点「解决诬陷」（取框内靠左 8%，因为三张卡的字会被 OCR 合并成一个框）→ 立刻 Space 接取。\n【接取后分流】「前往」= 诬陷类 → 做任务；「进入世界」= 治疗类 → X 放弃 → Space 确认 → 回页面重抢。\n【做任务】前往 → 寻路3.5s → F → Space×3 → 话术争锋 → 连按F → 「继续」→ Space → 2.5s → 下一轮。\n【排查】卡住时看诊断面板「看屏幕」，能直接看到 OCR 把屏幕读成了什么。"
+        "text": "一套跑完：抢单 → 做完 → 再抢下一单（一直循环，F10 停）。\n【抢单】右上角图标 (-23,48) → 判「武林录」→ 往下拖 → 点「悬赏」（点完校验「玩法说明」）\n  → 点「营生」（同样校验）→ 右键收起 → 直接轮询卡片区（进营生时列表已经是新的，不必先点刷新；\n  轮询不到「解决诬陷」才点「刷新」）\n  点卡片 → Space 接取；面板开着却既没有「前往」也没有「进入世界」= 这张卡已过时\n  （别人接走了 / 列表是旧的）→ 右键收起后**先刷新再轮询**，否则会一直点同一张死卡。\n  → 点「解决诬陷」（取框内靠左 8%，因为三张卡的字会被 OCR 合并成一个框）→ 立刻 Space 接取。\n【接取后分流】「前往」= 诬陷类 → 做任务；「进入世界」= 治疗类 → X 放弃 → Space 确认 → 回页面重抢。\n【做任务】前往 → 寻路3.5s → F → Space×3 → 话术争锋 → 连按F → 「继续」→ Space → 2.5s → 下一轮。\n【排查】卡住时看诊断面板「看屏幕」，能直接看到 OCR 把屏幕读成了什么。"
       },
       "enabled": true,
       "uid": "note",
@@ -579,7 +579,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 60,
+        "ms": 120,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -605,7 +605,7 @@
       "type": "delay",
       "params": {
         "mode": "延时毫秒",
-        "ms": 400,
+        "ms": 700,
         "at": "09:00:00"
       },
       "enabled": true,
@@ -631,43 +631,6 @@
       "uid": "cond_ok",
       "name": "是诬陷类吗（面板右侧出现「前往」）",
       "x": 300,
-      "y": 1420
-    },
-    {
-      "type": "mouse",
-      "params": {
-        "action": "click",
-        "button": "right",
-        "anchor": "win_tl",
-        "x": 300,
-        "y": 300,
-        "use_relative": false,
-        "scroll_dx": 0,
-        "scroll_dy": 0,
-        "scroll_unit": "line",
-        "scroll_target": "全局",
-        "drag_dx": 0,
-        "drag_dy": -260,
-        "drag_steps": 14,
-        "drag_ms": 500
-      },
-      "enabled": true,
-      "uid": "click_arrow",
-      "name": "鼠标右键返回（收起详情面板）",
-      "x": 900,
-      "y": 1420
-    },
-    {
-      "type": "delay",
-      "params": {
-        "mode": "延时毫秒",
-        "ms": 300,
-        "at": "09:00:00"
-      },
-      "enabled": true,
-      "uid": "delay_arrow",
-      "name": "等面板收起",
-      "x": 1200,
       "y": 1420
     },
     {
@@ -872,25 +835,6 @@
       "name": "能看到「悬赏」吗（拖拽③）",
       "x": 900,
       "y": 1480
-    },
-    {
-      "type": "condition",
-      "params": {
-        "check": "文字存在",
-        "image_path": "",
-        "text": "接取悬赏",
-        "model_path": "",
-        "label": "",
-        "confidence": 0.8,
-        "timeout_s": 0.6,
-        "search_left_pct": 55,
-        "search_right_pct": 100
-      },
-      "enabled": true,
-      "uid": "cond_panel_open",
-      "name": "详情面板开着吗（有「接取悬赏」）",
-      "x": 300,
-      "y": 1600
     },
     {
       "type": "mouse",
@@ -1354,6 +1298,105 @@
       "name": "等回到悬赏页面",
       "x": 2100,
       "y": 2000
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "接取悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.6,
+        "search_left_pct": 55,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_panel_entry",
+      "name": "详情面板开着吗（入口）",
+      "x": 700,
+      "y": 300
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "right",
+        "anchor": "win_tl",
+        "x": 300,
+        "y": 300,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "back_entry",
+      "name": "鼠标右键返回（入口）",
+      "x": 880,
+      "y": 300
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "接取悬赏",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.6,
+        "search_left_pct": 55,
+        "search_right_pct": 100
+      },
+      "enabled": true,
+      "uid": "cond_panel_stale",
+      "name": "详情面板开着吗（过时卡）",
+      "x": 900,
+      "y": 640
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "right",
+        "anchor": "win_tl",
+        "x": 300,
+        "y": 300,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "back_stale",
+      "name": "鼠标右键返回（过时卡）",
+      "x": 1080,
+      "y": 640
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 300,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "d_close_stale",
+      "name": "等面板收起（过时卡）",
+      "x": 1260,
+      "y": 640
     }
   ],
   "edges": [
@@ -1580,24 +1623,6 @@
       "dst_side": "left"
     },
     {
-      "src": "click_arrow",
-      "port": "out",
-      "dst": "delay_arrow",
-      "dst_side": "left"
-    },
-    {
-      "src": "delay_arrow",
-      "port": "out",
-      "dst": "delay_refresh",
-      "dst_side": "left"
-    },
-    {
-      "src": "retry",
-      "port": "out",
-      "dst": "cond_panel_open",
-      "dst_side": "left"
-    },
-    {
       "src": "w_drag",
       "port": "out",
       "dst": "w_drag_delay",
@@ -1679,18 +1704,6 @@
       "src": "pre_visible",
       "port": "false",
       "dst": "w_drag",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_panel_open",
-      "port": "true",
-      "dst": "click_arrow",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_panel_open",
-      "port": "false",
-      "dst": "refresh",
       "dst_side": "left"
     },
     {
@@ -1863,12 +1876,6 @@
     },
     {
       "src": "cond_onpage",
-      "port": "true",
-      "dst": "cond_panel_open",
-      "dst_side": "left"
-    },
-    {
-      "src": "cond_onpage",
       "port": "false",
       "dst": "m1_hover",
       "dst_side": "left"
@@ -1931,6 +1938,60 @@
       "src": "delay_confirm",
       "port": "out",
       "dst": "cond_page",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_onpage",
+      "port": "true",
+      "dst": "cond_panel_entry",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_panel_entry",
+      "port": "true",
+      "dst": "back_entry",
+      "dst_side": "left"
+    },
+    {
+      "src": "back_entry",
+      "port": "out",
+      "dst": "delay_refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_panel_entry",
+      "port": "false",
+      "dst": "delay_refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "retry",
+      "port": "out",
+      "dst": "cond_panel_stale",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_panel_stale",
+      "port": "true",
+      "dst": "back_stale",
+      "dst_side": "left"
+    },
+    {
+      "src": "back_stale",
+      "port": "out",
+      "dst": "d_close_stale",
+      "dst_side": "left"
+    },
+    {
+      "src": "d_close_stale",
+      "port": "out",
+      "dst": "refresh",
+      "dst_side": "left"
+    },
+    {
+      "src": "cond_panel_stale",
+      "port": "false",
+      "dst": "refresh",
       "dst_side": "left"
     }
   ]
