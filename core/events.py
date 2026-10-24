@@ -203,6 +203,14 @@ class Workflow:
     name: str = "未命名工作流"
     speed: float = 1.0              # 全局速度倍率，>1 加速
     repeat: int = 1                 # 整体循环次数
+    # 「跑满 N 轮就停」：0 = 不限。
+    # 为什么不能用 repeat 表达：这类挂机流程本身就是**图里有环**（抢完一单回到开头再抢），
+    # repeat 是「整张图跑几遍」，而用户要的是「这一圈循环跑几次」，两者不是一回事。
+    max_rounds: int = 0
+    # 哪个节点每次执行算一轮。空 = 只用 repeat（旧行为）。
+    # 由用户在画布上「设为轮次起点」指定——不同脚本的「一轮」落点不同：
+    # 抢悬赏是「点前往」，江湖弈是「开始匹配」，没法自动推断。
+    round_uid: str = ""
     nodes: list[Node] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
     start: str = ""                 # 起始节点 uid；空 = 第一个 start 节点，再退回 nodes[0]
@@ -216,6 +224,8 @@ class Workflow:
             "name": self.name,
             "speed": self.speed,
             "repeat": self.repeat,
+            "max_rounds": self.max_rounds,
+            "round_uid": self.round_uid,
             "start": self.start,
             "nodes": [n.to_dict() for n in self.nodes],
             "edges": [e.to_dict() for e in self.edges],
@@ -234,6 +244,8 @@ class Workflow:
             name=data.get("name", "未命名工作流"),
             speed=float(data.get("speed", 1.0)),
             repeat=int(data.get("repeat", 1)),
+            max_rounds=int(data.get("max_rounds", 0) or 0),
+            round_uid=str(data.get("round_uid") or ""),
         )
         nodes = data.get("nodes")
         if nodes is None and isinstance(data.get("events"), list):

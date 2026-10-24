@@ -1995,5 +1995,7 @@
       "dst": "refresh",
       "dst_side": "left"
     }
-  ]
+  ],
+  "round_uid": "do_go",
+  "max_rounds": 0
 }

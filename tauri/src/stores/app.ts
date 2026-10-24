@@ -194,6 +194,8 @@ export const useAppStore = defineStore("app", {
     /** 当前节点的自定义名与参数摘要（后端 run.node 带过来） */
     runNodeName: "" as string,
     runNodeDetail: "" as string,
+    /** 「跑满 N 轮」进度（后端 run.round 带过来；total=0 表示没设上限） */
+    runRound: { round: 0, total: 0 } as { round: number; total: number },
     /** 本次运行的节点轨迹（时间正序，最多 RUN_TRACE_LIMIT 条；跑完保留供回看） */
     runTrace: [] as RunTraceItem[],
     banner: "" as string,
@@ -637,6 +639,10 @@ export const useAppStore = defineStore("app", {
         case "run.progress":
           this.runProgress = { done: n.params.done, total: n.params.total };
           break;
+        case "run.round":
+          // 「跑满 N 轮」的进度。单独一条事件，不与 run.progress（节点进度）混用。
+          this.runRound = { round: n.params.round ?? 0, total: n.params.total ?? 0 };
+          break;
         case "run.finished":
           this.running = false;
           this.runNodeType = "";
@@ -831,6 +837,10 @@ export const useAppStore = defineStore("app", {
     async setStart(uid: string) {
       const cur = await rpc.request("workflow.setStart", { uid });
       this.applyCurrent(cur);
+    },
+    /** 指定「哪个节点每次执行算一轮」（空串 = 取消） */
+    async setRoundUid(uid: string) {
+      await this.updateWorkflow({ round_uid: uid });
     },
     setClickThrough(enabled: boolean) {
       // invoke 在没有 Tauri 环境时会**同步抛错**（ReferenceError: window is

@@ -69,6 +69,9 @@ class Executor:
     def reset(self) -> None:
         self._stop.clear()
         self.player._stop.clear()
+        # 「跑满 N 轮」的计数落在实例上：控制器要能问「是跑满停的、还是用户停的」。
+        self.rounds = 0
+        self._rounds_done = 0
 
     # ---- 遍历 ----
 
@@ -101,7 +104,8 @@ class Executor:
                      on_node: Optional[Callable[[int, str], None]] = None,
                      on_progress: Optional[Callable[[int, int], None]] = None,
                      on_done: Optional[Callable[[bool], None]] = None,
-                     on_error: Optional[Callable[[int, str, Exception], None]] = None) -> None:
+                     on_error: Optional[Callable[[int, str, Exception], None]] = None,
+                     on_round: Optional[Callable[[int, int], None]] = None) -> None:
         """在工作流线程执行；结束/被停止后调用 on_done(stopped)。"""
         self.reset()
         self.running = True
@@ -110,7 +114,7 @@ class Executor:
             for _ in range(repeat):
                 if self._stop.is_set():
                     break
-                self._walk(wf, base_x, base_y, on_node, on_progress, on_error)
+                self._walk(wf, base_x, base_y, on_node, on_progress, on_error, on_round)
         finally:
             self.running = False
             if on_done:
@@ -118,7 +122,8 @@ class Executor:
 
     def _walk(self, wf: Workflow, base_x: int, base_y: int,
               on_node: Optional[Callable], on_progress: Optional[Callable],
-              on_error: Optional[Callable]) -> None:
+              on_error: Optional[Callable],
+              on_round: Optional[Callable] = None) -> None:
         by_uid = {n.uid: n for n in wf.nodes}
         index_of = {n.uid: i for i, n in enumerate(wf.nodes)}
         nxt = self.next_map(wf)
@@ -132,6 +137,8 @@ class Executor:
         # 用户只能看着它转。这里主动喊一声。
         visits: dict[str, int] = {}
         warned: set[tuple[str, int]] = set()
+        # 上一遍（repeat 多次时）可能已经数过轮次，接着数
+        rounds = self.rounds
         while cur and not self._stop.is_set():
             steps += 1
             if steps > self.MAX_STEPS:
@@ -157,6 +164,24 @@ class Executor:
             node = by_uid.get(cur)
             if node is None:
                 return
+
+            # 「跑满 N 轮就停」：round_uid 那个节点每执行一次算一轮。
+            # 注意判断放在**执行之前**：这样第 N+1 轮的起点不会被真的执行，
+            # 用户设 3 轮就是不多不少 3 轮。
+            if wf.round_uid and cur == wf.round_uid:
+                limit = int(wf.max_rounds or 0)
+                # 先判上限再计数：不然第 N+1 轮会先上报一次「第 N+1 轮」再停，
+                # 界面上就成了「跑了 4 轮却设的上限 3」。
+                if limit > 0 and rounds + 1 > limit:
+                    logger.info("已跑满 %d 轮（设置的上限），停止", limit)
+                    self._rounds_done = limit
+                    self._stop.set()
+                    self.player.stop_playback()
+                    return
+                rounds += 1
+                self.rounds = rounds
+                if on_round:
+                    on_round(rounds, limit)
             if node.type == "end":
                 # 显式终点。上报一次，让界面能显示「走到这里结束了」——
                 # 不报的话最后一步会停在 end 的**前一个**节点上，看起来像没跑完。

@@ -300,6 +300,18 @@ class AppController:
                     self.workflow.repeat = max(int(patch["repeat"]), 1)
                 except (TypeError, ValueError):
                     raise ControllerError(-32602, "repeat 须为整数")
+            if "max_rounds" in patch:
+                try:
+                    self.workflow.max_rounds = max(int(patch["max_rounds"]), 0)
+                except (TypeError, ValueError):
+                    raise ControllerError(-32602, "max_rounds 须为整数")
+            if "round_uid" in patch:
+                uid = str(patch["round_uid"] or "")
+                # 空 = 取消标记；非空必须真的存在，否则「设置了轮次却永远不计数」
+                # 这种静默失败最难查
+                if uid and uid not in {n.uid for n in self.workflow.nodes}:
+                    raise ControllerError(-32602, "round_uid 指向的节点不存在")
+                self.workflow.round_uid = uid
         self._broadcast_workflow()
         return self.workflow_current()
 
@@ -686,9 +698,19 @@ class AppController:
         def on_progress(done, total):
             self._notify("run.progress", {"done": done, "total": total})
 
+        def on_round(done, total):
+            # 轮次进度单独报一条：界面上要能显示「第 3/5 轮」，
+            # 塞进 run.progress 会和节点进度混在一起（那个是节点数）。
+            self._notify("run.round", {"round": done, "total": total})
+
         def on_done(stopped):
             self.running = False
-            self._notify("run.finished", {"stopped": bool(stopped)})
+            self._notify("run.finished", {
+                "stopped": bool(stopped),
+                # 跑满轮次也会置 stop，两者都表现为 stopped=True。
+                # 区分开，界面才能说「已跑满 5 轮」而不是「已停止」。
+                "roundsDone": int(getattr(self.executor, "_rounds_done", 0) or 0),
+            })
 
         def on_error(idx, ntype, exc):
             self._notify("run.error", {"index": idx, "type": ntype, "message": str(exc)})
@@ -697,7 +719,8 @@ class AppController:
             target=self.executor.run_workflow,
             args=(wf, base_x, base_y),
             kwargs={"on_node": on_node, "on_progress": on_progress,
-                    "on_done": on_done, "on_error": on_error},
+                    "on_done": on_done, "on_error": on_error,
+                    "on_round": on_round},
             name="run-workflow", daemon=True,
         )
         self._run_thread = t

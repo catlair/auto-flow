@@ -2706,3 +2706,44 @@ def test_executor_warns_when_a_node_keeps_running(monkeypatch, caplog):
     with caplog.at_level(_logging.WARNING):
         ex.run_workflow(wf)
     assert "疑似卡住" in caplog.text
+
+def test_executor_stops_after_max_rounds(monkeypatch):
+    """「跑满 N 轮就停」：round_uid 那个节点执行 N 次后停止，不多不少。
+
+    为什么需要这个功能：挂机流程本身就是图里有环（抢完一单回到开头再抢），
+    repeat 是「整张图跑几遍」，表达不了「这一圈循环跑几次」。
+    """
+    ex = Executor()
+    ex.player.glide_now = lambda t: None
+    seen: list[int] = []
+    done: list[bool] = []
+    wf = _graph(
+        ("delay", {"ms": 1}),      # 0 = 轮次起点
+        ("delay", {"ms": 1}),      # 1
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)],
+    )
+    wf.round_uid = wf.nodes[0].uid
+    wf.max_rounds = 3
+    ex.run_workflow(wf, on_node=lambda i, ty: None, on_done=lambda s: done.append(s),
+                    on_round=lambda n, total: seen.append(n))
+    assert seen == [1, 2, 3], seen
+    assert ex.rounds == 3
+    assert ex._rounds_done == 3
+    assert done and done[0] is True
+
+
+def test_executor_without_round_uid_runs_forever_until_repeat(monkeypatch):
+    """没设轮次起点时 max_rounds 不起作用——避免「设了上限却没反应」的静默失败。"""
+    ex = Executor()
+    ex.player.glide_now = lambda t: None
+    rounds: list[int] = []
+    wf = _graph(
+        ("delay", {"ms": 1}),
+        ("delay", {"ms": 1}),
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)],
+        repeat=2,
+    )
+    wf.max_rounds = 2          # 有上限，但没 round_uid
+    ex.run_workflow(wf, on_round=lambda n, total: rounds.append(n))
+    assert rounds == []
+    assert ex._rounds_done == 0

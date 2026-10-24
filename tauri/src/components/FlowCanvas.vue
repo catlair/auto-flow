@@ -393,6 +393,28 @@ async function onAdd(type: string) {
   }
 }
 
+const roundMarked = computed(() => {
+  const sel = store.selectedNode;
+  return !!sel && !!store.workflow.round_uid && sel.uid === store.workflow.round_uid;
+});
+const roundTip = computed(() => {
+  const uid = store.workflow.round_uid;
+  const n = uid ? store.workflow.nodes.find((x: any) => x.uid === uid) : null;
+  return n
+    ? `当前以「${n.name || n.type}」计一轮；再点一次取消`
+    : "选中一个节点后点这里：它的每次执行算一轮，配合运行面板的「跑 N 轮后停」使用";
+});
+
+async function toggleRound() {
+  const sel = store.selectedNode;
+  if (roundMarked.value) {
+    await store.setRoundUid("");
+    return;
+  }
+  if (!sel) return;
+  await store.setRoundUid(sel.uid);
+}
+
 async function markStart() {
   const uid = store.selectedNode?.uid;
   if (!uid) return;
@@ -481,6 +503,17 @@ watch(
         :disabled="!store.workflow.start"
         @click="clearStart"
         >默认起点</t-button
+      >
+      <!-- 「跑满 N 轮就停」从哪个节点数起。不同脚本的「一轮」落点不同
+           （抢悬赏是「点前往」，江湖弈是「开始匹配」），只能由人来指定。 -->
+      <t-button
+        size="small"
+        variant="outline"
+        :theme="roundMarked ? 'primary' : 'default'"
+        :disabled="store.selectedIndex < 0 && !roundMarked"
+        :title="roundTip"
+        @click="toggleRound"
+        >{{ roundMarked ? '✓ 轮次起点' : '设为轮次起点' }}</t-button
       >
       <!-- 常驻标环开关。用「描边 + 开启时变主色」表示按下态，与旁边两个按钮同款。 -->
       <t-button

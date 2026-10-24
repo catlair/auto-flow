@@ -7,12 +7,14 @@ import { errMessage } from "@/rpc/client";
 const store = useAppStore();
 const speed = ref(store.workflow.speed);
 const repeat = ref(store.workflow.repeat);
+const maxRounds = ref(store.workflow.max_rounds ?? 0);
 
 watch(
   () => store.workflow,
   (w) => {
     speed.value = w.speed;
     repeat.value = w.repeat;
+    maxRounds.value = w.max_rounds ?? 0;
   }
 );
 
@@ -20,6 +22,12 @@ async function onSpeed(v: number) {
   speed.value = v;
   await store.updateWorkflow({ speed: v });
 }
+async function onMaxRounds(v: any) {
+  const n = Math.max(0, Math.floor(Number(v) || 0));
+  maxRounds.value = n;
+  await store.updateWorkflow({ max_rounds: n });
+}
+
 async function onRepeat(v: number) {
   repeat.value = v;
   await store.updateWorkflow({ repeat: Math.max(1, Math.floor(v)) });
@@ -68,6 +76,21 @@ watch(
     <div class="af-field">
       <label class="af-label">循环次数</label>
       <t-input-number :value="repeat" :step="1" :min="1" @change="onRepeat" size="small" theme="column" />
+    </div>
+    <div class="af-field">
+      <label class="af-label">跑 N 轮后停（0=一直跑）</label>
+      <t-input-number
+        :value="maxRounds"
+        :step="1"
+        :min="0"
+        @change="onMaxRounds"
+        size="small"
+        theme="column"
+        title="到画布上「设为轮次起点」的那个节点每执行一次算一轮；没设起点时这个值不起作用"
+      />
+    </div>
+    <div v-if="store.running && store.runRound.total > 0" class="af-run-state">
+      第 {{ store.runRound.round }} / {{ store.runRound.total }} 轮
     </div>
     <div class="af-field">
       <label class="af-label">基点（F11 取点）</label>
