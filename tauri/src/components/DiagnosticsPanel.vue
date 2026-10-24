@@ -51,6 +51,38 @@ async function copyReport() {
 const screenText = ref("");
 const screenBusy = ref(false);
 
+/**
+ * 「后台自检」：按窗口抓一帧（窗口被别的窗口盖住也能抓），再做 OCR。
+ *
+ * 这是回答「挂机时能不能干别的」的唯一可靠办法——能不能后台跑取决于游戏本身：
+ * 被完全遮住还渲不渲染、认不认投递过去的鼠标事件。这里只把事实摆出来。
+ */
+const bgText = ref("");
+const bgBusy = ref(false);
+
+async function probeBackground() {
+  if (bgBusy.value) return;
+  bgBusy.value = true;
+  bgText.value = "抓取中…";
+  try {
+    const r: any = await rpc.request("app.backgroundProbe", {});
+    const lines = [
+      `窗口属主：${r?.owner || "（未知）"}`,
+      `结果：${r?.ok ? "抓到了" : "失败"}  ${r?.reason ?? ""}`,
+      r?.ok ? `尺寸：${r.w}×${r.h}  亮度均值 ${r.mean}  标准差 ${r.std}` : "",
+      r?.ok && r.looks_blank ? "⚠ 画面几乎全黑/纯色 —— 窗口被遮住后大概率停止渲染，后台截图不可用" : "",
+      r?.ok ? `识别到 ${r.texts} 段文字` : "",
+      r?.ocrError ? `OCR 出错：${r.ocrError}` : "",
+      ...(r?.allTexts ?? []).map((t: string, i: number) => `  ${i + 1}. ${t}`),
+    ].filter(Boolean);
+    bgText.value = lines.join("\n");
+  } catch (e) {
+    bgText.value = "后台自检失败：" + errMessage(e);
+  } finally {
+    bgBusy.value = false;
+  }
+}
+
 async function dumpScreen() {
   if (screenBusy.value) return;
   screenBusy.value = true;
@@ -92,6 +124,9 @@ function close() {
         <t-button size="small" variant="outline" :loading="screenBusy" @click="dumpScreen">
           看屏幕
         </t-button>
+        <t-button size="small" variant="outline" :loading="bgBusy" @click="probeBackground">
+          后台自检
+        </t-button>
         <span style="flex: 1" />
         <t-button size="small" variant="text" @click="close">关闭</t-button>
       </div>
@@ -102,6 +137,7 @@ function close() {
           <button class="af-link" style="margin-left: 6px" @click="copyScreen">复制</button>
         </div>
         <pre style="max-height: 220px">{{ screenText }}</pre>
+      <pre v-if="bgText" class="af-diag-dump">{{ bgText }}</pre>
       </div>
 
       <div :class="['af-conn-row', d.connected ? 'ok' : 'bad']">

@@ -19,6 +19,8 @@ pyobjc-framework-Cocoa>=12.2
 pyobjc-framework-Quartz>=12.2
 pyobjc-framework-ApplicationServices>=12.2
 pyobjc-framework-Vision>=12.2
+# ScreenCaptureKit：按窗口截图（窗口被盖住也能抓），后台跑的前提
+pyobjc-framework-ScreenCaptureKit>=12.2
 
 numpy>=2.0
 opencv-python>=4.10

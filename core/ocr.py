@@ -90,6 +90,48 @@ def _split_merged(hit: TextHit, target: str) -> list[TextHit]:
     return out
 
 
+def recognize_bgr(bgr, languages: list | None = None) -> list[TextHit]:
+    """对一张现成的 BGR 图做 OCR，坐标是**这张图的像素坐标**（左上原点）。
+
+    给「按窗口截图」用：那张图来自 ScreenCaptureKit，不是屏幕截图，
+    所以没法套用全局坐标的换算——调用方要的是「窗口里第几个像素」。
+    """
+    import cv2
+    if bgr is None or bgr.size == 0:
+        return []
+    h, w = bgr.shape[:2]
+    ok, png = cv2.imencode(".png", bgr)
+    if not ok:
+        return []
+    nsdata = NSData.dataWithBytes_length_(png.tobytes(), len(png))
+    cg = Quartz.CGImageSourceCreateWithData(nsdata, None)
+    cgimg = Quartz.CGImageSourceCreateImageAtIndex(cg, 0, None)
+    if cgimg is None:
+        return []
+    handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cgimg, None)
+    req = Vision.VNRecognizeTextRequest.alloc().init()
+    req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+    req.setRecognitionLanguages_(languages or ["zh-Hans", "en-US"])
+    handler.performRequests_error_([req], None)
+    hits: list[TextHit] = []
+    for obs in (req.results() or []):
+        cand = obs.topCandidates_(1)
+        if not cand:
+            continue
+        text = str(cand[0].string())
+        box = obs.boundingBox()
+        bw = float(box.size.width) * w
+        bh = float(box.size.height) * h
+        cx = float(box.origin.x) * w + bw / 2.0
+        # Vision 是左下原点，转成左上原点
+        cy = (1.0 - float(box.origin.y) - float(box.size.height)) * h + bh / 2.0
+        hits.append(TextHit(text=text, x=int(round(cx)), y=int(round(cy)),
+                            confidence=float(cand[0].confidence()),
+                            w=int(round(bw)), h=int(round(bh))))
+    hits.sort(key=lambda t: (t.y, t.x))
+    return hits
+
+
 def recognize_texts(cap, languages: list | None = None) -> list[TextHit]:
     """对截图做 OCR，返回所有文本及全局逻辑坐标中心点。"""
     import cv2

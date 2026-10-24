@@ -319,6 +319,52 @@ def _screen_dump(_p=None) -> dict:
             "hits": rows, "elapsedMs": ms}
 
 
+def _background_probe(p=None) -> dict:
+    """后台能力自检：按窗口截图 + 对这张图做 OCR，看后台到底能不能用。
+
+    为什么要有它：现在的截图抓显示器、输入走全局事件，游戏必须在最前面，
+    于是挂机时电脑没法干别的。后台要成立需要两件事——按窗口抓图（窗口被盖住
+    也能拿到画面）和输入直接投递给进程——而**这两条都取决于游戏本身**：
+    有的游戏被完全遮住就停帧（抓到旧帧/黑屏），有的不认投递来的鼠标事件。
+
+    所以这里不下结论，只把事实摆出来：抓到没有、多大、亮不亮、
+    认出了哪些字。用户在游戏被别的窗口盖住时点一下，就能知道能不能后台跑。
+    """
+    import time as _time
+    from core import bgwindow, selfmask
+    p = p or {}
+    want = str(p.get("text", "") or "")
+    # 默认抓绑定的那个窗口；没绑定就抓最前面那个非自身的
+    owner = str(p.get("owner", "") or "")
+    if not owner:
+        b = selfmask.binding()
+        if b and str(b).startswith("owner:"):
+            owner = str(b).split(":", 1)[1]
+    if not owner:
+        win = selfmask.front_window_rect()
+        for w in selfmask.list_windows():
+            if win and (w["x"], w["y"], w["w"], w["h"]) == tuple(win):
+                owner = str(w.get("owner", ""))
+                break
+    t0 = _time.monotonic()
+    bgr, meta = bgwindow.capture_window(owner)
+    ms = int((_time.monotonic() - t0) * 1000)
+    out = {"owner": owner, "elapsedMs": ms, **meta, "hits": [], "texts": 0}
+    if bgr is not None:
+        try:
+            from core import ocr
+            hits = ocr.recognize_bgr(bgr)
+            out["texts"] = len(hits)
+            kept = [h for h in hits if not want or want in h.text]
+            out["hits"] = [{"text": h.text, "x": h.x, "y": h.y} for h in kept][:40]
+            out["allTexts"] = [h.text for h in hits][:60]
+        except Exception as e:                              # noqa: BLE001
+            out["ocrError"] = str(e)
+    logger.info("后台自检：窗口属主=%s ok=%s %sms %s",
+                owner, meta.get("ok"), ms, {k: v for k, v in meta.items() if k != "ok"})
+    return out
+
+
 _PANEL_HANDLERS = {
     "accessibility": permissions.open_accessibility_settings,
     "input_monitoring": permissions.open_input_monitoring_settings,
@@ -354,6 +400,8 @@ _HANDLERS = {
     "app.requestPermissions": lambda _p: (True, _request_permissions()),
     # 「看屏幕」：窗口矩形 + 全屏 OCR 全部文本及坐标（排查判据用）
     "app.screenDump": lambda p: (True, _screen_dump(p)),
+    # 后台能力自检：按窗口截图（窗口被盖住也能拿）+ OCR
+    "app.backgroundProbe": lambda p: (True, _background_probe(p)),
     # --- 窗口绑定（锚点算在哪个窗口上） ---
     "window.list": lambda p: (True, _window_list_payload(p)),
     "window.bind": lambda p: (True, _window_bind(p)),

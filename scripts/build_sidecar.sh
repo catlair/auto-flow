@@ -47,6 +47,8 @@ fi
   --hidden-import Foundation \
   --hidden-import CoreFoundation \
   --hidden-import Quartz \
+  --hidden-import ScreenCaptureKit \
+  --hidden-import objc \
   rpc/server.py
 
 SIDECAR="dist/autoflow-sidecar/autoflow-sidecar"
