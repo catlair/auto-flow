@@ -367,6 +367,35 @@ def _background_probe(p=None) -> dict:
     return out
 
 
+def _background_key_probe(p=None) -> dict:
+    """把一次按键**直接投递给游戏进程**，不移动光标、不抢焦点。
+
+    这是「后台操作」的另一半：截图那条已经验证可行，剩下要确认的是
+    CGEventPostToPid 投递过去的按键，游戏到底收不收。
+
+    实测办法：在局内点这个自检，看「购买经验」的数字有没有变（F 就是买经验）。
+    变 = 游戏认投递的键盘；不变 = 只认真实键盘设备，后台操作这条路走不通。
+    """
+    from core import bgwindow, selfmask
+    p = p or {}
+    name = str(p.get("key", "F") or "F")
+    codes = {"F": 3, "Space": 49, "R": 15, "X": 7, "Esc": 53, "V": 9}
+    code = codes.get(name, 3)
+    win = selfmask.bound_window() or selfmask.front_window_rect()
+    pid = None
+    for w in selfmask.list_windows():
+        if win and (w["x"], w["y"], w["w"], w["h"]) == tuple(win):
+            pid = w.get("pid")
+            break
+    if not pid:
+        pid = selfmask.front_window_pid()
+    if not pid:
+        return {"ok": False, "reason": "没拿到窗口对应的进程号"}
+    ok = bgwindow.post_key_to_pid(int(pid), code)
+    logger.info("后台按键自检：向 pid=%s 投递 %s（keycode=%s）→ %s", pid, name, code, ok)
+    return {"ok": bool(ok), "pid": int(pid), "key": name, "keycode": code}
+
+
 _PANEL_HANDLERS = {
     "accessibility": permissions.open_accessibility_settings,
     "input_monitoring": permissions.open_input_monitoring_settings,
@@ -404,6 +433,8 @@ _HANDLERS = {
     "app.screenDump": lambda p: (True, _screen_dump(p)),
     # 后台能力自检：按窗口截图（窗口被盖住也能拿）+ OCR
     "app.backgroundProbe": lambda p: (True, _background_probe(p)),
+    # 后台按键自检：把按键直接投递给游戏进程（不移动光标、不抢焦点）
+    "app.backgroundKeyProbe": lambda p: (True, _background_key_probe(p)),
     # --- 窗口绑定（锚点算在哪个窗口上） ---
     "window.list": lambda p: (True, _window_list_payload(p)),
     "window.bind": lambda p: (True, _window_bind(p)),

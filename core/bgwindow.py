@@ -87,7 +87,9 @@ def capture_window(owner_keyword: str, timeout_s: float = 5.0):
     fd, path = tempfile.mkstemp(suffix=".png", prefix="af-win-")
     os.close(fd)
     try:
-        r = subprocess.run(["/usr/sbin/screencapture", "-l", str(wid), "-x", path],
+        # -o：不带窗口阴影。默认会把阴影也截进去（实测多出 136px），
+        # 那样图上的坐标和窗口坐标就不是 1:1，点击会整体偏。
+        r = subprocess.run(["/usr/sbin/screencapture", "-l", str(wid), "-o", "-x", path],
                            capture_output=True, text=True, timeout=timeout_s)
         if r.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 1000:
             err = (r.stderr or "").strip()
@@ -105,12 +107,18 @@ def capture_window(owner_keyword: str, timeout_s: float = 5.0):
             pass
     if bgr is None:
         return None, {"ok": False, "windowId": wid, "reason": "截图读不出来"}
+    win_w = int((bounds or {}).get("Width") or 0)
+    win_h = int((bounds or {}).get("Height") or 0)
     meta = {
         "ok": True,
         "windowId": wid,
         "owner": owner,
         "w": int(bgr.shape[1]),
         "h": int(bgr.shape[0]),
+        "winW": win_w,
+        "winH": win_h,
+        # 图宽 / 窗口宽 = Retina 倍数；后台点击时用它把窗口坐标换成图像坐标
+        "scale": round(bgr.shape[1] / win_w, 3) if win_w else None,
         "mean": round(float(bgr.mean()), 1),
         "std": round(float(bgr.std()), 1),
         # 全黑/纯色基本等于「窗口被遮住后停止渲染」，这一条就是判断后台截图可不可行的依据

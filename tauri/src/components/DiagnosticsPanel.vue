@@ -83,6 +83,31 @@ async function probeBackground() {
   }
 }
 
+/**
+ * 「后台按键自检」：把 F 直接投递给游戏进程（不移动光标、不抢焦点）。
+ *
+ * 截图那半已经验证可行，这半是最后一个未知数：游戏认不认投递过来的按键。
+ * 判读办法——在局内点它，看「购买经验」的数字有没有变。变了就是认。
+ */
+const keyText = ref("");
+const keyBusy = ref(false);
+
+async function probeBackgroundKey() {
+  if (keyBusy.value) return;
+  keyBusy.value = true;
+  keyText.value = "投递中…";
+  try {
+    const r: any = await rpc.request("app.backgroundKeyProbe", { key: "F" });
+    keyText.value = r?.ok
+      ? `已向 pid=${r.pid} 投递「${r.key}」(keycode=${r.keycode})。\n去看游戏里「购买经验」的数字变没变：变了=游戏认投递的按键`
+      : `投递失败：${r?.reason ?? "未知原因"}`;
+  } catch (e) {
+    keyText.value = "后台按键自检失败：" + errMessage(e);
+  } finally {
+    keyBusy.value = false;
+  }
+}
+
 async function dumpScreen() {
   if (screenBusy.value) return;
   screenBusy.value = true;
@@ -127,6 +152,9 @@ function close() {
         <t-button size="small" variant="outline" :loading="bgBusy" @click="probeBackground">
           后台自检
         </t-button>
+        <t-button size="small" variant="outline" :loading="keyBusy" @click="probeBackgroundKey">
+          后台按键
+        </t-button>
         <span style="flex: 1" />
         <t-button size="small" variant="text" @click="close">关闭</t-button>
       </div>
@@ -138,6 +166,7 @@ function close() {
         </div>
         <pre style="max-height: 220px">{{ screenText }}</pre>
       <pre v-if="bgText" class="af-diag-dump">{{ bgText }}</pre>
+      <pre v-if="keyText" class="af-diag-dump">{{ keyText }}</pre>
       </div>
 
       <div :class="['af-conn-row', d.connected ? 'ok' : 'bad']">
