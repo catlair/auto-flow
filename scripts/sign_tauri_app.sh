@@ -27,6 +27,22 @@ if [ ! -d "$APP" ]; then
 fi
 
 IDENTITY="MacDev"
+
+# 带时间戳签名；Apple 的时间戳服务连不上时（离线、公司网络、服务抽风）退回不带时间戳。
+# 时间戳只对 notarization 有意义，本地自用不需要——为了它让整条构建链失败不值。
+sign_with_timestamp_fallback() {
+  local desc="$1"; shift
+  if codesign --timestamp "$@" 2>/tmp/af-sign-err.log; then
+    return 0
+  fi
+  if grep -qi "timestamp" /tmp/af-sign-err.log; then
+    echo "!!! 时间戳服务不可用，改为不带时间戳重签（本地自用无影响）：$desc" >&2
+    codesign "$@"
+    return $?
+  fi
+  cat /tmp/af-sign-err.log >&2
+  return 1
+}
 ENTITLEMENTS="tauri/src-tauri/entitlements-sidecar.plist"
 if [ ! -f "$ENTITLEMENTS" ]; then
   echo "缺少授权文件：$ENTITLEMENTS（sidecar 需豁免库校验才能加载 ad-hoc dylib）"
@@ -37,14 +53,14 @@ echo ">>> 1/2 先递归重签嵌入 sidecar（含 _internal dylibs），带 runt
 # 必须自底向上：--deep 的 --options runtime 不会传播到嵌套二进制，
 # 而 notarization 要求所有可执行文件都带强化运行时，故 sidecar 单独签。
 # 且必须带 --entitlements：见脚本头部「关键」一条，否则 sidecar 起不来。
-codesign --force --deep --sign "$IDENTITY" \
-  --options runtime --timestamp \
+sign_with_timestamp_fallback "sidecar" \
+  --force --deep --sign "$IDENTITY" --options runtime \
   --entitlements "$ENTITLEMENTS" \
   "$APP/Contents/Resources/autoflow-sidecar/autoflow-sidecar"
 
 echo ">>> 2/2 再签 .app 外壳 + 主二进制（不带 --deep，嵌套已在第 1 步签好）"
-codesign --force --sign "$IDENTITY" \
-  --options runtime --timestamp \
+sign_with_timestamp_fallback "外壳" \
+  --force --sign "$IDENTITY" --options runtime \
   "$APP"
 
 echo ">>> 校验签名"

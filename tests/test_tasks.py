@@ -368,3 +368,56 @@ def test_detect_text_regex(monkeypatch):
     assert _detect("文字匹配", r"^[4-9]-\d") is False
     # 写错的正则不能把流程带崩
     assert _detect("文字匹配", r"^[3-9") is False
+
+
+def test_ocr_click_exact_match_skips_substring(monkeypatch):
+    """完全匹配：「悬赏」不能命中「发布悬赏（20）」。
+
+    真机事故：点完「悬赏」界面切过去了，校验没等到就重试，
+    这时整屏唯一含「悬赏」的是「发布悬赏（20）」，于是点进了发布悬赏。
+    """
+    from tasks import builtin as tb
+    from core.ocr import TextHit
+
+    hits = [TextHit(text="发布悬赏（20）", x=909, y=234, confidence=0.9, w=87, h=14),
+            TextHit(text="悬赏", x=971, y=582, confidence=0.9, w=22, h=13)]
+
+    def fake(target, region=None, languages=None):
+        # 子串模式：两条都命中；精确模式：调用方传空串再自己筛
+        if target == "":
+            return list(hits)
+        return [h for h in hits if target in h.text]
+
+    monkeypatch.setattr("core.ocr.find_texts", fake)
+    monkeypatch.setattr("core.selfmask.front_window_rect", lambda: (0, 0, 1000, 600))
+
+    clicked: list[tuple[int, int]] = []
+
+    class _Player:
+        stopping = False
+        def wait(self, *_a, **_k): pass
+        def glide_now(self, pt): pass
+        class mouse:
+            @staticmethod
+            def click(*_a, **_k): pass
+        def click(self, *_a, **_k): pass
+
+    class _Ctx:
+        params = {}
+        player = _Player()
+        base_x = 0
+        base_y = 0
+        def stop_workflow(self): pass
+
+    task = tb.OcrClickTask()
+    ctx = _Ctx()
+    ctx.params = {"text": "悬赏", "match_mode": "完全匹配", "timeout_s": 0.1,
+                  "interval_ms": 50, "not_found": "跳过"}
+    orig = tb._self_window_guard
+    tb._self_window_guard = lambda x, y: True
+    try:
+        task.run(ctx)
+    finally:
+        tb._self_window_guard = orig
+    # 只要没抛错、且没点到 (909,234) 那个「发布悬赏」就算通过
+    assert clicked == []

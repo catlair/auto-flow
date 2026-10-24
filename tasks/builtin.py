@@ -680,6 +680,11 @@ class OcrClickTask(BaseTask):
         super().__init__()
         self.params = [
             ParamDef("text", "文字", "text", "", tooltip="要找的屏幕文字（macOS Vision 离线识别，支持中英文）"),
+            # 「包含」是默认，但它有个坑：点「悬赏」时，界面切过去之后整屏唯一含「悬赏」两个字的
+            # 变成了「发布悬赏（20）」，于是重试那一下点进了发布悬赏（2026-10-24 实测）。
+            ParamDef("match_mode", "匹配方式", "select", "包含", ["包含", "完全匹配", "正则"],
+                     tooltip="包含：屏幕文字含这几个字即可（默认）。完全匹配：整段文字必须一模一样，"
+                             "「悬赏」不会命中「发布悬赏（20）」。正则：按正则匹配整段文字"),
             ParamDef("action", "动作", "select", "click", ["click", "double_click", "move"]),
             ParamDef("timeout_s", "查找超时(秒)", "float", 3.0, min_value=0.0),
             ParamDef("interval_ms", "重试间隔(ms)", "int", 500, min_value=50),
@@ -753,7 +758,25 @@ class OcrClickTask(BaseTask):
             _bt = int(p.get("search_bottom_pct", 100) if p.get("search_bottom_pct") is not None else 100)
             _el, _er, _et, _eb = expand_pct(_l, _r, _t, _bt)
             _region = region_from_window(_win, _el, _er, _et, _eb)
-            hits = ocr.find_texts(str(p.get("text", "")), region=_region)
+            _text = str(p.get("text", ""))
+            _mode = str(p.get("match_mode", "包含") or "包含")
+            if _mode == "包含":
+                hits = ocr.find_texts(_text, region=_region)
+            else:
+                # 精确/正则模式必须先把整屏文字都取回来再筛：
+                # find_texts(目标) 本身只做子串匹配，拿不到「不该命中的那些」。
+                hits = ocr.find_texts("", region=_region)
+                if _mode == "完全匹配":
+                    _want = _text.strip()
+                    hits = [h for h in hits if h.text.strip() == _want]
+                else:
+                    import re as _re
+                    try:
+                        _rx = _re.compile(_text)
+                        hits = [h for h in hits if _rx.search(h.text)]
+                    except _re.error as e:
+                        logger.warning("找文字点击的正则写错了：「%s」（%s）", _text, e)
+                        hits = []
             if hits:
                 logger.info("找文字点击：「%s」范围内命中 %d 处 → %s", p.get("text", ""), len(hits),
                             [(h.x, h.y, h.text[:10]) for h in hits])
