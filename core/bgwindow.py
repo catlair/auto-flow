@@ -49,8 +49,78 @@ def _cgimage_to_bgr(img) -> np.ndarray | None:
     return None
 
 
+def _window_id_by_owner(owner_keyword: str):
+    """按属主名找窗口 id（CGWindowListCopyWindowInfo 不需要屏幕录制权限）。"""
+    import Quartz
+    opts = (Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements)
+    for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID):
+        owner = str(w.get("kCGWindowOwnerName", ""))
+        if owner_keyword and owner_keyword in owner:
+            b = w.get("kCGWindowBounds") or {}
+            if int(b.get("Width") or 0) < 50 or int(b.get("Height") or 0) < 50:
+                continue
+            return w.get("kCGWindowNumber"), owner, b
+    return None, None, None
+
+
 def capture_window(owner_keyword: str, timeout_s: float = 5.0):
-    """按窗口抓一帧。返回 (bgr, meta)；失败返回 (None, meta)，meta 里有原因。"""
+    """按窗口抓一帧。返回 (bgr, meta)；失败返回 (None, meta)，meta 里有原因。
+
+    主路径是 `screencapture -l <窗口id>`：
+    - macOS 15+ 上 CGWindowListCreateImage 已不可用，只能走窗口级截图 API；
+    - pyobjc 的 ScreenCaptureKit 绑定在这个版本里没暴露 SCScreenshotManager 的类方法
+      （实测 "No attribute captureImageInFilter_configuration_completionHandler_"），
+      所以先用命令行这条更稳的路；
+    - `screencapture` 需要屏幕录制权限，从 app 里（sidecar 继承 app 的授权）能跑；
+      从没有授权的 shell 里跑会报 "could not create image from display"。
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    import cv2
+
+    wid, owner, bounds = _window_id_by_owner(owner_keyword)
+    if wid is None:
+        return None, {"ok": False, "reason": f"没找到窗口（属主含「{owner_keyword}」）"}
+    fd, path = tempfile.mkstemp(suffix=".png", prefix="af-win-")
+    os.close(fd)
+    try:
+        r = subprocess.run(["/usr/sbin/screencapture", "-l", str(wid), "-x", path],
+                           capture_output=True, text=True, timeout=timeout_s)
+        if r.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 1000:
+            err = (r.stderr or "").strip()
+            return None, {
+                "ok": False,
+                "windowId": wid,
+                "reason": f"按窗口截图失败：{err or '没有产出文件'}"
+                          "（屏幕录制权限没给到本程序时就是这个表现）",
+            }
+        bgr = cv2.imread(path)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if bgr is None:
+        return None, {"ok": False, "windowId": wid, "reason": "截图读不出来"}
+    meta = {
+        "ok": True,
+        "windowId": wid,
+        "owner": owner,
+        "w": int(bgr.shape[1]),
+        "h": int(bgr.shape[0]),
+        "mean": round(float(bgr.mean()), 1),
+        "std": round(float(bgr.std()), 1),
+        # 全黑/纯色基本等于「窗口被遮住后停止渲染」，这一条就是判断后台截图可不可行的依据
+        "looks_blank": bool(bgr.std() < 2.0),
+    }
+    return bgr, meta
+
+
+def _capture_window_sck(owner_keyword: str, timeout_s: float = 5.0):
+    """ScreenCaptureKit 路径（保留但默认不用：见 capture_window 的说明）。"""
     try:
         import ScreenCaptureKit as SCK
     except Exception as e:                                   # noqa: BLE001

@@ -350,6 +350,8 @@ def _background_probe(p=None) -> dict:
     bgr, meta = bgwindow.capture_window(owner)
     ms = int((_time.monotonic() - t0) * 1000)
     out = {"owner": owner, "elapsedMs": ms, **meta, "hits": [], "texts": 0}
+    if not meta.get("ok"):
+        logger.warning("后台自检失败：%s", meta.get("reason"))
     if bgr is not None:
         try:
             from core import ocr
