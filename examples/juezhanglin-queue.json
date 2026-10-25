@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·觉障林 排队循环 v20",
+  "name": "燕云·觉障林 排队循环 v21",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -1189,7 +1189,8 @@
     }
   ],
   "round_uids": [
-    "click_match"
+    "click_match",
+    "click_again"
   ],
   "round_end_uids": [
     "click_continue"
