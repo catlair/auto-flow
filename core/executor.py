@@ -139,6 +139,10 @@ class Executor:
         warned: set[tuple[str, int]] = set()
         # 上一遍（repeat 多次时）可能已经数过轮次，接着数
         rounds = self.rounds
+        # 轮次起点可以是多个（同一件事的多个入口）
+        round_marks = set(wf.round_uids or [])
+        if not round_marks and wf.round_uid:
+            round_marks = {wf.round_uid}
         while cur and not self._stop.is_set():
             steps += 1
             if steps > self.MAX_STEPS:
@@ -168,7 +172,7 @@ class Executor:
             # 「跑满 N 轮就停」：round_uid 那个节点每执行一次算一轮。
             # 注意判断放在**执行之前**：这样第 N+1 轮的起点不会被真的执行，
             # 用户设 3 轮就是不多不少 3 轮。
-            if wf.round_uid and cur == wf.round_uid:
+            if round_marks and cur in round_marks:
                 limit = int(wf.max_rounds or 0)
                 # 先判上限再计数：不然第 N+1 轮会先上报一次「第 N+1 轮」再停，
                 # 界面上就成了「跑了 4 轮却设的上限 3」。

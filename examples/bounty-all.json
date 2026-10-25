@@ -1996,6 +1996,8 @@
       "dst_side": "left"
     }
   ],
-  "round_uid": "do_go",
-  "max_rounds": 0
+  "max_rounds": 0,
+  "round_uids": [
+    "do_go"
+  ]
 }

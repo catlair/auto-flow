@@ -838,9 +838,9 @@ export const useAppStore = defineStore("app", {
       const cur = await rpc.request("workflow.setStart", { uid });
       this.applyCurrent(cur);
     },
-    /** 指定「哪个节点每次执行算一轮」（空串 = 取消） */
-    async setRoundUid(uid: string) {
-      await this.updateWorkflow({ round_uid: uid });
+    /** 指定「哪些节点每次执行算一轮」（空数组 = 取消） */
+    async setRoundUids(uids: string[]) {
+      await this.updateWorkflow({ round_uids: uids });
     },
     setClickThrough(enabled: boolean) {
       // invoke 在没有 Tauri 环境时会**同步抛错**（ReferenceError: window is

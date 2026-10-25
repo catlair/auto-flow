@@ -393,26 +393,29 @@ async function onAdd(type: string) {
   }
 }
 
+/** 可以标记**多个**：同一件事常有多个入口（觉障林开一局有「开始匹配」和「再来一局」两条）。 */
+const roundUids = computed<string[]>(() => store.workflow.round_uids ?? []);
 const roundMarked = computed(() => {
   const sel = store.selectedNode;
-  return !!sel && !!store.workflow.round_uid && sel.uid === store.workflow.round_uid;
+  return !!sel && roundUids.value.includes(sel.uid);
 });
 const roundTip = computed(() => {
-  const uid = store.workflow.round_uid;
-  const n = uid ? store.workflow.nodes.find((x: any) => x.uid === uid) : null;
-  return n
-    ? `当前以「${n.name || n.type}」计一轮；再点一次取消`
-    : "选中一个节点后点这里：它的每次执行算一轮，配合运行面板的「跑 N 轮后停」使用";
+  const names = roundUids.value
+    .map((u) => store.workflow.nodes.find((x: any) => x.uid === u))
+    .filter(Boolean)
+    .map((n: any) => n.name || n.type);
+  if (!names.length) {
+    return "选中一个节点后点这里：它的每次执行算一轮（可标多个），配合运行面板的「跑 N 轮后停」使用";
+  }
+  return `当前计一轮的节点：${names.join("、")}。再点已标记的节点可取消`;
 });
 
 async function toggleRound() {
   const sel = store.selectedNode;
-  if (roundMarked.value) {
-    await store.setRoundUid("");
-    return;
-  }
   if (!sel) return;
-  await store.setRoundUid(sel.uid);
+  const cur = roundUids.value;
+  const next = cur.includes(sel.uid) ? cur.filter((u) => u !== sel.uid) : [...cur, sel.uid];
+  await store.setRoundUids(next);
 }
 
 async function markStart() {
@@ -513,7 +516,7 @@ watch(
         :disabled="store.selectedIndex < 0 && !roundMarked"
         :title="roundTip"
         @click="toggleRound"
-        >{{ roundMarked ? '✓ 轮次起点' : '设为轮次起点' }}</t-button
+        >{{ roundMarked ? '✓ 轮次起点' : roundUids.length ? `轮次起点(${roundUids.length})` : '设为轮次起点' }}</t-button
       >
       <!-- 常驻标环开关。用「描边 + 开启时变主色」表示按下态，与旁边两个按钮同款。 -->
       <t-button

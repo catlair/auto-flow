@@ -207,9 +207,12 @@ class Workflow:
     # 为什么不能用 repeat 表达：这类挂机流程本身就是**图里有环**（抢完一单回到开头再抢），
     # repeat 是「整张图跑几遍」，而用户要的是「这一圈循环跑几次」，两者不是一回事。
     max_rounds: int = 0
-    # 哪个节点每次执行算一轮。空 = 只用 repeat（旧行为）。
-    # 由用户在画布上「设为轮次起点」指定——不同脚本的「一轮」落点不同：
-    # 抢悬赏是「点前往」，江湖弈是「开始匹配」，没法自动推断。
+    # 哪些节点每次执行算一轮（空 = 只用 repeat，旧行为）。
+    # 用**列表**而不是单个：同一件事往往有多个入口。觉障林开一局既可能走
+    # 「开始匹配」也可能走「再来一局」，只标一个就会漏算——少算轮次的后果是
+    # 「设了 5 轮却跑了 10 局」，比多算更难发现。
+    round_uids: list = field(default_factory=list)
+    # 旧字段（单个）。读盘时迁移进 round_uids，只为兼容已经存下来的文件。
     round_uid: str = ""
     nodes: list[Node] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
@@ -225,7 +228,7 @@ class Workflow:
             "speed": self.speed,
             "repeat": self.repeat,
             "max_rounds": self.max_rounds,
-            "round_uid": self.round_uid,
+            "round_uids": list(self.round_uids),
             "start": self.start,
             "nodes": [n.to_dict() for n in self.nodes],
             "edges": [e.to_dict() for e in self.edges],
@@ -247,6 +250,11 @@ class Workflow:
             max_rounds=int(data.get("max_rounds", 0) or 0),
             round_uid=str(data.get("round_uid") or ""),
         )
+        # 旧的单值写法迁移成列表
+        wf_rounds = [str(x) for x in (data.get("round_uids") or []) if x]
+        if not wf_rounds and wf.round_uid:
+            wf_rounds = [wf.round_uid]
+        wf.round_uids = wf_rounds
         nodes = data.get("nodes")
         if nodes is None and isinstance(data.get("events"), list):
             # 兼容 Tauri 版裸事件脚本：整体作为一个录制回放节点

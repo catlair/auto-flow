@@ -76,8 +76,8 @@ export interface Workflow {
   repeat: number;
   /** 跑满多少轮就停；0 = 不限 */
   max_rounds?: number;
-  /** 哪个节点每次执行算一轮（空 = 不计数） */
-  round_uid?: string;
+  /** 哪些节点每次执行算一轮（空 = 不计数） */
+  round_uids?: string[];
   nodes: WorkflowNode[];
   /** 有向边；v4 起「下一步走哪儿」完全由它决定 */
   edges: WorkflowEdge[];

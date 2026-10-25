@@ -305,13 +305,17 @@ class AppController:
                     self.workflow.max_rounds = max(int(patch["max_rounds"]), 0)
                 except (TypeError, ValueError):
                     raise ControllerError(-32602, "max_rounds 须为整数")
-            if "round_uid" in patch:
-                uid = str(patch["round_uid"] or "")
-                # 空 = 取消标记；非空必须真的存在，否则「设置了轮次却永远不计数」
-                # 这种静默失败最难查
-                if uid and uid not in {n.uid for n in self.workflow.nodes}:
-                    raise ControllerError(-32602, "round_uid 指向的节点不存在")
-                self.workflow.round_uid = uid
+            if "round_uids" in patch:
+                raw = patch["round_uids"] or []
+                if not isinstance(raw, list):
+                    raise ControllerError(-32602, "round_uids 须为数组")
+                known = {n.uid for n in self.workflow.nodes}
+                uids = [str(x) for x in raw if x]
+                # 指向不存在的节点 = 「设了轮次却永远不计数」，这种静默失败最难查
+                missing = [u for u in uids if u not in known]
+                if missing:
+                    raise ControllerError(-32602, f"round_uids 指向的节点不存在：{missing}")
+                self.workflow.round_uids = uids
         self._broadcast_workflow()
         return self.workflow_current()
 

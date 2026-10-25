@@ -1149,6 +1149,8 @@
       "dst_side": "left"
     }
   ],
-  "round_uid": "click_start",
-  "max_rounds": 0
+  "max_rounds": 0,
+  "round_uids": [
+    "click_start"
+  ]
 }

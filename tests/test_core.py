@@ -2722,7 +2722,7 @@ def test_executor_stops_after_max_rounds(monkeypatch):
         ("delay", {"ms": 1}),      # 1
         edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)],
     )
-    wf.round_uid = wf.nodes[0].uid
+    wf.round_uids = [wf.nodes[0].uid]
     wf.max_rounds = 3
     ex.run_workflow(wf, on_node=lambda i, ty: None, on_done=lambda s: done.append(s),
                     on_round=lambda n, total: seen.append(n))
