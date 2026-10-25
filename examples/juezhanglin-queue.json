@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·觉障林 排队循环 v16",
+  "name": "燕云·觉障林 排队循环 v18",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +8,7 @@
     {
       "type": "note",
       "params": {
-        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算：认出「继续」后**按 Space**（页面右下角写着「Space 继续」，不要用坐标盲点——位置一变就卡住），每按一次等 3.5s（翻页有动画）再查一次「再来一局」——查到就点它（会自动匹配），三次都没查到就回第一级完整检查兜底。这样不管结算有几页（MVP 局多一页）都能走通，也不会在奖励页多点一次「继续」。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」(-20,+46)。结束动画约 4s，点完「确认」等 5s 再判定。\n\n【大世界兜底】结算后没有「再来一局」、直接退回大世界时（2026-10-25 实测），靠「悬索游天」认出大世界 → 点右上角菜单 → 判「武林录」→ 点「同游」→ 点「止戈」→ 点「觉障林」→ 回大厅（菜单是四级）。\n【轮次】以「前往出生地」计一轮：一局一次。不能拿「开始匹配」计——大厅里可能反复点它，一局没打轮次就数满了。"
+        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算：认出「继续」后**按 Space**（页面右下角写着「Space 继续」，不要用坐标盲点——位置一变就卡住），每按一次等 3.5s（翻页有动画）再查一次「再来一局」——查到就点它（会自动匹配），三次都没查到就回第一级完整检查兜底。这样不管结算有几页（MVP 局多一页）都能走通，也不会在奖励页多点一次「继续」。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」(-20,+46)。结束动画约 4s，点完「确认」等 5s 再判定。\n\n【大世界兜底】结算后没有「再来一局」、直接退回大世界时（2026-10-25 实测），靠「悬索游天」认出大世界 → 点右上角菜单 → 判「武林录」→ 点「同游」→ 点「止戈」→ 点「觉障林」→ 回大厅（菜单是四级）。\n【轮次】以「前往出生地」计一轮：一局一次。不能拿「开始匹配」计——大厅里可能反复点它，一局没打轮次就数满了。\n【菜单四级】菜单 → 同游 → 止戈 → 觉障林。注意「止戈」在「同游」页是右侧卡片（约 72%），不能沿用菜单那套「只搜左半屏」。\n【止戈页】进来先看右侧有没有「单排」——有就是觉障林已选中，直接回主判定按开始匹配；没有才补点一次卡片（点卡片，别点右侧那个大标题，标题不切换模式）。"
       },
       "enabled": true,
       "uid": "note",
@@ -612,19 +612,19 @@
         "offset_x": 0,
         "offset_y": 0,
         "search_left_pct": 0,
-        "search_right_pct": 60,
+        "search_right_pct": 100,
         "search_top_pct": 0,
         "search_bottom_pct": 100,
         "pick": "第一个",
         "match_mode": "完全匹配",
-        "verify_text": "",
-        "verify_timeout_s": 1,
-        "verify_retries": 0,
+        "verify_text": "觉障林",
+        "verify_timeout_s": 1.8,
+        "verify_retries": 1,
         "verify_fail": "继续走下一步"
       },
       "enabled": true,
       "uid": "w_stop",
-      "name": "点「止戈」（完全匹配，只搜左半屏）",
+      "name": "点「止戈」卡片（点完校验：有「觉障林」）",
       "x": 1240,
       "y": 160
     },
@@ -659,16 +659,16 @@
         "search_right_pct": 100,
         "search_top_pct": 0,
         "search_bottom_pct": 100,
-        "pick": "第一个",
+        "pick": "最后一个",
         "match_mode": "包含",
-        "verify_text": "",
-        "verify_timeout_s": 1,
-        "verify_retries": 0,
+        "verify_text": "单排",
+        "verify_timeout_s": 1.5,
+        "verify_retries": 1,
         "verify_fail": "继续走下一步"
       },
       "enabled": true,
       "uid": "w_jzl",
-      "name": "点「觉障林」",
+      "name": "点「觉障林」（点完校验：有「开始匹配」）",
       "x": 1600,
       "y": 160
     },
@@ -718,14 +718,14 @@
         "search_bottom_pct": 100,
         "pick": "第一个",
         "match_mode": "完全匹配",
-        "verify_text": "",
-        "verify_timeout_s": 1,
-        "verify_retries": 0,
+        "verify_text": "止戈",
+        "verify_timeout_s": 2,
+        "verify_retries": 1,
         "verify_fail": "继续走下一步"
       },
       "enabled": true,
       "uid": "w_ty",
-      "name": "点「同游」（完全匹配）",
+      "name": "点「同游」（点完校验：有「止戈」）",
       "x": 1420,
       "y": 240
     },
@@ -740,6 +740,71 @@
       "uid": "w_d0",
       "name": "等同游子菜单",
       "x": 1600,
+      "y": 240
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "单排",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 0.8,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "w_single",
+      "name": "觉障林选中了吗（有「单排」）",
+      "x": 1960,
+      "y": 240
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "觉障林",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "最后一个",
+        "match_mode": "包含",
+        "verify_text": "单排",
+        "verify_timeout_s": 1.5,
+        "verify_retries": 1,
+        "verify_fail": "继续走下一步"
+      },
+      "enabled": true,
+      "uid": "w_jzl2",
+      "name": "再点一次觉障林卡片",
+      "x": 2140,
+      "y": 240
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "w_d2b",
+      "name": "等模式切换",
+      "x": 2320,
       "y": 240
     }
   ],
@@ -1081,12 +1146,6 @@
       "dst_side": "left"
     },
     {
-      "src": "w_d2",
-      "port": "out",
-      "dst": "judge_in",
-      "dst_side": "left"
-    },
-    {
       "src": "w_ty",
       "port": "out",
       "dst": "w_d0",
@@ -1096,6 +1155,36 @@
       "src": "w_d0",
       "port": "out",
       "dst": "w_stop",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_d2",
+      "port": "out",
+      "dst": "w_single",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_single",
+      "port": "true",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_single",
+      "port": "false",
+      "dst": "w_jzl2",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_jzl2",
+      "port": "out",
+      "dst": "w_d2b",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_d2b",
+      "port": "out",
+      "dst": "judge_in",
       "dst_side": "left"
     }
   ],
