@@ -212,6 +212,11 @@ class Workflow:
     # 「开始匹配」也可能走「再来一局」，只标一个就会漏算——少算轮次的后果是
     # 「设了 5 轮却跑了 10 局」，比多算更难发现。
     round_uids: list = field(default_factory=list)
+    # 轮次的**结束**标记（空 = 旧行为：只按 round_uids 计）。
+    # 填了就是配对计数：先见到开始、再见到结束，才算一整轮；
+    # 开始重复出现不多算（前期连点几次开始匹配仍是一局），
+    # 结束重复出现也不多算（结算翻好几页仍是一局）。
+    round_end_uids: list = field(default_factory=list)
     # 旧字段（单个）。读盘时迁移进 round_uids，只为兼容已经存下来的文件。
     round_uid: str = ""
     nodes: list[Node] = field(default_factory=list)
@@ -229,6 +234,7 @@ class Workflow:
             "repeat": self.repeat,
             "max_rounds": self.max_rounds,
             "round_uids": list(self.round_uids),
+            "round_end_uids": list(self.round_end_uids),
             "start": self.start,
             "nodes": [n.to_dict() for n in self.nodes],
             "edges": [e.to_dict() for e in self.edges],
@@ -255,6 +261,7 @@ class Workflow:
         if not wf_rounds and wf.round_uid:
             wf_rounds = [wf.round_uid]
         wf.round_uids = wf_rounds
+        wf.round_end_uids = [str(x) for x in (data.get("round_end_uids") or []) if x]
         nodes = data.get("nodes")
         if nodes is None and isinstance(data.get("events"), list):
             # 兼容 Tauri 版裸事件脚本：整体作为一个录制回放节点

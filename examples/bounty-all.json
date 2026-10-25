@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "name": "燕云·江湖悬赏 全流程 v41",
+  "name": "燕云·江湖悬赏 全流程 v42",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -1987,6 +1987,9 @@
   ],
   "max_rounds": 0,
   "round_uids": [
-    "m1_hover"
+    "accept"
+  ],
+  "round_end_uids": [
+    "do_d6"
   ]
 }

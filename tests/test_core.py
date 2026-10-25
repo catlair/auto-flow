@@ -2747,3 +2747,84 @@ def test_executor_without_round_uid_runs_forever_until_repeat(monkeypatch):
     ex.run_workflow(wf, on_round=lambda n, total: rounds.append(n))
     assert rounds == []
     assert ex._rounds_done == 0
+
+
+def _pair_wf(start_uid: str, end_uid: str, limit: int):
+    """构造一条「开始 → 结束 → 回开始」的环，用于测配对计轮。"""
+    wf = _graph(
+        ("delay", {"ms": 1}),      # 0 开始
+        ("delay", {"ms": 1}),      # 1 结束
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)],
+    )
+    wf.round_uids = [wf.nodes[0].uid]
+    wf.round_end_uids = [wf.nodes[1].uid]
+    wf.max_rounds = limit
+    return wf
+
+
+def test_round_pairs_start_and_end():
+    """开始…结束配对完成才算一轮：跑满 3 轮就停在第三个结束标记之前。"""
+    ex = Executor()
+    ex.player.glide_now = lambda t: None
+    seen: list[int] = []
+    ex.run_workflow(_pair_wf("", "", 3), on_round=lambda n, total: seen.append(n))
+    assert seen == [1, 2, 3], seen
+    assert ex._rounds_done == 3
+    assert ex._in_round is False
+
+
+def test_round_repeated_start_counts_once():
+    """开局前连点几次「开始匹配」仍是一局：重复的开始标记不多算。"""
+    ex = Executor()
+    ex.player.glide_now = lambda t: None
+    seen: list[int] = []
+    # 环里插两个开始标记：0 → 0b(开始) → 0c(开始) → 1(结束) → 回 0
+    wf = _graph(
+        ("delay", {"ms": 1}),   # 开始 A
+        ("delay", {"ms": 1}),   # 开始 B（重复的开始）
+        ("delay", {"ms": 1}),   # 结束
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 2), (2, PORT_OUT, 0)],
+        repeat=2,
+    )
+    wf.round_uids = [wf.nodes[0].uid, wf.nodes[1].uid]
+    wf.round_end_uids = [wf.nodes[2].uid]
+    wf.max_rounds = 2
+    ex.run_workflow(wf, on_round=lambda n, total: seen.append(n))
+    assert seen == [1, 2], seen
+
+
+def test_round_repeated_end_counts_once():
+    """结算翻好几页只算一局：重复的结束标记不多算，直到下一次开始。"""
+    ex = Executor()
+    ex.player.glide_now = lambda t: None
+    seen: list[int] = []
+    wf = _graph(
+        ("delay", {"ms": 1}),   # 开始
+        ("delay", {"ms": 1}),   # 结束 A
+        ("delay", {"ms": 1}),   # 结束 B（同一局的第二页）
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 2), (2, PORT_OUT, 0)],
+        repeat=2,
+    )
+    wf.round_uids = [wf.nodes[0].uid]
+    wf.round_end_uids = [wf.nodes[1].uid, wf.nodes[2].uid]
+    wf.max_rounds = 2
+    ex.run_workflow(wf, on_round=lambda n, total: seen.append(n))
+    assert seen == [1, 2], seen
+
+
+def test_round_end_without_start_does_not_count():
+    """从半局中途开跑（没见过开始）：结束标记不计数，避免把残局算成一轮。"""
+    ex = Executor()
+    ex.player.glide_now = lambda t: None
+    seen: list[int] = []
+    wf = _graph(
+        ("delay", {"ms": 1}),      # 结束
+        ("delay", {"ms": 1}),      # 开始
+        edges=[(0, PORT_OUT, 1), (1, PORT_OUT, 0)],
+    )
+    wf.round_uids = [wf.nodes[1].uid]
+    wf.round_end_uids = [wf.nodes[0].uid]
+    wf.max_rounds = 1
+    ex.run_workflow(wf, on_round=lambda n, total: seen.append(n))
+    # 第一次结束没有开始配对 → 不计；之后 开始→结束 才计
+    assert seen and seen[0] == 1

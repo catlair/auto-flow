@@ -1,0 +1,19 @@
+/* 置顶日志窗的全局兜底样式（组件样式管不到 html/body）。 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #1b1e24;
+  /* 无边框窗口：关掉整页滚动条与选中高亮，避免拖动时选中文字。 */
+  overflow: hidden;
+  font-family: -apple-system, "Helvetica Neue", "PingFang SC", sans-serif;
+  color: #d7dbe3;
+}
+#logapp {
+  height: 100%;
+}
+/* 日志文本要能选中（用户常要挑一段贴出来）。 */
+.af-logwin-list {
+  user-select: text;
+}

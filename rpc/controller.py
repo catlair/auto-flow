@@ -305,6 +305,16 @@ class AppController:
                     self.workflow.max_rounds = max(int(patch["max_rounds"]), 0)
                 except (TypeError, ValueError):
                     raise ControllerError(-32602, "max_rounds 须为整数")
+            if "round_end_uids" in patch:
+                raw = patch["round_end_uids"] or []
+                if not isinstance(raw, list):
+                    raise ControllerError(-32602, "round_end_uids 须为数组")
+                known = {n.uid for n in self.workflow.nodes}
+                uids = [str(x) for x in raw if x]
+                missing = [u for u in uids if u not in known]
+                if missing:
+                    raise ControllerError(-32602, f"round_end_uids 指向的节点不存在：{missing}")
+                self.workflow.round_end_uids = uids
             if "round_uids" in patch:
                 raw = patch["round_uids"] or []
                 if not isinstance(raw, list):

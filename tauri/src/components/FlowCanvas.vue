@@ -416,6 +416,20 @@ const roundTip = computed(() => {
   );
 });
 
+const roundEndUids = computed<string[]>(() => store.workflow.round_end_uids ?? []);
+const roundEndMarked = computed(() => {
+  const sel = store.selectedNode;
+  return !!sel && roundEndUids.value.includes(sel.uid);
+});
+
+async function toggleRoundEnd() {
+  const sel = store.selectedNode;
+  if (!sel) return;
+  const cur = roundEndUids.value;
+  const next = cur.includes(sel.uid) ? cur.filter((u) => u !== sel.uid) : [...cur, sel.uid];
+  await store.setRoundEndUids(next);
+}
+
 async function toggleRound() {
   const sel = store.selectedNode;
   if (!sel) return;
@@ -523,6 +537,17 @@ watch(
         :title="roundTip"
         @click="toggleRound"
         >{{ roundMarked ? '✓ 轮次起点' : roundUids.length ? `轮次起点(${roundUids.length})` : '设为轮次起点' }}</t-button
+      >
+      <!-- 配对计数的另一半：见到「开始」之后，再见到「结束」才算整整一轮。
+           这样前期连点几次开始匹配、结算翻好几页，都只算一局。 -->
+      <t-button
+        size="small"
+        variant="outline"
+        :theme="roundEndMarked ? 'primary' : 'default'"
+        :disabled="store.selectedIndex < 0 && !roundEndUids.length"
+        title="配合「轮次起点」使用：先见到起点、再见到终点，才算整整一轮。不设终点时就退化成「起点每执行一次算一轮」"
+        @click="toggleRoundEnd"
+        >{{ roundEndMarked ? '✓ 轮次终点' : roundEndUids.length ? `轮次终点(${roundEndUids.length})` : '设为轮次终点' }}</t-button
       >
       <!-- 常驻标环开关。用「描边 + 开启时变主色」表示按下态，与旁边两个按钮同款。 -->
       <t-button

@@ -72,6 +72,8 @@ class Executor:
         # 「跑满 N 轮」的计数落在实例上：控制器要能问「是跑满停的、还是用户停的」。
         self.rounds = 0
         self._rounds_done = 0
+        # 「开始已见到、结束还没见到」——配对计数的中间状态
+        self._in_round = False
 
     # ---- 遍历 ----
 
@@ -143,6 +145,7 @@ class Executor:
         round_marks = set(wf.round_uids or [])
         if not round_marks and wf.round_uid:
             round_marks = {wf.round_uid}
+        round_ends = set(wf.round_end_uids or [])
         while cur and not self._stop.is_set():
             steps += 1
             if steps > self.MAX_STEPS:
@@ -169,23 +172,45 @@ class Executor:
             if node is None:
                 return
 
-            # 「跑满 N 轮就停」：round_uid 那个节点每执行一次算一轮。
-            # 注意判断放在**执行之前**：这样第 N+1 轮的起点不会被真的执行，
-            # 用户设 3 轮就是不多不少 3 轮。
-            if round_marks and cur in round_marks:
+            # 「跑满 N 轮就停」。两种计法：
+            #   配了结束标记 → 开始…结束配对完成才算一轮（推荐，N 轮 = N 局）；
+            #   只配了开始标记 → 每次执行算一轮（旧行为）。
+            # 判定都放在**执行之前**：跑满就停在这一刻，不执行这个节点。
+            if round_marks or round_ends:
                 limit = int(wf.max_rounds or 0)
-                # 先判上限再计数：不然第 N+1 轮会先上报一次「第 N+1 轮」再停，
-                # 界面上就成了「跑了 4 轮却设的上限 3」。
-                if limit > 0 and rounds + 1 > limit:
-                    logger.info("已跑满 %d 轮（设置的上限），停止", limit)
-                    self._rounds_done = limit
-                    self._stop.set()
-                    self.player.stop_playback()
-                    return
-                rounds += 1
-                self.rounds = rounds
-                if on_round:
-                    on_round(rounds, limit)
+                if round_ends:
+                    # —— 配对计数：开始 … 结束 才算一轮 ——
+                    # 重复的「开始」不另算（大厅里连点几次开始匹配仍是同一局）；
+                    # 重复的「结束」也不另算（结算翻好几页仍是一局）。
+                    if cur in round_marks:
+                        self._in_round = True
+                    elif cur in round_ends and self._in_round:
+                        self._in_round = False
+                        rounds += 1
+                        self.rounds = rounds
+                        if on_round:
+                            on_round(rounds, limit)
+                        # 上限在**结束标记之前**判：跑满就停在这一刻，
+                        # 不再往下执行「再来一局」那种会开新一局的动作。
+                        if limit > 0 and rounds >= limit:
+                            logger.info("已跑满 %d 轮（设置的上限），停止", limit)
+                            self._rounds_done = limit
+                            self._stop.set()
+                            self.player.stop_playback()
+                            return
+                elif cur in round_marks:
+                    # 旧行为（没设结束标记）：开始标记每执行一次算一轮，
+                    # 停在第 N+1 次之前。
+                    if limit > 0 and rounds + 1 > limit:
+                        logger.info("已跑满 %d 轮（设置的上限），停止", limit)
+                        self._rounds_done = limit
+                        self._stop.set()
+                        self.player.stop_playback()
+                        return
+                    rounds += 1
+                    self.rounds = rounds
+                    if on_round:
+                        on_round(rounds, limit)
             if node.type == "end":
                 # 显式终点。上报一次，让界面能显示「走到这里结束了」——
                 # 不报的话最后一步会停在 end 的**前一个**节点上，看起来像没跑完。
