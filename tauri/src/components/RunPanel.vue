@@ -86,7 +86,7 @@ watch(
         @change="onMaxRounds"
         size="small"
         theme="column"
-        title="到画布上「设为轮次起点」的那个节点每执行一次算一轮；没设起点时这个值不起作用"
+        title="画布上「设为轮次起点」的节点每执行一次算一轮；没设起点时这个值不起作用。跑满后会在那个节点之前停下，所以要选在手上没有任务的位置"
       />
     </div>
     <div v-if="store.running && store.runRound.total > 0" class="af-run-state">

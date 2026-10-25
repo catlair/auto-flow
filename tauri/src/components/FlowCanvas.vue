@@ -405,9 +405,15 @@ const roundTip = computed(() => {
     .filter(Boolean)
     .map((n: any) => n.name || n.type);
   if (!names.length) {
-    return "选中一个节点后点这里：它的每次执行算一轮（可标多个），配合运行面板的「跑 N 轮后停」使用";
+    return (
+      "选中一个节点后点这里：它的每次执行算一轮（可标多个），配合运行面板的「跑 N 轮后停」使用。" +
+      "注意它同时也是**停下来时的位置**——要选在「手上没有任务」的地方，别选中途节点"
+    );
   }
-  return `当前计一轮的节点：${names.join("、")}。再点已标记的节点可取消`;
+  return (
+    `当前计一轮的节点：${names.join("、")}。跑满后会停在这里，` +
+    "所以要确保停在这里时手上没有未完成的任务；再点已标记的节点可取消"
+  );
 });
 
 async function toggleRound() {
