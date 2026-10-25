@@ -645,6 +645,11 @@ export const useAppStore = defineStore("app", {
           break;
         case "run.finished":
           this.running = false;
+          // 跑满轮次也会走这里，表现和「手动停止」一模一样——界面上只会看到它突然停了。
+          // 后端把 roundsDone 带过来，这里说明白：是跑满了，不是你点错了。
+          if ((n.params?.roundsDone ?? 0) > 0) {
+            this.setBanner(`已跑满 ${n.params.roundsDone} 轮（达到设置的上限），自动停止`, "ok");
+          }
           this.runNodeType = "";
           this.runNodeName = "";
           this.runNodeDetail = "";
