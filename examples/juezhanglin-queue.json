@@ -1,6 +1,9 @@
 {
+  "schema": 1,
+  "id": "yw-juezhanglin-v12",
+  "created_at": "2026-10-21 22:20:52",
   "version": 4,
-  "name": "燕云·觉障林 排队循环 v13",
+  "name": "燕云·觉障林 排队循环 v14",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -8,7 +11,7 @@
     {
       "type": "note",
       "params": {
-        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算：认出「继续」后按窗口右下角 (-29,-30) 盲点，每点一次等 3.5s（翻页有动画）再查一次「再来一局」——查到就点它（会自动匹配），三次都没查到就回第一级完整检查兜底。这样不管结算有几页（MVP 局多一页）都能走通，也不会在奖励页多点一次「继续」。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」(-20,+46)。结束动画约 4s，点完「确认」等 5s 再判定。"
+        "text": "两级判定 + 结算盲点。第一级只看对局内 3 项（确定退出吗 / 观战中 / 复活机会，超时 6s，对局中空等 8s）；第二级不在对局内才跑（获得花蕊织 / 继续 / 请选择复活点 / 出生地 / 开始匹配 / 确定）。结算：认出「继续」后按窗口右下角 (-29,-30) 盲点，每点一次等 3.5s（翻页有动画）再查一次「再来一局」——查到就点它（会自动匹配），三次都没查到就回第一级完整检查兜底。这样不管结算有几页（MVP 局多一页）都能走通，也不会在奖励页多点一次「继续」。复活免费：复活点界面点右下角「Space 复活」继续打；复活机会用完进观战，才点右上角「退出」(-20,+46)。结束动画约 4s，点完「确认」等 5s 再判定。\n\n【大世界兜底】结算后没有「再来一局」、直接退回大世界时（2026-10-25 实测），靠「悬索游天」认出大世界 → 点右上角菜单 → 判「武林录」→ 点「止戈」→ 点「觉障林」→ 回大厅。\n【轮次】以「前往出生地」计一轮：一局一次。不能拿「开始匹配」计——大厅里可能反复点它，一局没打轮次就数满了。"
       },
       "enabled": true,
       "uid": "note",
@@ -28,7 +31,7 @@
     {
       "type": "branch",
       "params": {
-        "case_count": 3,
+        "case_count": 4,
         "case1_kind": "文字存在",
         "case1_value": "确定退出吗",
         "case2_kind": "文字存在",
@@ -36,7 +39,9 @@
         "case3_kind": "文字存在",
         "case3_value": "复活机会",
         "confidence": 0.8,
-        "timeout_s": 6
+        "timeout_s": 6,
+        "case4_kind": "文字存在",
+        "case4_value": "悬索游天"
       },
       "enabled": true,
       "uid": "judge_in",
@@ -545,6 +550,165 @@
       "name": "到奖励页了吗③",
       "x": 1260,
       "y": 1360
+    },
+    {
+      "type": "mouse",
+      "params": {
+        "action": "click",
+        "button": "left",
+        "anchor": "win_tr",
+        "x": -23,
+        "y": 48,
+        "use_relative": false,
+        "scroll_dx": 0,
+        "scroll_dy": 0,
+        "scroll_unit": "line",
+        "scroll_target": "全局",
+        "drag_dx": 0,
+        "drag_dy": -260,
+        "drag_steps": 14,
+        "drag_ms": 500
+      },
+      "enabled": true,
+      "uid": "w_menu",
+      "name": "大世界·点菜单图标",
+      "x": 700,
+      "y": 70
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 900,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "w_wait",
+      "name": "等面板展开",
+      "x": 880,
+      "y": 70
+    },
+    {
+      "type": "condition",
+      "params": {
+        "check": "文字存在",
+        "image_path": "",
+        "text": "武林录",
+        "model_path": "",
+        "label": "",
+        "confidence": 0.8,
+        "timeout_s": 1.2,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100
+      },
+      "enabled": true,
+      "uid": "w_panel",
+      "name": "面板出来了吗（有「武林录」）",
+      "x": 1060,
+      "y": 70
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "止戈",
+        "action": "click",
+        "timeout_s": 1.2,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 60,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个",
+        "match_mode": "完全匹配",
+        "verify_text": "",
+        "verify_timeout_s": 1,
+        "verify_retries": 0,
+        "verify_fail": "继续走下一步"
+      },
+      "enabled": true,
+      "uid": "w_stop",
+      "name": "点「止戈」（完全匹配，只搜左半屏）",
+      "x": 1240,
+      "y": 160
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 700,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "w_d1",
+      "name": "等子菜单",
+      "x": 1420,
+      "y": 160
+    },
+    {
+      "type": "ocr_click",
+      "params": {
+        "text": "觉障林",
+        "action": "click",
+        "timeout_s": 1.5,
+        "interval_ms": 150,
+        "not_found": "跳过",
+        "click_pos": "目标中心",
+        "rel_x": 50,
+        "rel_y": 50,
+        "inset": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "search_left_pct": 0,
+        "search_right_pct": 100,
+        "search_top_pct": 0,
+        "search_bottom_pct": 100,
+        "pick": "第一个",
+        "match_mode": "包含",
+        "verify_text": "",
+        "verify_timeout_s": 1,
+        "verify_retries": 0,
+        "verify_fail": "继续走下一步"
+      },
+      "enabled": true,
+      "uid": "w_jzl",
+      "name": "点「觉障林」",
+      "x": 1600,
+      "y": 160
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1500,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "w_d2",
+      "name": "等进大厅",
+      "x": 1780,
+      "y": 160
+    },
+    {
+      "type": "delay",
+      "params": {
+        "mode": "延时毫秒",
+        "ms": 1000,
+        "at": "09:00:00"
+      },
+      "enabled": true,
+      "uid": "w_idle",
+      "name": "面板没出来·空转",
+      "x": 1240,
+      "y": 40
     }
   ],
   "edges": [
@@ -829,10 +993,69 @@
       "port": "false",
       "dst": "judge_in",
       "dst_side": "left"
+    },
+    {
+      "src": "judge_in",
+      "port": "case:4",
+      "dst": "w_menu",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_menu",
+      "port": "out",
+      "dst": "w_wait",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_wait",
+      "port": "out",
+      "dst": "w_panel",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_panel",
+      "port": "true",
+      "dst": "w_stop",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_panel",
+      "port": "false",
+      "dst": "w_idle",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_idle",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_stop",
+      "port": "out",
+      "dst": "w_d1",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_d1",
+      "port": "out",
+      "dst": "w_jzl",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_jzl",
+      "port": "out",
+      "dst": "w_d2",
+      "dst_side": "left"
+    },
+    {
+      "src": "w_d2",
+      "port": "out",
+      "dst": "judge_in",
+      "dst_side": "left"
     }
   ],
   "round_uids": [
-    "click_match",
-    "click_again"
+    "click_go"
   ]
 }

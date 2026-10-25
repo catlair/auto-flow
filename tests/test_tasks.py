@@ -421,3 +421,22 @@ def test_ocr_click_exact_match_skips_substring(monkeypatch):
         tb._self_window_guard = orig
     # 只要没抛错、且没点到 (909,234) 那个「发布悬赏」就算通过
     assert clicked == []
+
+
+def test_drop_own_window_hits(monkeypatch):
+    """落在 Auto Flow 自己窗口里的识别结果要被剔掉。
+
+    真机事故：备注节点里写着「点「开始匹配」」，脚本把这行字当成游戏按钮点到了自己画布上。
+    """
+    from core import ocr, selfmask
+    from core.ocr import TextHit
+
+    hits = [TextHit(text="开始匹配", x=606, y=391, confidence=0.9, w=260, h=15),
+            TextHit(text="开始匹配", x=1200, y=700, confidence=0.9, w=80, h=15)]
+    monkeypatch.setattr(selfmask, "own_window_rects", lambda force=False: [(0, 0, 1100, 720)])
+    kept = ocr.drop_own_window_hits(hits)
+    assert [h.x for h in kept] == [1200]
+
+    # 拿不到窗口列表时什么都不剔（行为退回改动前，不能因为读不到就全丢）
+    monkeypatch.setattr(selfmask, "own_window_rects", lambda force=False: [])
+    assert len(ocr.drop_own_window_hits(hits)) == 2

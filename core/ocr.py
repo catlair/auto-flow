@@ -90,6 +90,39 @@ def _split_merged(hit: TextHit, target: str) -> list[TextHit]:
     return out
 
 
+def drop_own_window_hits(hits: list) -> list:
+    """剔掉落在 Auto Flow **自己窗口**里的命中。
+
+    为什么要这一步：识别是全屏做的，而运行时主窗经常就摆在游戏旁边（甚至盖住一半）。
+    我们自己界面上的文字会被一起认出来——2026-10-25 真机事故：
+    备注节点里写着「点「开始匹配」」，脚本把这行字当成游戏按钮，点到了自己的画布上。
+
+    遮罩（vision 那边的涂黑）本来管这件事，但它依赖窗口列表；列表拿不到时会静默失效，
+    所以这里再做一道：只要命中点落在自己露出的窗口矩形里，就当它不存在。
+
+    取不到窗口列表时 own_window_rects() 返回空列表 —— 什么都不剔，行为退回改动前。
+    """
+    if not hits:
+        return hits
+    try:
+        from core import selfmask
+        rects = selfmask.own_window_rects()
+    except Exception:  # noqa: BLE001
+        return hits
+    if not rects:
+        return hits
+    kept = []
+    for h in hits:
+        inside = False
+        for (l, t, w, hh) in rects:
+            if l <= h.x <= l + w and t <= h.y <= t + hh:
+                inside = True
+                break
+        if not inside:
+            kept.append(h)
+    return kept
+
+
 def recognize_bgr(bgr, languages: list | None = None) -> list[TextHit]:
     """对一张现成的 BGR 图做 OCR，坐标是**这张图的像素坐标**（左上原点）。
 
@@ -177,7 +210,7 @@ def find_texts(target: str, region: tuple | None = None,
     """
     cap = grab_region_bgr(region)
     hits: list[TextHit] = []
-    for h in recognize_texts(cap, languages):
+    for h in drop_own_window_hits(recognize_texts(cap, languages)):
         if target not in h.text:
             continue
         parts = _split_merged(h, target)
