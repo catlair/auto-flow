@@ -1,5 +1,5 @@
 {
-  "name": "燕云·江湖弈 单人AI 自动对局 v12",
+  "name": "燕云·江湖弈 单人AI 自动对局 v13",
   "speed": 1,
   "repeat": 1,
   "start": "start",
@@ -1154,6 +1154,6 @@
     "click_start"
   ],
   "round_end_uids": [
-    "press_again"
+    "press_space"
   ]
 }
