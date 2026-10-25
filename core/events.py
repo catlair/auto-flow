@@ -67,7 +67,9 @@ def case_port(i: int) -> str:
 
 # 分支节点的 case 上限。参数面板是按 ParamDef 平铺渲染的，每个 case 要占
 # 两个参数（检测方式 + 取值），所以这个数字直接决定参数面板的长度。
-MAX_BRANCH_CASES = 6
+# 原来是 6；燕云的状态机屏数就超过 6（江湖弈已经用满 6 个，「半步登天」晋级页
+# 只能挤进 else 兜底），2026-10-25 提到 8。前端 tauri/src/flow/ports.ts 同步。
+MAX_BRANCH_CASES = 8
 
 # 条件组节点的条件项上限。理由与 MAX_BRANCH_CASES 完全相同：面板平铺渲染，
 # 每项占两个参数（检测方式 + 取值），这个数字直接决定面板长度。

@@ -2828,3 +2828,28 @@ def test_round_end_without_start_does_not_count():
     ex.run_workflow(wf, on_round=lambda n, total: seen.append(n))
     # 第一次结束没有开始配对 → 不计；之后 开始→结束 才计
     assert seen and seen[0] == 1
+
+
+def test_branch_supports_eight_cases(monkeypatch):
+    """分支最多 8 路（原来 6 路，燕云的屏数不够用）。第 8 路要能真的走通。"""
+    from core import vision
+    from core.events import MAX_BRANCH_CASES
+
+    assert MAX_BRANCH_CASES == 8
+    monkeypatch.setattr(vision, "find_template",
+                        lambda conf, template_path="": type("M", (), {"found": template_path == "h.png"})())
+    ex = Executor()
+    ran: list = []
+    params = {"case_count": 8}
+    for i, name in enumerate("abcdefgh", start=1):
+        params[f"case{i}_value"] = name + ".png"
+    wf = _graph(
+        ("branch", params),
+        ("delay", {"ms": 1}), ("delay", {"ms": 1}), ("delay", {"ms": 1}), ("delay", {"ms": 1}),
+        ("delay", {"ms": 1}), ("delay", {"ms": 1}), ("delay", {"ms": 1}), ("delay", {"ms": 1}),
+        ("delay", {"ms": 1}),
+        edges=[(0, case_port(i), i) for i in range(1, 9)] + [(0, PORT_ELSE, 9)],
+    )
+    ex.run_workflow(wf, on_node=lambda i, ty: ran.append(i))
+    # 第 8 路命中 → 走 nodes[8]（下标 8），不是 else
+    assert ran == [0, 8], ran

@@ -60,7 +60,7 @@ export function casePort(i: number): string {
 }
 
 /** 分支节点的 case 上限。与后端 `core.events.MAX_BRANCH_CASES` 必须一致。 */
-export const MAX_BRANCH_CASES = 6;
+export const MAX_BRANCH_CASES = 8;
 /** 分支节点的 case 下限（只有 1 个 case 的分支等价于条件节点）。 */
 export const MIN_BRANCH_CASES = 2;
 
