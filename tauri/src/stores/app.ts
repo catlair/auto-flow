@@ -618,7 +618,12 @@ export const useAppStore = defineStore("app", {
         case "run.node": {
           // 从「没在跑」跳到「在跑」= 新一轮开始（含定时任务在后端直接触发的那些，
           // 那条路上前端没发过 run.start，只能靠这个判据清空轨迹）。
-          if (!this.running) this.runTrace = [];
+          // 轮次显示也必须在这里清：不清的话，界面上会一直挂着**上一次**跑满的数字
+          // （真机 2026-10-26：新一轮刚开始，面板上就是 5/5，看起来像轮次在乱涨）。
+          if (!this.running) {
+            this.runTrace = [];
+            this.runRound = { round: 0, total: (this.workflow.max_rounds ?? 0) };
+          }
           const t = Date.now();
           const prev = this.runTrace.length ? this.runTrace[this.runTrace.length - 1].t : 0;
           this.running = true;
@@ -654,6 +659,7 @@ export const useAppStore = defineStore("app", {
           this.runNodeName = "";
           this.runNodeDetail = "";
           this.runProgress = { done: 0, total: 0 };
+          this.runRound = { round: 0, total: 0 };
           this.setClickThrough(false);
           break;
         case "run.error":

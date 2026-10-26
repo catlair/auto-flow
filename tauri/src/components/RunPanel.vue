@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useAppStore } from "@/stores/app";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -8,6 +8,9 @@ const store = useAppStore();
 const speed = ref(store.workflow.speed);
 const repeat = ref(store.workflow.repeat);
 const maxRounds = ref(store.workflow.max_rounds ?? 0);
+// 还没收到第一条 run.round 时，总数取工作流上的上限——这样开局就是「0/5」，
+// 而不是空白或者上一次跑剩的数字
+const roundTotal = computed(() => store.runRound.total || (store.workflow.max_rounds ?? 0));
 
 watch(
   () => store.workflow,
@@ -89,8 +92,8 @@ watch(
         title="画布上「设为轮次起点」的节点每执行一次算一轮；没设起点时这个值不起作用。跑满后会在那个节点之前停下，所以要选在手上没有任务的位置"
       />
     </div>
-    <div v-if="store.running && store.runRound.total > 0" class="af-run-state">
-      第 {{ store.runRound.round }} / {{ store.runRound.total }} 轮
+    <div v-if="store.running && roundTotal > 0" class="af-run-state">
+      第 {{ store.runRound.round }} / {{ roundTotal }} 轮
     </div>
     <div class="af-field">
       <label class="af-label">基点（F11 取点）</label>
