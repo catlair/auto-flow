@@ -870,6 +870,9 @@ def test_executor_runaway_cycle_is_stopped_and_reported(monkeypatch):
     ex = Executor()
     seen: list = []
     _patch_wait(monkeypatch, ex, seen)
+    # 上限已经放到 100 万（长跑不许误伤），这里只验证「撞上限会停下并报错」，
+    # 真按 100 万跑这条用例要跑几分钟，把它临时改小。
+    monkeypatch.setattr(Executor, "MAX_STEPS", 500)
     errors: list = []
     # 两个节点互指成环
     wf = _graph(("delay", {"ms": 1}), ("delay", {"ms": 1}),
@@ -2735,6 +2738,8 @@ def test_executor_stops_after_max_rounds(monkeypatch):
 def test_executor_without_round_uid_runs_forever_until_repeat(monkeypatch):
     """没设轮次起点时 max_rounds 不起作用——避免「设了上限却没反应」的静默失败。"""
     ex = Executor()
+    # 这张图是环，没有轮次标记就没有出口；上限已经放到 100 万，这里临时改小免得跑几分钟
+    monkeypatch.setattr(Executor, "MAX_STEPS", 300)
     ex.player.glide_now = lambda t: None
     rounds: list[int] = []
     wf = _graph(
@@ -2853,3 +2858,14 @@ def test_branch_supports_eight_cases(monkeypatch):
     ex.run_workflow(wf, on_node=lambda i, ty: ran.append(i))
     # 第 8 路命中 → 走 nodes[8]（下标 8），不是 else
     assert ran == [0, 8], ran
+
+
+def test_step_limit_is_a_last_resort():
+    """步数上限是「防紧循环」的最后保险，不是「能跑多久」的限制。
+
+    原来 10000 是全局累加：挂机脚本每步都要等半秒到二十秒，一万步才十几局，
+    跑一夜必然撞上，然后报「多半是连成了环」被强行掐掉——排查了很久才发现不是环路。
+    """
+    from core.executor import Executor
+
+    assert Executor.MAX_STEPS >= 500_000

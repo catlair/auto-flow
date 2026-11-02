@@ -238,6 +238,8 @@ onMounted(() => {
     >
       诊断
     </button>
+    <!-- 手动关：有些报错（比如某次运行崩了）已经过去了，不该一直占着屏幕 -->
+    <button class="af-link af-banner-close" title="关掉这条提示" @click="store.banner = ''">×</button>
   </div>
 
   <div class="af-layout">
@@ -530,5 +532,14 @@ onMounted(() => {
   cursor: pointer;
   font-size: inherit;
   font-family: inherit;
+}
+.af-banner-close {
+  margin-left: 10px;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.75;
+}
+.af-banner-close:hover {
+  opacity: 1;
 }
 </style>

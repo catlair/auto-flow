@@ -623,6 +623,9 @@ export const useAppStore = defineStore("app", {
           if (!this.running) {
             this.runTrace = [];
             this.runRound = { round: 0, total: (this.workflow.max_rounds ?? 0) };
+            // 上一次运行的红条（比如「步数超过上限」）留在这里会让人以为是这次的错，
+            // 新一次运行开始就清掉；ok 类的提示（定时触发之类的）保留。
+            if (this.bannerKind !== "ok") this.banner = "";
           }
           const t = Date.now();
           const prev = this.runTrace.length ? this.runTrace[this.runTrace.length - 1].t : 0;
